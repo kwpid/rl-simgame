@@ -65,6 +65,10 @@ export default function AppRoot() {
     await handleSelect(summary.id);
   }
 
+  async function handleImported(summary: SaveSummary) {
+    await handleSelect(summary.id);
+  }
+
   if (phase === "loading") {
     return <div style={{ minHeight: "100vh", background: "var(--bg-app)" }} />;
   }
@@ -76,6 +80,7 @@ export default function AppRoot() {
         onSelect={handleSelect}
         onDelete={handleDelete}
         onCreateNew={() => setPhase("create")}
+        onImported={handleImported}
       />
     );
   }

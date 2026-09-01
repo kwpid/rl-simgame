@@ -1,20 +1,41 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Icon } from "@/ui/components/Icon";
 import { REGION_LABELS } from "@/data/mockSave";
-import { MAX_SAVES, type SaveSummary } from "@/data/saveManager";
+import { MAX_SAVES, importSaveFile, type SaveSummary } from "@/data/saveManager";
 
 export function SaveSelectScreen({
   saves,
   onSelect,
   onDelete,
   onCreateNew,
+  onImported,
 }: {
   saves: SaveSummary[];
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onCreateNew: () => void;
+  /** Fires once an imported file has been written as a new save, so the app can drop straight into it,
+   *  same as finishing the New Save flow does. */
+  onImported: (summary: SaveSummary) => void;
 }) {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleImportFile(file: File) {
+    setImportError(null);
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const raw = JSON.parse(text);
+      const summary = await importSaveFile(raw);
+      onImported(summary);
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : "Couldn't import that file.");
+      setImporting(false);
+    }
+  }
 
   return (
     <div className="save-select">
@@ -61,12 +82,35 @@ export function SaveSelectScreen({
           ))}
 
           {saves.length < MAX_SAVES && (
-            <button className="save-card save-card-new" onClick={onCreateNew}>
-              <Icon name="plus" size={18} />
-              <span>New Save</span>
-            </button>
+            <>
+              <button className="save-card save-card-new" onClick={onCreateNew}>
+                <Icon name="plus" size={18} />
+                <span>New Save</span>
+              </button>
+              <button
+                className="save-card save-card-new"
+                disabled={importing}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Icon name="plus" size={18} />
+                <span>{importing ? "Importing…" : "Import Save"}</span>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleImportFile(file);
+                  e.target.value = "";
+                }}
+              />
+            </>
           )}
         </div>
+
+        {importError && <div className="save-select-error">{importError}</div>}
 
         <div className="save-select-count">{saves.length} / {MAX_SAVES} saves</div>
       </div>
@@ -192,6 +236,18 @@ export function SaveSelectScreen({
         .save-card-new:hover {
           color: var(--accent);
           border-color: var(--accent);
+        }
+        .save-card-new:disabled {
+          opacity: 0.5;
+          cursor: default;
+          color: var(--text-secondary);
+          border-color: var(--border-subtle);
+        }
+        .save-select-error {
+          text-align: center;
+          font-size: 12px;
+          color: var(--danger);
+          margin-top: var(--space-3);
         }
         .save-select-count {
           text-align: center;
