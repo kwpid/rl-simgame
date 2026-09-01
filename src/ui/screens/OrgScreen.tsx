@@ -8,8 +8,7 @@ import { activeProPlayers } from "@/data/proPlayers";
 import { saveRegionToProRegion, rlcsSeasonForDate, ORG_NAMES } from "@/data/tournaments";
 import {
   ORG_TIER_LABELS,
-  orgRankFloorMmr,
-  meetsOrgEligibility,
+  orgEligibilityDetail,
   resolveContractRenewal,
   promotedTier,
   rollsTeammateChurn,
@@ -172,7 +171,9 @@ export function OrgScreen() {
     }, 0.6, tryout.teammates);
   }
 
-  const eligible = s.rankedProfiles["2v2"].placementMatchesRemaining === 0 && meetsOrgEligibility(era, currentYear, playerMmr, s.player.gameSense["2v2"]);
+  const inPlacements = s.rankedProfiles["2v2"].placementMatchesRemaining > 0;
+  const eligibilityDetail = orgEligibilityDetail(era, currentYear, playerMmr, s.player.gameSense["2v2"]);
+  const eligible = !inPlacements && eligibilityDetail.meetsRankFloor && eligibilityDetail.meetsStatFloor;
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
@@ -249,10 +250,28 @@ export function OrgScreen() {
           <SectionShell title="Status">
             <Card>
               <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-                {eligible
-                  ? "You're playing at a level orgs scout — keep grinding 2v2, a tryout invite could come any day."
-                  : `Not scouted yet. Orgs look for real 2v2 rank and stats to back it up — around ${Math.round(orgRankFloorMmr(era))} MMR or higher, with the trained Game Sense to match.`}
+                {inPlacements
+                  ? "Finish your 2v2 placements first, orgs don't scout during placements."
+                  : eligible
+                    ? "You're playing at a level orgs scout — keep grinding 2v2, a tryout invite could come any day (checked every few days, not guaranteed)."
+                    : "Not scouted yet — one or both of the gates below aren't cleared."}
               </div>
+              {!inPlacements && (
+                <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-tertiary)" }}>2v2 MMR</span>
+                    <span style={{ color: eligibilityDetail.meetsRankFloor ? "var(--text-primary)" : "var(--danger)" }}>
+                      {eligibilityDetail.mmr} / {eligibilityDetail.rankFloorMmr} needed
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-tertiary)" }}>2v2 Game Sense</span>
+                    <span style={{ color: eligibilityDetail.meetsStatFloor ? "var(--text-primary)" : "var(--danger)" }}>
+                      {eligibilityDetail.gameSense} / {eligibilityDetail.requiredGameSense} needed
+                    </span>
+                  </div>
+                </div>
+              )}
             </Card>
           </SectionShell>
         )

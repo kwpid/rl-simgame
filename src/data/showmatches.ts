@@ -36,7 +36,7 @@ export const STREAMERS: Streamer[] = [
   },
   {
     id: "johnboi",
-    name: "Johnboi",
+    name: "JohnnyBoi",
     description: "High-level 1v1s against top pros. The biggest stage 1v1 showmatches get.",
     fameReward: { win: 30, loss: 10 },
     inviteChance: 0.1,
@@ -44,13 +44,19 @@ export const STREAMERS: Streamer[] = [
 ];
 
 /** Which streamers would plausibly book a showmatch with a player at this 1v1 MMR right now. Bands are
- *  anchored off the queue's own SSL floor rather than fixed numbers, so this scales correctly across eras. */
+ *  anchored off the queue's own SSL floor rather than fixed numbers, so this scales correctly across eras.
+ *  Pre-2020 (legacy era, no SSL yet), JohnnyBoi is the only one of the three actually on the scene —
+ *  Shadow and Feer only show up once the modern era starts in Sept 2020. */
 export function eligibleStreamers(mmr1v1: number, rankTier: string, era: RankEra): Streamer[] {
+  const isGcOrAbove = rankTier === "grand_champion" || rankTier === "ssl";
+  if (!isGcOrAbove) return [];
+
+  if (era !== "modern") {
+    return [STREAMERS.find((s) => s.id === "johnboi")!];
+  }
+
   const sslFloor = tierMinMmr("ssl", era, "1v1");
   const eligible: Streamer[] = [];
-  const isGcOrAbove = rankTier === "grand_champion" || rankTier === "ssl";
-  if (!isGcOrAbove) return eligible;
-
   if (rankTier === "grand_champion" || mmr1v1 < sslFloor + 100) {
     eligible.push(STREAMERS[0]); // Shadow
   }
@@ -58,12 +64,12 @@ export function eligibleStreamers(mmr1v1: number, rankTier: string, era: RankEra
     eligible.push(STREAMERS[1]); // Feer
   }
   if (rankTier === "ssl" && mmr1v1 >= sslFloor + 400) {
-    eligible.push(STREAMERS[2]); // Johnboi
+    eligible.push(STREAMERS[2]); // JohnnyBoi
   }
   return eligible;
 }
 
-/** Picks a believable 1v1 opponent for a showmatch: Johnboi's stage skews heavily toward real, named
+/** Picks a believable 1v1 opponent for a showmatch: JohnnyBoi's stage skews heavily toward real, named
  *  pros (that's the whole draw), Feer is a genuine mix, Shadow leans toward up-and-coming/filler names
  *  with the occasional pro dropping in. */
 export function pickShowmatchOpponent(streamerId: StreamerId, currentYear: number): string {

@@ -29,14 +29,38 @@ export function orgRankFloorMmr(era: RankEra): number {
   return sslMin + topSpread * 0.5;
 }
 
+export interface OrgEligibilityDetail {
+  mmr: number;
+  rankFloorMmr: number;
+  meetsRankFloor: boolean;
+  gameSense: number;
+  requiredGameSense: number;
+  meetsStatFloor: boolean;
+}
+
+/** Breaks eligibility down into its two separate gates (rank floor, trained stats), rather than just a
+ *  yes/no, so it's actually possible to tell WHICH one a player is failing — the Org screen's own Status
+ *  message uses this instead of guessing. */
+export function orgEligibilityDetail(era: RankEra, currentYear: number, mmr2v2: number, gameSense2v2: number): OrgEligibilityDetail {
+  const rankFloorMmr = orgRankFloorMmr(era);
+  const requiredGameSense = Math.round(estimateGameSenseForMmr(mmr2v2, era, "2v2", currentYear) * 0.8);
+  return {
+    mmr: mmr2v2,
+    rankFloorMmr,
+    meetsRankFloor: mmr2v2 >= rankFloorMmr,
+    gameSense: gameSense2v2,
+    requiredGameSense,
+    meetsStatFloor: gameSense2v2 >= requiredGameSense,
+  };
+}
+
 /** Whether this player's 2v2 numbers clear the org scouting bar at all: BOTH the rank floor above AND
  *  their actual trained stats have to hold up, someone whose MMR looks the part off a lucky/placement-
  *  amplified run but whose real Game Sense lags well behind what that MMR should imply isn't someone a
  *  real org would sign — the numbers have to be real, not just a rank number. */
 export function meetsOrgEligibility(era: RankEra, currentYear: number, mmr2v2: number, gameSense2v2: number): boolean {
-  if (mmr2v2 < orgRankFloorMmr(era)) return false;
-  const expectedGameSense = estimateGameSenseForMmr(mmr2v2, era, "2v2", currentYear);
-  return gameSense2v2 >= expectedGameSense * 0.8;
+  const detail = orgEligibilityDetail(era, currentYear, mmr2v2, gameSense2v2);
+  return detail.meetsRankFloor && detail.meetsStatFloor;
 }
 
 /** How far above the bare minimum this player actually is, 0 at the floor, 1 at a full "second floor" of
