@@ -122,6 +122,11 @@ function computeQueueDurationMs(queue: QueueMode, rankTier: RankTierId, hourOfDa
 // you've reached" doesn't mean you're anywhere close to the top of the whole ladder yet.
 const LEADERBOARD_NAME_CHANCE_MIN = 0.12;
 const LEADERBOARD_NAME_CHANCE_MAX = 0.85;
+// Even once a leaderboard name is going to show up at all, a real named PRO specifically should be rarer
+// than a filler leaderboard regular at the bottom of the bracket — barely-GC/barely-SSL should almost
+// never run into an actual pro, only deep into GC/SSL does a pro genuinely become the more likely pick.
+const PRO_SHARE_MIN = 0.02;
+const PRO_SHARE_MAX = 0.75;
 // How far above/below the player's own MMR a leaderboard regular's live MMR (in THIS queue) can be and
 // still be a believable opponent. This is a band around real, persisted values (not a fabricated one), so
 // if the player is genuinely #1 on the board, nobody's real MMR clears the "above" side of this anyway —
@@ -161,17 +166,26 @@ function pickName(
   const bracketDepth = Math.max(0, Math.min(1, (playerMmr - gcFloor) / Math.max(100, topFloor - gcFloor)));
   const leaderboardChance = LEADERBOARD_NAME_CHANCE_MIN + bracketDepth * (LEADERBOARD_NAME_CHANCE_MAX - LEADERBOARD_NAME_CHANCE_MIN);
   if (eligibleForLeaderboard && Math.random() < leaderboardChance) {
+    const inBandAndOnline = (c: { mmr: number }) =>
+      c.mmr >= playerMmr - LEADERBOARD_MATCH_BAND_BELOW[queue] && c.mmr <= playerMmr + LEADERBOARD_MATCH_BAND_ABOVE && Math.random() < ONLINE_CHANCE;
     const proCandidates = activeProPlayers(currentYear)
       .filter((p) => !used.has(p.name))
-      .map((p) => ({ name: p.name, mmr: useProLeaderboardStore.getState().getMmr(p.name, queue, era, currentYear, currentDate, seasonStartDate) }));
+      .map((p) => ({ name: p.name, mmr: useProLeaderboardStore.getState().getMmr(p.name, queue, era, currentYear, currentDate, seasonStartDate) }))
+      .filter(inBandAndOnline);
     const fillerCandidates = fillerLeaderboardNames()
       .filter((n) => !used.has(n))
-      .map((n) => ({ name: n, mmr: useLeaderboardFillerStore.getState().getMmr(n, queue, era, currentYear, currentDate, seasonStartDate) }));
-    const candidates = [...proCandidates, ...fillerCandidates]
-      .filter((c) => c.mmr >= playerMmr - LEADERBOARD_MATCH_BAND_BELOW[queue] && c.mmr <= playerMmr + LEADERBOARD_MATCH_BAND_ABOVE)
-      .filter(() => Math.random() < ONLINE_CHANCE); // not everyone in range is actually queued up right now
-    if (candidates.length > 0) {
-      const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+      .map((n) => ({ name: n, mmr: useLeaderboardFillerStore.getState().getMmr(n, queue, era, currentYear, currentDate, seasonStartDate) }))
+      .filter(inBandAndOnline);
+
+    // A real pro specifically should be much rarer than a filler regular at the bottom of the bracket,
+    // not just equally likely to whoever else happens to be in the combined pool (see PRO_SHARE_MIN/MAX).
+    const proShare = PRO_SHARE_MIN + bracketDepth * (PRO_SHARE_MAX - PRO_SHARE_MIN);
+    const preferPro = Math.random() < proShare;
+    let pool = preferPro ? proCandidates : fillerCandidates;
+    if (pool.length === 0) pool = preferPro ? fillerCandidates : proCandidates;
+
+    if (pool.length > 0) {
+      const chosen = pool[Math.floor(Math.random() * pool.length)];
       used.add(chosen.name);
       return { name: chosen.name, leaderboardMmr: chosen.mmr };
     }

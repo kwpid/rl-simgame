@@ -14,7 +14,7 @@ import {
 } from "@/data/mockSave";
 import { TACTICAL_FOUNDATION_CATEGORIES, type FoundationCategory } from "@/data/mechanics";
 import { addDays, daysBetween, type SimDate } from "@/data/dateUtils";
-import { eraForDate, deriveRankFromMmr, applyDivisionResult, tierRank, type RankTierId, type RankEra } from "@/data/rankSystem";
+import { eraForDate, deriveRankFromMmr, divisionProgressFromMmr, tierRank, type RankTierId, type RankEra } from "@/data/rankSystem";
 import { SEASON_LENGTH_DAYS, seasonEndDate, seasonTitleFor, softResetMmr, applyRewardProgress, rewardTierSequence, REWARD_WINS_REQUIRED, type TitleEntry } from "@/data/seasons";
 import { STREAMERS, eligibleStreamers, pickShowmatchOpponent } from "@/data/showmatches";
 import { meetsOrgEligibility, orgOvershoot, orgTierForOvershoot, orgScoutingChance, resolveTryoutOutcome, rollContractLengthSeasons, scrimIntervalDaysForTier, ORG_TIER_LABELS } from "@/data/orgs";
@@ -397,15 +397,18 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const newMmr = Math.max(0, Math.round(profile.mmr + mmrDelta * (inPlacements ? PLACEMENT_MMR_AMPLIFIER : 1)));
     const isNewPeakMmr = newMmr > profile.peakMmr;
     const era = eraForDate(state.currentDate);
-    const derived = justFinishedPlacements ? deriveRankFromMmr(newMmr, era, queue) : null;
-    // Placements assign the first real rank from final MMR; every match after that promotes/demotes off
-    // division pips instead (this is the part that used to be missing entirely — pips moved but never
-    // actually turned into a real promotion, so rank, and anything gated on it like the season reward
-    // below, could never advance past wherever placements originally dropped you).
-    const promotion = !inPlacements && !derived ? applyDivisionResult(profile.rankTier, profile.division, profile.divisionProgress, win, era) : null;
-    const nextRankTier = derived?.tier ?? promotion?.tier ?? profile.rankTier;
-    const nextDivision = derived?.division ?? promotion?.division ?? profile.division;
-    const nextDivisionProgress = inPlacements ? 0 : promotion?.divisionProgress ?? profile.divisionProgress;
+    // Tier/division come straight from the new MMR every match (once placements are done), not an
+    // independently win/loss-incremented pip counter — that used to be able to drift arbitrarily far from
+    // what the player's actual MMR said (a win streak against weak opponents could pip-promote someone
+    // through Champion/GC while their real Elo-based MMR barely moved, or the reverse), which is exactly
+    // why the same raw MMR could show Grand Champion one match and Champion III another. Deriving both
+    // tier and pip progress from MMR every time makes them agree by construction, and matches the Stats
+    // screen's own MMR-floor numbers exactly, no separate system to drift out of sync with it.
+    const stillInPlacements = inPlacements && !justFinishedPlacements;
+    const derived = stillInPlacements ? null : deriveRankFromMmr(newMmr, era, queue);
+    const nextRankTier = derived?.tier ?? profile.rankTier;
+    const nextDivision = derived?.division ?? profile.division;
+    const nextDivisionProgress = inPlacements ? 0 : divisionProgressFromMmr(newMmr, era, queue);
     const isNewPeakRank = tierRank(nextRankTier) > tierRank(profile.peakRankTier) || (nextRankTier === profile.peakRankTier && nextDivision > profile.peakDivision);
 
     // Streak resets to 1 of the opposite type the moment it breaks, otherwise extends.
@@ -415,7 +418,8 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     // A promotion (tier or division actually went up, from ordinary play, not placements which get their
     // own reveal below) triggers a one-off rank-up animation on the Ranked screen.
     const isPromotionEvent =
-      promotion !== null &&
+      !stillInPlacements &&
+      !justFinishedPlacements &&
       (tierRank(nextRankTier) > tierRank(profile.rankTier) || (nextRankTier === profile.rankTier && nextDivision > profile.division));
 
     // Reward level is account-wide, not per-playlist: a win in ANY queue counts, gated by the live rank

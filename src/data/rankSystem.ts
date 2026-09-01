@@ -69,12 +69,6 @@ export function tierColor(tier: RankTierId, era: RankEra): string {
   return TIER_COLORS[tier];
 }
 
-/** Every tier at/above this in a legacy-era save is unreachable, legacy caps at a flat Grand Champion. */
-export function isTierAvailableInEra(tier: RankTierId, era: RankEra): boolean {
-  if (tier === "ssl") return era === "modern";
-  return true;
-}
-
 const ROMAN = ["I", "II", "III", "IV"];
 
 /** Division count for a tier in a given era. 0 = no division split (single flat rank). */
@@ -295,45 +289,24 @@ export function deriveRankFromMmr(mmr: number, era: RankEra, queue: RankQueue): 
   return { tier: match.tier, division };
 }
 
-const PIPS_PER_DIVISION = 5;
+export const PIPS_PER_DIVISION = 5;
 
-/** One win/loss's effect on division pips, promoting/demoting a division (and tier, at the top/bottom of
- *  one) when the pip bar overflows/underflows — this is the part that was missing before: pips moved but
- *  never actually turned into a real promotion, so a player's displayed (and reward-gating) rank tier
- *  could never advance past wherever placements originally dropped them, no matter how many games they
- *  won afterward. Filtered by `isTierAvailableInEra` so legacy saves can't promote into SSL. */
-export function applyDivisionResult(
-  tier: RankTierId,
-  division: number,
-  divisionProgress: number,
-  won: boolean,
-  era: RankEra
-): { tier: RankTierId; division: number; divisionProgress: number } {
-  const tierIdx = TIER_ORDER.indexOf(tier);
-
-  if (won) {
-    const next = divisionProgress + 1;
-    if (next <= PIPS_PER_DIVISION) return { tier, division, divisionProgress: next };
-
-    const count = divisionCount(tier, era);
-    if (count > 0 && division < count) return { tier, division: division + 1, divisionProgress: 0 };
-
-    // Promote to the next tier (SSL, or a tier whose era gate isn't reached, has nowhere higher to go).
-    const nextTier = TIER_ORDER[tierIdx + 1];
-    if (!nextTier || !isTierAvailableInEra(nextTier, era)) return { tier, division, divisionProgress: PIPS_PER_DIVISION };
-    const nextCount = divisionCount(nextTier, era);
-    return { tier: nextTier, division: nextCount === 0 ? 0 : 1, divisionProgress: 0 };
-  }
-
-  const next = divisionProgress - 1;
-  if (next >= 0) return { tier, division, divisionProgress: next };
-
-  const count = divisionCount(tier, era);
-  if (count > 0 && division > 1) return { tier, division: division - 1, divisionProgress: PIPS_PER_DIVISION - 1 };
-
-  // Demote to the previous tier (bronze I is the floor, never demotes below it).
-  if (tier === "bronze" || tierIdx <= 1) return { tier, division: Math.max(1, division), divisionProgress: 0 };
-  const prevTier = TIER_ORDER[tierIdx - 1];
-  const prevCount = divisionCount(prevTier, era);
-  return { tier: prevTier, division: prevCount === 0 ? 0 : prevCount, divisionProgress: PIPS_PER_DIVISION - 1 };
+/** Where within the CURRENT division's own MMR span this exact MMR sits, as a 0-4 pip count. Tier/division
+ *  themselves come straight from `deriveRankFromMmr` on every match now (see recordMatchResult in
+ *  useSaveStore.ts) instead of an independently win/loss-incremented pip counter — that used to be able to
+ *  drift arbitrarily far from what the player's actual MMR said (a long win streak against weak
+ *  opponents could pip-promote someone through Champion/GC while their real Elo-based MMR barely moved,
+ *  or the reverse), which is exactly why the same MMR could show Grand Champion one time and Champion III
+ *  another. Deriving both tier AND pip progress from MMR every time makes them agree by construction,
+ *  matching the Stats screen's own MMR-floor numbers exactly. */
+export function divisionProgressFromMmr(mmr: number, era: RankEra, queue: RankQueue): number {
+  const brackets = rankBrackets(era, queue);
+  let match = brackets[0];
+  for (const b of brackets) if (mmr >= b.min) match = b;
+  const count = divisionCount(match.tier, era);
+  if (count === 0) return 0;
+  const span = match.max === Infinity ? 400 : match.max - match.min + 1;
+  const progress = Math.min(0.999, Math.max(0, (mmr - match.min) / span));
+  const withinDivision = (progress * count) % 1;
+  return Math.min(PIPS_PER_DIVISION - 1, Math.floor(withinDivision * PIPS_PER_DIVISION));
 }
