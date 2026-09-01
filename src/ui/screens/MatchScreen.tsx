@@ -122,6 +122,7 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
   const seriesGameNumber = useMatchStore((m) => m.seriesGameNumber);
   const continueSeries = useMatchStore((m) => m.continueSeries);
   const queueDurationMs = useMatchStore((m) => m.queueDurationMs);
+  const autoQueueModes = useMatchStore((m) => m.autoQueueModes);
   const isSeriesMatch = seriesFormat > 1;
   const seriesDecided = isSeriesMatch && (seriesWinsSelf >= Math.ceil(seriesFormat / 2) || seriesWinsOpp >= Math.ceil(seriesFormat / 2));
   const recordMatchResult = useSaveStore((s) => s.recordMatchResult);
@@ -224,6 +225,17 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
     advanceMinutes(Math.max(1, Math.round(queueMinutes + matchMinutes)));
     returnToMenu();
   }
+
+  // Auto-queue means genuinely hands-off: with it on, the post-match "Continue" click happens on its own
+  // after a short beat (long enough to actually see the result), instead of making the player click through
+  // every single game. Never fires for a series match (tournament/org/showmatch), those always need a
+  // deliberate Continue/Next Game click regardless of auto-queue.
+  useEffect(() => {
+    if (phase !== "post_match" || isSeriesMatch || !autoQueueModes || autoQueueModes.length === 0) return;
+    const timer = setTimeout(() => handleContinue(), 1800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, isSeriesMatch, autoQueueModes]);
 
   return (
     <div className="live-match fade-in">

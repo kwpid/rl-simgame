@@ -15,10 +15,12 @@ import { TourneysScreen } from "@/ui/screens/TourneysScreen";
 import { OrgScreen } from "@/ui/screens/OrgScreen";
 import { MatchScreen } from "@/ui/screens/MatchScreen";
 import { SeasonAnnouncementModal } from "@/ui/components/SeasonAnnouncementModal";
+import { AutoQueueBanner } from "@/ui/components/AutoQueueBanner";
 
 export default function App() {
   const screen = useAppStore((s) => s.screen);
   const matchPhase = useMatchStore((m) => m.phase);
+  const autoQueueModes = useMatchStore((m) => m.autoQueueModes);
   const currentDate = useSaveStore((s) => s.currentDate);
   const ensureOrgScouting = useSaveStore((s) => s.ensureOrgScouting);
 
@@ -30,26 +32,40 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentDate.year, currentDate.month, currentDate.day]);
 
+  // Mounted unconditionally (unlike QueueBanner, which lives inside NavShell and so disappears the moment
+  // a match actually starts) so the player always has a one-tap way to stop auto-queue, mid-match included.
+  const autoQueueActive = !!autoQueueModes && autoQueueModes.length > 0;
+
   if (matchPhase === "found" || matchPhase === "in_match" || matchPhase === "post_match") {
-    return <MatchScreen />;
+    return (
+      <>
+        <AutoQueueBanner />
+        <div style={{ paddingTop: autoQueueActive ? 36 : 0 }}>
+          <MatchScreen />
+        </div>
+      </>
+    );
   }
 
   return (
     <>
+      <AutoQueueBanner />
       <SeasonAnnouncementModal />
-      <NavShell>
-        <div key={screen} className="fade-in">
-          {screen === "home" && <HomeScreen />}
-          {screen === "stats" && <StatsScreen />}
-          {screen === "training" && <TrainingScreen />}
-          {screen === "ranked" && <RankedScreen />}
-          {screen === "tournaments" && <TourneysScreen />}
-          {screen === "org" && <OrgScreen />}
-          {screen === "social" && <SocialScreen />}
-          {screen === "locker" && <LockerScreen />}
-          {screen === "settings" && <SettingsScreen />}
-        </div>
-      </NavShell>
+      <div style={{ paddingTop: autoQueueActive ? 36 : 0 }}>
+        <NavShell>
+          <div key={screen} className="fade-in">
+            {screen === "home" && <HomeScreen />}
+            {screen === "stats" && <StatsScreen />}
+            {screen === "training" && <TrainingScreen />}
+            {screen === "ranked" && <RankedScreen />}
+            {screen === "tournaments" && <TourneysScreen />}
+            {screen === "org" && <OrgScreen />}
+            {screen === "social" && <SocialScreen />}
+            {screen === "locker" && <LockerScreen />}
+            {screen === "settings" && <SettingsScreen />}
+          </div>
+        </NavShell>
+      </div>
     </>
   );
 }

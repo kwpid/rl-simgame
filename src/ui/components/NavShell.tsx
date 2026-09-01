@@ -10,7 +10,11 @@ import { daysBetween } from "@/data/dateUtils";
 export function NavShell({ children }: { children: ReactNode }) {
   const screen = useAppStore((s) => s.screen);
   const setScreen = useAppStore((s) => s.setScreen);
-  const isQueuing = useMatchStore((m) => m.phase === "searching");
+  // While auto-queue is active, AutoQueueBanner (mounted in App.tsx, above this whole shell) already
+  // reserves its own top space — NavShell's own QueueBanner is suppressed then, so it shouldn't ALSO
+  // reserve room for a banner that isn't rendering.
+  const autoQueueActive = useMatchStore((m) => !!m.autoQueueModes && m.autoQueueModes.length > 0);
+  const isQueuing = useMatchStore((m) => m.phase === "searching") && !autoQueueActive;
 
   const currentDate = useSaveStore((s) => s.currentDate);
   const pendingOrgInvite = useSaveStore((s) => s.pendingOrgInvite);

@@ -6,7 +6,12 @@ export function QueueBanner() {
   const phase = useMatchStore((m) => m.phase);
   const queue = useMatchStore((m) => m.queue);
   const cancelQueue = useMatchStore((m) => m.cancelQueue);
+  const autoQueueModes = useMatchStore((m) => m.autoQueueModes);
 
+  // AutoQueueBanner (mounted unconditionally in App.tsx, so it doesn't disappear once a match starts)
+  // already covers "searching" for auto-queue, showing this one at the same time would just double up at
+  // the same fixed position.
+  if (autoQueueModes && autoQueueModes.length > 0) return null;
   if (phase !== "searching" || !queue) return null;
 
   return (

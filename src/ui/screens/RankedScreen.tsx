@@ -106,6 +106,8 @@ export function RankedScreen() {
   const queuedModes = useMatchStore((m) => m.queuedModes);
   const startQueue = useMatchStore((m) => m.startQueue);
   const cancelQueue = useMatchStore((m) => m.cancelQueue);
+  const setAutoQueueModes = useMatchStore((m) => m.setAutoQueueModes);
+  const [autoQueueChecked, setAutoQueueChecked] = useState(false);
 
   const endDate = seasonEndDate(s.seasonStartDate);
   const totalHoursRemaining = Math.max(0, daysBetween(s.currentDate, endDate) * 24 - s.clockHour);
@@ -151,6 +153,7 @@ export function RankedScreen() {
       const friend = s.friends[name];
       if (friend) partyFriendStats[name] = { mmr: friend.mmr, gameSense: friend.gameSense, mechanicalConsistency: friend.mechanicalConsistency };
     }
+    setAutoQueueModes(autoQueueChecked ? queuesToSearch : null);
     startQueue(queuesToSearch.map(buildQueueRequest), s.clockHour, era, s.seasonNumber, s.currentDate.year, s.currentDate, s.seasonStartDate, s.partyMembers, partyFriendStats);
   }
 
@@ -301,9 +304,19 @@ export function RankedScreen() {
                 </div>
               )}
               {matchPhase === "idle" && !queueBlockedByParty && (
-                <button className="search-btn" onClick={handleSearch}>
-                  Search for Match
-                </button>
+                <>
+                  <label className="auto-queue-row">
+                    <input
+                      type="checkbox"
+                      checked={autoQueueChecked}
+                      onChange={(e) => setAutoQueueChecked(e.target.checked)}
+                    />
+                    <span>Auto-Queue (re-queue automatically after each game)</span>
+                  </label>
+                  <button className="search-btn" onClick={handleSearch}>
+                    Search for Match
+                  </button>
+                </>
               )}
               {matchPhase === "searching" && queuedModes.includes(queue) && (
                 <button className="search-btn search-btn-active" onClick={cancelQueue}>
@@ -570,6 +583,16 @@ export function RankedScreen() {
             width: auto;
             margin-left: auto;
           }
+        }
+
+        .auto-queue-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 12px;
+          color: var(--text-secondary);
+          cursor: pointer;
+          margin-bottom: var(--space-2);
         }
 
         .search-btn {

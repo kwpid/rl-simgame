@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { QueueMode } from "@/data/mockSave";
-import { tierMinMmr, type RankEra, type RankTierId } from "@/data/rankSystem";
+import { tierMinMmr, eraForDate, deriveRankFromMmr, type RankEra, type RankTierId } from "@/data/rankSystem";
 import type { FoundationCategory } from "@/data/mechanics";
 import type { TitleEntry } from "@/data/seasons";
 import type { SimDate } from "@/data/dateUtils";
@@ -10,12 +10,14 @@ import { rlcsSeasonForDate } from "@/data/tournaments";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
 import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
+import { useSaveStore } from "@/store/useSaveStore";
 import {
   generateOpponentStats,
   simulatePossession,
   simulateTeamPossession,
   simulateDuelPossession,
   prefersCounterAttack,
+  flattenProgress,
   type MatchParticipantStats,
   type DuelMastery,
   type PossessionResult,
@@ -376,12 +378,43 @@ function clearAllTimers() {
   matchInterval = null;
 }
 
+/** Rebuilds one queue's search request straight from the live save (mirrors RankedScreen's own
+ *  buildQueueRequest exactly), so auto-queue's next cycle always reflects whatever's changed since the
+ *  last search — a rank-up, freshly trained stats, a party change — never a stale snapshot from whenever
+ *  auto-queue was first turned on. */
+function buildAutoQueueRequest(save: ReturnType<typeof useSaveStore.getState>, era: RankEra, q: QueueMode): QueueSearchRequest {
+  const p = save.rankedProfiles[q];
+  const rankTier: RankTierId = p.placementMatchesRemaining > 0 ? deriveRankFromMmr(p.mmr, era, q).tier : p.rankTier;
+  return {
+    queue: q,
+    rankTier,
+    playerMmr: p.mmr,
+    self: {
+      name: save.displayName,
+      gameSense: save.player.gameSense[q],
+      mechanicalConsistency: save.player.mechanicalConsistency[q],
+      foundationStats: save.foundationStats,
+      title: save.titles.find((t) => t.id === save.equippedTitleId) ?? null,
+      duelMastery: {
+        mechanicMastery: flattenProgress(save.mechanicProgress),
+        queueConceptMastery: flattenProgress(save.queueConceptProgress),
+        playstyle: save.playstyleProfiles[q],
+      },
+    },
+  };
+}
+
 interface MatchStoreState {
   phase: MatchPhase;
   queue: QueueMode | null;
   /** While `phase === "searching"`, every queue currently being searched at once (multi-queue). A single
    *  queue is still just a one-element array. Cleared the moment one of them pops. */
   queuedModes: QueueMode[];
+  /** Non-null while auto-queue is active: which queue(s) to immediately re-search once a ranked match ends
+   *  (see `returnToMenu`), until the player stops it (the persistent AutoQueueBanner, or manually
+   *  cancelling an in-progress search). Never touched by tournament/org/showmatch series, only the plain
+   *  ranked "Continue" flow. */
+  autoQueueModes: QueueMode[] | null;
   /** How long (real ms) this match's queue search took, per computeQueueDurationMs's rank/population/
    *  time-of-day model. Doubles as the realistic in-game queue time to advance the clock by once the
    *  match ends (see MatchScreen's handleContinue) — 0 for a tournament series, which skips matchmaking
@@ -461,6 +494,10 @@ interface MatchStoreState {
   cancelQueue: () => void;
   acknowledgeFound: () => void;
   returnToMenu: () => void;
+  /** Enables (a non-null queue list) or disables (null) auto-queue. Doesn't itself start a search — the
+   *  caller (RankedScreen's Search button) still calls `startQueue` for the first cycle, this just decides
+   *  whether `returnToMenu` re-triggers it after each match ends. */
+  setAutoQueueModes: (modes: QueueMode[] | null) => void;
 }
 
 function seriesWinsNeeded(seriesFormat: number): number {
@@ -607,6 +644,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   phase: "idle",
   queue: null,
   queuedModes: [],
+  autoQueueModes: null,
   queueDurationMs: 0,
   clockSeconds: GAME_DURATION_SECONDS,
   overtime: false,
@@ -690,7 +728,9 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
 
   cancelQueue: () => {
     clearAllTimers();
-    set({ phase: "idle", queue: null, queuedModes: [] });
+    // A manual cancel stops auto-queue too, otherwise the persistent banner would keep claiming it's
+    // still on even though nothing will actually restart the search from here.
+    set({ phase: "idle", queue: null, queuedModes: [], autoQueueModes: null });
   },
 
   acknowledgeFound: () => {
@@ -817,6 +857,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
 
   returnToMenu: () => {
     clearAllTimers();
+    const autoModes = get().autoQueueModes;
     set({
       phase: "idle",
       queue: null,
@@ -840,5 +881,31 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       duelNextAttacker: null,
       duelIsCounter: false,
     });
+
+    // Auto-queue: immediately re-search the same queue(s), built fresh off the live save (rank/stats/party
+    // may have changed since the last cycle) rather than replaying a stale snapshot. Only ever fires from
+    // here (the plain ranked "Continue" flow), never after a tournament/org/showmatch series.
+    if (autoModes && autoModes.length > 0) {
+      const save = useSaveStore.getState();
+      const era = eraForDate(save.currentDate);
+      const partyFriendStats: Record<string, PartyFriendStats> = {};
+      for (const name of save.partyMembers) {
+        const friend = save.friends[name];
+        if (friend) partyFriendStats[name] = { mmr: friend.mmr, gameSense: friend.gameSense, mechanicalConsistency: friend.mechanicalConsistency };
+      }
+      get().startQueue(
+        autoModes.map((q) => buildAutoQueueRequest(save, era, q)),
+        save.clockHour,
+        era,
+        save.seasonNumber,
+        save.currentDate.year,
+        save.currentDate,
+        save.seasonStartDate,
+        save.partyMembers,
+        partyFriendStats
+      );
+    }
   },
+
+  setAutoQueueModes: (modes) => set({ autoQueueModes: modes }),
 }));
