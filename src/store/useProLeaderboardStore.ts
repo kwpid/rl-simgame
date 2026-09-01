@@ -1,0 +1,264 @@
+// Live, persistent per-queue state for every pro player, separate from any one save (the pro ladder is
+// shared world state, not tied to a single career). Rather than a smooth time-based ramp toward a fixed
+// peak, each pro's MMR/Game Sense/Mechanical Consistency comes from actually simulating their background
+// games one at a time (Elo-style deltas, placement matches at the start of a season, gradual stat growth
+// per game) whenever their entry is read and time has passed since it was last caught up — so a pro reads
+// as a consistent, improving person across matches instead of a fresh random roll every time, and their
+// current MMR and their current skill level always describe the SAME point in their season, not a maxed-
+// out skill paired with a still-depressed early-season rating.
+
+import { create } from "zustand";
+import { tierMinMmr, type RankEra } from "@/data/rankSystem";
+import { PRO_PLAYERS, seedProMmr, hashString } from "@/data/proPlayers";
+import { proQueueStatCeiling, eloExpectedScore, eloKFactor } from "@/data/matchSim";
+import type { QueueMode } from "@/data/mockSave";
+import { daysBetween, type SimDate } from "@/data/dateUtils";
+
+const STORAGE_KEY = "rl-sim:pro-leaderboard-mmr-v3";
+
+// How much of a pro's rating/skill survives a season reset, same spirit as the player's own softResetMmr,
+// pros lose real ground each season and have to climb back, they just start closer to the top than a
+// regular player since they never truly left it.
+const RESET_COMPRESSION = 0.45;
+// Skill (Game Sense/Mechanical Consistency) also takes a "rust" hit at season start rather than snapping
+// straight back to full strength, climbing back through simulated games the same way MMR does — this is
+// what stops a fresh-season pro from showing max stats while still sitting at a depressed early rating.
+const STAT_RUST_FLOOR_FRACTION = 0.35;
+
+const GAMES_PER_DAY_MIN = 1.2;
+const GAMES_PER_DAY_SPREAD = 2.0;
+const PLACEMENT_GAMES = 10;
+const ELO_K_PLACEMENT = 60; // placement matches swing much harder, same idea as the player's own placements
+const STAT_CLOSE_RATE = 0.03; // fraction of the remaining gap to target skill closed per simulated game
+const MAX_GAMES_PER_CATCHUP = 300; // safety cap so a huge date jump doesn't loop thousands of times
+
+interface ProMmrEntry {
+  mmr: number;
+  gameSense: number;
+  mechanicalConsistency: number;
+  gamesPlayedThisSeason: number;
+  targetMmr: number;
+  targetGameSense: number;
+  targetMechanicalConsistency: number;
+  seasonStartKey: string;
+}
+
+type ProMmrTable = Record<string, Partial<Record<QueueMode, ProMmrEntry>>>;
+
+function seasonKey(seasonStartDate: SimDate): string {
+  return `${seasonStartDate.year}-${seasonStartDate.month}-${seasonStartDate.day}`;
+}
+
+function loadStored(): ProMmrTable {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function persist(table: ProMmrTable) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(table));
+  } catch {
+    // Storage full/unavailable, the ladder just won't persist across reloads this session.
+  }
+}
+
+function gamesPerDay(name: string): number {
+  return GAMES_PER_DAY_MIN + ((hashString(name + "#pace")) % 100) / 100 * GAMES_PER_DAY_SPREAD;
+}
+
+/** Reseeds one pro/queue entry for a new season: their target MMR/skill ceiling is recomputed from
+ *  career/experience, and their live MMR and skill both compress back toward a "rusty" starting point
+ *  from wherever they ended last season (or start right at the floor if this is the first look-up ever). */
+function reseedEntry(
+  proName: string,
+  queue: QueueMode,
+  era: RankEra,
+  currentYear: number,
+  seasonStartDate: SimDate,
+  previous: ProMmrEntry | undefined
+): ProMmrEntry {
+  const pro = PRO_PLAYERS.find((p) => p.name === proName)!;
+  const targetMmr = seedProMmr(pro, era, currentYear)[queue];
+  const targetGameSense = proQueueStatCeiling(pro, currentYear, targetMmr, era, queue);
+  const targetMechanicalConsistency = targetGameSense * 0.95;
+  const floor = tierMinMmr(era === "modern" ? "ssl" : "grand_champion", era, queue);
+
+  const priorMmr = previous ? previous.mmr : targetMmr;
+  const mmr = Math.max(floor, Math.round(floor + (priorMmr - floor) * RESET_COMPRESSION));
+
+  const statFloor = targetGameSense * STAT_RUST_FLOOR_FRACTION;
+  const mechFloor = targetMechanicalConsistency * STAT_RUST_FLOOR_FRACTION;
+  const priorGameSense = previous ? previous.gameSense : targetGameSense;
+  const priorMech = previous ? previous.mechanicalConsistency : targetMechanicalConsistency;
+  const gameSense = Math.max(statFloor, Math.round(statFloor + (priorGameSense - statFloor) * RESET_COMPRESSION));
+  const mechanicalConsistency = Math.max(mechFloor, Math.round(mechFloor + (priorMech - mechFloor) * RESET_COMPRESSION));
+
+  return {
+    mmr,
+    gameSense,
+    mechanicalConsistency,
+    gamesPlayedThisSeason: 0,
+    targetMmr,
+    targetGameSense,
+    targetMechanicalConsistency,
+    seasonStartKey: seasonKey(seasonStartDate),
+  };
+}
+
+/** Simulates however many background games this pro "should" have played by now (based on a per-name
+ *  games-per-day pace) since they were last caught up, each one an Elo-style result against a plausible
+ *  opponent near their own current rating, nudging MMR and letting skill close the gap toward their
+ *  season target a little at a time — this is what makes the ladder feel like real people grinding rather
+ *  than a smooth formula or a fresh random roll. */
+function simulateForward(entry: ProMmrEntry, proName: string, currentDate: SimDate, seasonStartDate: SimDate): ProMmrEntry {
+  const daysIn = Math.max(0, daysBetween(seasonStartDate, currentDate));
+  const expectedGames = Math.floor(daysIn * gamesPerDay(proName));
+  const gamesBehind = expectedGames - entry.gamesPlayedThisSeason;
+  if (gamesBehind <= 0) return entry;
+
+  if (gamesBehind > MAX_GAMES_PER_CATCHUP) {
+    // A huge time skip, fast-forward straight to target rather than looping thousands of simulated games.
+    return {
+      ...entry,
+      mmr: Math.round(entry.targetMmr),
+      gameSense: Math.round(entry.targetGameSense),
+      mechanicalConsistency: Math.round(entry.targetMechanicalConsistency),
+      gamesPlayedThisSeason: expectedGames,
+    };
+  }
+
+  let { mmr, gameSense, mechanicalConsistency, gamesPlayedThisSeason } = entry;
+  for (let i = 0; i < gamesBehind; i++) {
+    const isPlacement = gamesPlayedThisSeason < PLACEMENT_GAMES;
+    const oppRating = mmr + (Math.random() - 0.5) * 2 * 350;
+    const expected = eloExpectedScore(mmr, oppRating);
+    // A slight pull toward their real target skill so they trend the right direction over a season
+    // instead of a pure random walk, without ever guaranteeing a given game's result.
+    const skillPull = (entry.targetMmr - mmr) / 1600;
+    const winProb = Math.max(0.05, Math.min(0.95, expected + skillPull));
+    const won = Math.random() < winProb;
+    const k = isPlacement ? ELO_K_PLACEMENT : eloKFactor(mmr);
+    mmr = Math.max(0, mmr + k * ((won ? 1 : 0) - expected));
+    gameSense += (entry.targetGameSense - gameSense) * STAT_CLOSE_RATE;
+    mechanicalConsistency += (entry.targetMechanicalConsistency - mechanicalConsistency) * STAT_CLOSE_RATE;
+    gamesPlayedThisSeason++;
+  }
+
+  return {
+    ...entry,
+    mmr: Math.round(mmr),
+    gameSense: Math.round(gameSense),
+    mechanicalConsistency: Math.round(mechanicalConsistency),
+    gamesPlayedThisSeason,
+  };
+}
+
+/** Reseeds-if-needed then simulates-forward one entry, the shared step behind every read/ensure below. */
+function catchUp(
+  existing: ProMmrEntry | undefined,
+  proName: string,
+  queue: QueueMode,
+  era: RankEra,
+  currentYear: number,
+  currentDate: SimDate,
+  seasonStartDate: SimDate
+): ProMmrEntry {
+  const key = seasonKey(seasonStartDate);
+  const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, seasonStartDate, existing);
+  return simulateForward(base, proName, currentDate, seasonStartDate);
+}
+
+interface ProLeaderboardState {
+  mmr: ProMmrTable;
+  /** Current MMR for a pro in a queue, caught up (reseeded for a new season and/or simulated forward
+   *  through background games) to `currentDate` first. Returns 0 for a name that isn't a known pro. Safe
+   *  to call one at a time from match generation; for a render-time loop over many pros, call
+   *  `ensureSeeded` in an effect first and then just read `mmr` directly. */
+  getMmr: (proName: string, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => number;
+  /** Same as `getMmr` but returns the persistent Game Sense/Mechanical Consistency this same pro/queue
+   *  entry has simulated its way to, so their in-match stats are the SAME person as the leaderboard shows,
+   *  not a fresh jittered roll. */
+  getStats: (proName: string, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => { gameSense: number; mechanicalConsistency: number };
+  /** Batches catch-up (reseed + simulate-forward) for every name in the list, in one `set` call. Call
+   *  this from a `useEffect`, never from inside a render body — after it runs, render can read `mmr`
+   *  directly without needing `getMmr`/`getStats` again. */
+  ensureSeeded: (proNames: string[], queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => void;
+  /** Applies a real match result: `mmrDelta` nudges the pro's queue MMR the same Elo-style way a real
+   *  ranked match would move a player's, on top of whatever their simulated background games already
+   *  have them at. Doesn't count toward their simulated game count. */
+  applyResult: (proName: string, queue: QueueMode, mmrDelta: number, era: RankEra, currentYear: number, seasonStartDate: SimDate) => void;
+  /** Immediately re-seeds every active pro's MMR/skill in every queue from scratch (using whatever the
+   *  current seeding formula/tuning is), rather than just clearing the table and hoping a later screen
+   *  visit fills it back in. For a save that picked up stale/pre-tuning entries. Dev-tools only. */
+  resetAll: (era: RankEra, currentYear: number, seasonStartDate: SimDate) => void;
+}
+
+export const useProLeaderboardStore = create<ProLeaderboardState>((set, get) => ({
+  mmr: loadStored(),
+
+  getMmr: (proName, queue, era, currentYear, currentDate, seasonStartDate) => {
+    if (!PRO_PLAYERS.some((p) => p.name === proName)) return 0;
+    const state = get();
+    const entry = catchUp(state.mmr[proName]?.[queue], proName, queue, era, currentYear, currentDate, seasonStartDate);
+    const nextTable = { ...state.mmr, [proName]: { ...state.mmr[proName], [queue]: entry } };
+    set({ mmr: nextTable });
+    persist(nextTable);
+    return entry.mmr;
+  },
+
+  getStats: (proName, queue, era, currentYear, currentDate, seasonStartDate) => {
+    if (!PRO_PLAYERS.some((p) => p.name === proName)) return { gameSense: 0, mechanicalConsistency: 0 };
+    const state = get();
+    const entry = catchUp(state.mmr[proName]?.[queue], proName, queue, era, currentYear, currentDate, seasonStartDate);
+    const nextTable = { ...state.mmr, [proName]: { ...state.mmr[proName], [queue]: entry } };
+    set({ mmr: nextTable });
+    persist(nextTable);
+    return { gameSense: entry.gameSense, mechanicalConsistency: entry.mechanicalConsistency };
+  },
+
+  ensureSeeded: (proNames, queue, era, currentYear, currentDate, seasonStartDate) => {
+    const state = get();
+    const nextTable = { ...state.mmr };
+    let changed = false;
+    for (const name of proNames) {
+      if (!PRO_PLAYERS.some((p) => p.name === name)) continue;
+      const entry = catchUp(nextTable[name]?.[queue], name, queue, era, currentYear, currentDate, seasonStartDate);
+      nextTable[name] = { ...nextTable[name], [queue]: entry };
+      changed = true;
+    }
+    if (!changed) return;
+    set({ mmr: nextTable });
+    persist(nextTable);
+  },
+
+  applyResult: (proName, queue, mmrDelta, era, currentYear, seasonStartDate) => {
+    const state = get();
+    const key = seasonKey(seasonStartDate);
+    const existing = state.mmr[proName]?.[queue];
+    const entry = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, seasonStartDate, existing);
+    const nextEntry: ProMmrEntry = { ...entry, mmr: Math.max(0, entry.mmr + mmrDelta) };
+    const nextTable = { ...state.mmr, [proName]: { ...state.mmr[proName], [queue]: nextEntry } };
+    set({ mmr: nextTable });
+    persist(nextTable);
+  },
+
+  resetAll: (era, currentYear, seasonStartDate) => {
+    const nextTable: ProMmrTable = {};
+    for (const pro of PRO_PLAYERS) {
+      if (pro.debutYear > currentYear) continue;
+      const perQueue: Partial<Record<QueueMode, ProMmrEntry>> = {};
+      (["1v1", "2v2", "3v3"] as QueueMode[]).forEach((queue) => {
+        perQueue[queue] = reseedEntry(pro.name, queue, era, currentYear, seasonStartDate, undefined);
+      });
+      nextTable[pro.name] = perQueue;
+    }
+    set({ mmr: nextTable });
+    persist(nextTable);
+  },
+}));
+
+export type { ProMmrEntry };

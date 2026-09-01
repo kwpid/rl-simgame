@@ -1,0 +1,747 @@
+// Runs every scheduled tournament instance (RLCS regionals + EWC/ELEAGUE), purely date-driven like the
+// pro leaderboard's season ramp: nothing ticks in the background, `ensureProgress` (called from a
+// `useEffect`, never render-time) checks how many in-game days have passed and resolves whatever stage
+// should have finished by now for each instance, persisting the result. New instances are created lazily
+// once their scheduled start date arrives, per data/tournaments.ts's `buildSeasonSchedule`.
+
+import { create } from "zustand";
+import type { SimDate } from "@/data/dateUtils";
+import { daysBetween, addDays } from "@/data/dateUtils";
+import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
+import {
+  buildSeasonSchedule,
+  rlcsSeasonForDate,
+  rlcsStructureEra,
+  generateTeamsForRegion,
+  generateGlobalTeams,
+  generateSoloEntrantsForRegion,
+  generateRivalSeriesTeamsForRegion,
+  titlesEarnedForKind,
+  pickFictionalPastRlcsTitle,
+  MAJOR_GROUPS,
+  MAJOR_STAGES,
+  WORLDS_STAGES,
+  RLCS_REGIONS,
+  RLCS_1V1_REGIONS,
+  type ScheduledTournament,
+  type TournamentKind,
+} from "@/data/tournaments";
+import type { TitleEntry } from "@/data/seasons";
+import {
+  runDoubleElimStage,
+  runSwissStage,
+  runGslGroupStage,
+  runSingleElimStage,
+  type StageConfig,
+  type TournamentTeam,
+  type StandingEntry,
+  type StageResult,
+} from "@/data/tournamentFormats";
+
+const STORAGE_KEY_PREFIX = "rl-sim:tournament-instances-v2";
+
+// Tournament progress (majors, regionals, the player's own registration/bracket) is scoped to whichever
+// save is currently active, same as the save's own data — otherwise switching saves, or deleting one and
+// starting fresh, would leave a "ghost" registration (a different username, a bracket state that makes no
+// sense for the new save's timeline) sitting in a single shared blob forever, silently confusing every
+// readiness/major-formation check that assumed it was the current player's. `loadForSave` (called from
+// AppRoot alongside `initFromSave`) is what actually switches which save's data this store is reading from.
+let activeSaveId: string | null = null;
+
+function tournamentStorageKeyFor(saveId: string | null): string {
+  return `${STORAGE_KEY_PREFIX}:${saveId ?? "unsaved"}`;
+}
+
+/** Exported so `saveManager.ts`'s `deleteSave` can wipe a save's tournament progress along with everything
+ *  else, instead of leaving it as an orphaned blob nothing ever reads again but that still sits in storage. */
+export function clearTournamentDataForSave(saveId: string): void {
+  try {
+    localStorage.removeItem(tournamentStorageKeyFor(saveId));
+  } catch {
+    // Storage unavailable, nothing to clear.
+  }
+}
+
+export interface PendingPlayerMatch {
+  opponentId: string;
+  opponentName: string;
+  seriesFormat: number;
+}
+
+export interface PlayerBracketProgress {
+  teamId: string;
+  wins: number;
+  losses: number;
+  eliminated: boolean;
+}
+
+export interface TournamentInstance {
+  id: string;
+  kind: TournamentKind;
+  label: string;
+  region: ProRegion | null;
+  startDate: SimDate;
+  stages: StageConfig[];
+  stageIndex: number;
+  stageStartDate: SimDate;
+  currentTeams: TournamentTeam[];
+  lastStandings: StandingEntry[];
+  completed: boolean;
+  championName: string | null;
+  /** Set once the human player registers for this instance. Their journey through each stage is played
+   *  out live match-by-match instead of simulated in bulk with everyone else, see `queuePlayerMatch`/
+   *  `resolvePlayerMatch`. `playerFinalPlacement` is set once they're eliminated (or crowned champion),
+   *  after which this instance goes back to resolving normally for the remaining AI field. */
+  playerTeamId: string | null;
+  playerBracket: PlayerBracketProgress | null;
+  pendingMatch: PendingPlayerMatch | null;
+  playerFinalPlacement: number | null;
+}
+
+/** How many days before an instance's scheduled start date registration opens (and its field is
+ *  generated), so the player can see and join it ahead of time, not just the instant it begins. */
+export const REGISTRATION_WINDOW_DAYS = 7;
+
+/** Simplified, uniform rule for the player's own live journey through a stage: win enough series to
+ *  clinch one of the stage's advancing spots, two losses (regardless of the stage's real-world format,
+ *  Swiss/GSL included) always ends your run there, a generous safety net so one bad series doesn't feel
+ *  as brutal as true single-elimination. The rest of the field still resolves via the real per-format
+ *  logic, only the player's own path is simplified this way, for a consistent, always-fair play experience.
+ *  Uses the ACTUAL current field size, not the stage's static config, a real double-elim round can
+ *  overshoot below its target advanceCount in one pass, so the config's `entrants` isn't always accurate
+ *  by the time the player is playing through it. */
+function stageWinsNeeded(stage: StageConfig, actualFieldSize: number): number {
+  return Math.max(1, Math.ceil(Math.log2(Math.max(2, actualFieldSize) / stage.advanceCount)));
+}
+const PLAYER_LOSSES_ALLOWED = 2;
+
+type InstanceTable = Record<string, TournamentInstance>;
+
+/** A standings entry with a missing/undefined `team` (the shape a save could have picked up from the
+ *  empty-AI-field crash before that was fixed) would keep crashing forever otherwise, since the broken
+ *  instance just gets loaded back out of storage as-is every session. Any instance that fails this check
+ *  is dropped entirely rather than repaired in place, `ensureProgress` regenerates a fresh one on its own
+ *  the next time it's due, which is simpler and safer than trying to patch a corrupted bracket. */
+function isInstanceValid(instance: unknown): instance is TournamentInstance {
+  if (!instance || typeof instance !== "object") return false;
+  const inst = instance as Partial<TournamentInstance>;
+  if (!Array.isArray(inst.currentTeams) || inst.currentTeams.some((t) => !t || typeof t.name !== "string")) return false;
+  if (!Array.isArray(inst.lastStandings) || inst.lastStandings.some((e) => !e || !e.team || typeof e.team.name !== "string")) return false;
+  if (!Array.isArray(inst.stages)) return false;
+  // A won-it-all playerBracket resets to non-eliminated the same way advancing mid-tournament does, so a
+  // save from before `completed`/`stageIndex` were guarded together could have a stageIndex that's already
+  // past the end of `stages` for an instance that isn't marked completed, queuePlayerMatch would then index
+  // past the stages array and crash on the very next visit.
+  if (typeof inst.stageIndex === "number" && !inst.completed && inst.stageIndex >= inst.stages.length) return false;
+  return true;
+}
+
+/** Drops any non-completed, non-player major/Worlds instance that the current (season-scoped) readiness
+ *  rules would no longer actually create, e.g. one an earlier build spawned by treating any historically-
+ *  completed regional as satisfying its prerequisites instead of only this season's. Leaves completed
+ *  instances (they're just history now) and anything the player is actively playing (`playerTeamId` set)
+ *  alone, so no live progress is ever lost — a bogus AI-only bracket just quietly disappears and is free
+ *  to be recreated correctly, for real, once its regions actually earn it. */
+function sanitizeMajorsAndWorlds(table: InstanceTable): boolean {
+  let droppedAny = false;
+  for (const id of Object.keys(table)) {
+    const inst = table[id];
+    if (inst.kind !== "rlcs_major" && inst.kind !== "rlcs_worlds") continue;
+    if (inst.completed || inst.playerTeamId) continue;
+
+    const discipline: RlcsDiscipline | null = id.includes("_1v1_") ? "1v1" : id.includes("_3v3_") ? "3v3" : null;
+    if (!discipline) {
+      delete table[id]; // pre-multi-discipline id shape, unreachable by any current lookup
+      droppedAny = true;
+      continue;
+    }
+
+    if (inst.kind === "rlcs_major") {
+      const groupId = id.split("_")[2];
+      const group = MAJOR_GROUPS.find((g) => g.id === groupId);
+      const readiness = group ? getMajorReadiness(table, discipline, group, inst.startDate) : null;
+      if (!readiness || readiness.kind !== "scheduled") {
+        delete table[id];
+        droppedAny = true;
+      }
+    } else if (rlcsStructureEra(inst.startDate.year) === "early") {
+      const readiness = getEarlyEraWorldsReadiness(table, discipline, inst.startDate);
+      if (readiness.kind !== "scheduled") {
+        delete table[id];
+        droppedAny = true;
+      }
+    } else {
+      const bothMajorsDone = MAJOR_GROUPS.every((group) =>
+        Object.values(table).some((m) => m.kind === "rlcs_major" && m.completed && m.id.startsWith(`major_${discipline}_${group.id}_`)),
+      );
+      if (!bothMajorsDone) {
+        delete table[id];
+        droppedAny = true;
+      }
+    }
+  }
+  return droppedAny;
+}
+
+function loadStored(): InstanceTable {
+  try {
+    const raw = localStorage.getItem(tournamentStorageKeyFor(activeSaveId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as InstanceTable;
+    const clean: InstanceTable = {};
+    let droppedAny = false;
+    for (const [id, instance] of Object.entries(parsed)) {
+      if (isInstanceValid(instance)) clean[id] = instance;
+      else droppedAny = true;
+    }
+    if (sanitizeMajorsAndWorlds(clean)) droppedAny = true;
+    if (droppedAny) persist(clean); // overwrite the corrupted blob on disk, not just in memory
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+function persist(table: InstanceTable) {
+  try {
+    localStorage.setItem(tournamentStorageKeyFor(activeSaveId), JSON.stringify(table));
+  } catch {
+    // Storage full/unavailable, tournament progress just won't persist across reloads this session.
+  }
+}
+
+function resolveStage(format: StageConfig["format"], teams: TournamentTeam[], advanceCount: number): StageResult {
+  if (teams.length === 0) return { advanced: [], standings: [] };
+  if (format === "double_elim") return runDoubleElimStage(teams, advanceCount);
+  if (format === "swiss") return runSwissStage(teams, advanceCount);
+  if (format === "gsl_group") return runGslGroupStage(teams, advanceCount);
+  return runSingleElimStage(teams);
+}
+
+function createInstance(scheduled: ScheduledTournament, currentYear: number): TournamentInstance {
+  const teams =
+    scheduled.region === null
+      ? generateGlobalTeams(currentYear, scheduled.fieldSize, scheduled.id)
+      : scheduled.kind === "rlcs_1v1_regional"
+        ? generateSoloEntrantsForRegion(scheduled.region, currentYear, scheduled.fieldSize, scheduled.id)
+        : scheduled.kind === "rlrs_regional"
+          ? generateRivalSeriesTeamsForRegion(scheduled.region, scheduled.fieldSize, scheduled.id)
+          : generateTeamsForRegion(scheduled.region, currentYear, scheduled.fieldSize, scheduled.id);
+  return {
+    id: scheduled.id,
+    kind: scheduled.kind,
+    label: scheduled.label,
+    region: scheduled.region,
+    startDate: scheduled.startDate,
+    stages: scheduled.stages,
+    stageIndex: 0,
+    stageStartDate: scheduled.startDate,
+    currentTeams: teams,
+    lastStandings: [],
+    completed: false,
+    championName: null,
+    playerTeamId: null,
+    playerBracket: null,
+    pendingMatch: null,
+    playerFinalPlacement: null,
+  };
+}
+
+function advanceInstance(instance: TournamentInstance, currentDate: SimDate): TournamentInstance {
+  // While the player is still alive in this tournament, this stage (and every stage after it) advances
+  // only through them actually playing their matches (see queuePlayerMatch/resolvePlayerMatch), not on
+  // the calendar. Once they're eliminated (or crowned champion), normal day-based auto-resolution resumes.
+  if (instance.playerTeamId && instance.playerFinalPlacement === null) return instance;
+
+  let current = instance;
+  let guard = 0;
+  while (!current.completed && guard < current.stages.length + 1) {
+    guard++;
+    const stage = current.stages[current.stageIndex];
+    if (daysBetween(current.stageStartDate, currentDate) < stage.days) break;
+
+    const result = resolveStage(stage.format, current.currentTeams, stage.advanceCount);
+    const isLastStage = current.stageIndex + 1 >= current.stages.length;
+    current = {
+      ...current,
+      stageIndex: current.stageIndex + 1,
+      stageStartDate: currentDate,
+      currentTeams: result.advanced,
+      lastStandings: result.standings,
+      completed: isLastStage,
+      championName: isLastStage ? result.standings.find((s) => s.placement === 1)?.team.name ?? null : null,
+    };
+  }
+  return current;
+}
+
+/** A major/Worlds becomes possible some time after its prerequisites (regionals, or both majors) are
+ *  actually done, not on a fixed calendar month, this is how long after that "readiness" moment it's
+ *  scheduled to begin, real RLCS majors/Worlds land a month or two after the qualifiers that feed them. */
+const MAJOR_DELAY_DAYS = 45;
+const WORLDS_DELAY_DAYS = 35;
+
+function dateKey(d: SimDate): string {
+  return `${d.year}-${d.month}-${d.day}`;
+}
+
+export type RlcsDiscipline = "1v1" | "3v3";
+
+/** 3v3 only has 5 regions (no APAC/SSA), so a major group's region list — written for 1v1's fuller
+ *  7-region map — has to be filtered down to the regions that discipline actually has before it's used
+ *  to look up regional champions. */
+function groupRegionsForDiscipline(group: (typeof MAJOR_GROUPS)[number], discipline: RlcsDiscipline): ProRegion[] {
+  if (discipline === "1v1") return group.regions;
+  return group.regions.filter((r) => RLCS_REGIONS.includes(r));
+}
+
+type ChampionInfo = { team: TournamentTeam; completionDate: SimDate; isPlayerChampion: boolean };
+
+/** A region's regional id embeds its RLCS season number directly (see buildSeasonSchedule), so a specific
+ *  season's regional can be looked up exactly rather than scanned for. This matters: majors must only
+ *  ever draw on THIS season's regional champions, never an older completed regional left over from a
+ *  prior season/schedule generation, or a stale save could suddenly satisfy a major's prerequisites out
+ *  of old history the moment it loads, with no fresh regional actually having just finished. */
+function regionalIdFor(discipline: RlcsDiscipline, seasonNumber: number, region: ProRegion): string {
+  return discipline === "1v1" ? `rlcs1v1_s${seasonNumber}_${region}` : `rlcs_s${seasonNumber}_${region}`;
+}
+
+/** This season's completed regional champion team for a region in a given discipline, with the date it
+ *  was decided (a completed instance's `stageStartDate` is the date its final stage resolved). Keeps the
+ *  real team object (1 player for 1v1, 3 for 3v3's orgs) rather than just a name, so a 3v3 major's
+ *  entrants keep the actual roster instead of collapsing to a single name, and flags whether that
+ *  specific champion run was the player's own (so majors/Worlds can auto-qualify them). */
+function championForSeason(table: InstanceTable, discipline: RlcsDiscipline, region: ProRegion, seasonNumber: number): ChampionInfo | null {
+  const inst = table[regionalIdFor(discipline, seasonNumber, region)];
+  if (!inst || !inst.completed || !inst.championName) return null;
+  const championTeam = inst.lastStandings.find((s) => s.placement === 1)?.team;
+  if (!championTeam) return null;
+  return { team: championTeam, completionDate: inst.stageStartDate, isPlayerChampion: inst.playerTeamId === championTeam.id && inst.playerFinalPlacement === 1 };
+}
+
+function latestDate(dates: SimDate[]): SimDate {
+  return dates.reduce((latest, d) => (daysBetween(latest, d) > 0 ? d : latest));
+}
+
+function findParent3v3Major(table: InstanceTable, group: (typeof MAJOR_GROUPS)[number]): TournamentInstance | null {
+  let best: TournamentInstance | null = null;
+  for (const inst of Object.values(table)) {
+    if (inst.kind !== "rlcs_major" || !inst.completed || !inst.id.startsWith(`major_3v3_${group.id}_`)) continue;
+    if (!best || daysBetween(best.stageStartDate, inst.stageStartDate) > 0) best = inst;
+  }
+  return best;
+}
+
+export type MajorReadiness =
+  | { kind: "scheduled"; scheduledStart: SimDate; champs: ChampionInfo[] }
+  | { kind: "awaiting_regions"; missingRegions: ProRegion[] }
+  | { kind: "awaiting_3v3_major" };
+
+/** Whether a major group is ready to form yet, and if so when, purely for UI display before the instance
+ *  itself exists (once it exists, its own `startDate` is authoritative). 3v3 majors are the real event,
+ *  scheduled MAJOR_DELAY_DAYS after its regions crown their champions. 1v1 is a side bracket at the same
+ *  event weekend, real RLCS majors run both disciplines together, so a 1v1 major only forms once its
+ *  parent 3v3 major (same group) has actually concluded, and starts that same day. Only THIS RLCS
+ *  season's regionals count towards readiness (see championForSeason) — an old completed regional left
+ *  over from a previous season's schedule can never retroactively satisfy a new major out of nowhere. */
+export function getMajorReadiness(table: InstanceTable, discipline: RlcsDiscipline, group: (typeof MAJOR_GROUPS)[number], currentDate: SimDate): MajorReadiness {
+  const regions = groupRegionsForDiscipline(group, discipline);
+  if (discipline === "3v3") {
+    const { seasonNumber } = rlcsSeasonForDate(currentDate);
+    const champs = regions.map((region) => championForSeason(table, discipline, region, seasonNumber));
+    if (champs.some((c) => c === null)) return { kind: "awaiting_regions", missingRegions: regions.filter((_, i) => champs[i] === null) };
+    const readyChamps = champs as ChampionInfo[];
+    const readinessDate = latestDate(readyChamps.map((c) => c.completionDate));
+    return { kind: "scheduled", scheduledStart: addDays(readinessDate, MAJOR_DELAY_DAYS), champs: readyChamps };
+  }
+  const parent = findParent3v3Major(table, group);
+  if (!parent) return { kind: "awaiting_3v3_major" };
+  // Match the 1v1 regionals to whichever RLCS season actually fed the parent 3v3 major, not the current
+  // date's season — a major can finish shortly after a year rolls over, and by then "this season" would
+  // otherwise point at next year's (still empty) regionals instead of the ones that crowned these champs.
+  const { seasonNumber } = rlcsSeasonForDate(parent.startDate);
+  const champs = regions.map((region) => championForSeason(table, discipline, region, seasonNumber));
+  if (champs.some((c) => c === null)) return { kind: "awaiting_regions", missingRegions: regions.filter((_, i) => champs[i] === null) };
+  return { kind: "scheduled", scheduledStart: parent.stageStartDate, champs: champs as ChampionInfo[] };
+}
+
+export type EarlyEraWorldsReadiness =
+  | { kind: "scheduled"; scheduledStart: SimDate; champs: ChampionInfo[] }
+  | { kind: "awaiting_regions"; missingRegions: ProRegion[] };
+
+/** Early era (2015-2019, see `rlcsStructureEra`) had no Major concept at all: a season's World
+ *  Championship field is built directly from every region's regional champion (5 for 3v3, 7 for 1v1) once
+ *  ALL of them exist for the season, there's no two-major-group intermediate step to wait on first. */
+export function getEarlyEraWorldsReadiness(table: InstanceTable, discipline: RlcsDiscipline, currentDate: SimDate): EarlyEraWorldsReadiness {
+  const { seasonNumber } = rlcsSeasonForDate(currentDate);
+  const regions = discipline === "1v1" ? RLCS_1V1_REGIONS : RLCS_REGIONS;
+  const champs = regions.map((region) => championForSeason(table, discipline, region, seasonNumber));
+  if (champs.some((c) => c === null)) return { kind: "awaiting_regions", missingRegions: regions.filter((_, i) => champs[i] === null) };
+  const readyChamps = champs as ChampionInfo[];
+  const readinessDate = latestDate(readyChamps.map((c) => c.completionDate));
+  return { kind: "scheduled", scheduledStart: addDays(readinessDate, WORLDS_DELAY_DAYS), champs: readyChamps };
+}
+
+/** Majors and Worlds aren't calendar-scheduled like everything else. Each major group only ever has one
+ *  active (non-completed) instance at a time, a new one can't form again until the current one finishes
+ *  and its regions produce fresh champions. Runs once per discipline (1v1 and 3v3 each get their own
+ *  independent Majors/Worlds line, 3v3 being real RLCS's actual competitive format, and 1v1's major
+ *  riding along on the same event weekend, see getMajorReadiness). If the champion entrant for a region
+ *  was the player's own run, the new major/Worlds instance is wired up as player-driven from the start
+ *  (same shape `registerPlayer` produces), so they actually get to play it rather than watching it
+ *  auto-simulate. Mutates `table` in place, returns whether anything changed. */
+function ensureMajorsAndWorldsForDiscipline(table: InstanceTable, currentDate: SimDate, discipline: RlcsDiscipline): boolean {
+  let changed = false;
+  const majorIdPrefix = `major_${discipline}_`;
+  const { seasonNumber } = rlcsSeasonForDate(currentDate);
+  // Early era (2015-2019) had no Major concept at all, a regional champion went straight to Worlds — skip
+  // major creation entirely and let the Worlds section below source its field directly from regional
+  // champions instead of from two completed majors.
+  const noMajorsThisSeason = rlcsStructureEra(seasonNumber) === "early";
+
+  if (!noMajorsThisSeason) {
+    for (const group of MAJOR_GROUPS) {
+      const activeId = Object.keys(table).find((id) => table[id].kind === "rlcs_major" && id.startsWith(`${majorIdPrefix}${group.id}_`) && !table[id].completed);
+      if (activeId) {
+        const advanced = advanceInstance(table[activeId], currentDate);
+        if (advanced !== table[activeId]) {
+          table[activeId] = advanced;
+          changed = true;
+        }
+        continue; // one major per group at a time, don't try to spin up a second while this one is live
+      }
+
+      const readiness = getMajorReadiness(table, discipline, group, currentDate);
+      if (readiness.kind !== "scheduled") continue;
+      if (daysBetween(readiness.scheduledStart, currentDate) < 0) continue; // not time yet
+
+      const champs = readiness.champs;
+      const readinessDate = latestDate(champs.map((c) => c.completionDate));
+      const id = `${majorIdPrefix}${group.id}_${dateKey(readinessDate)}`;
+      if (table[id]) continue; // this exact cycle's major already ran
+
+      const startDate = readiness.scheduledStart;
+      const playerChamp = champs.find((c) => c.isPlayerChampion) ?? null;
+      table[id] = {
+        id,
+        kind: "rlcs_major",
+        label: `RLCS ${startDate.year} ${group.location} Major${discipline === "1v1" ? " (1v1)" : ""}`,
+        region: null,
+        startDate,
+        stages: MAJOR_STAGES,
+        stageIndex: 0,
+        stageStartDate: startDate,
+        currentTeams: champs.map((c) => c.team),
+        lastStandings: [],
+        completed: false,
+        championName: null,
+        playerTeamId: playerChamp?.team.id ?? null,
+        playerBracket: playerChamp ? { teamId: playerChamp.team.id, wins: 0, losses: 0, eliminated: false } : null,
+        pendingMatch: null,
+        playerFinalPlacement: null,
+      };
+      changed = true;
+    }
+  }
+
+  const worldsIdPrefix = `worlds_${discipline}_`;
+  const activeWorldsId = Object.keys(table).find((id) => table[id].kind === "rlcs_worlds" && id.startsWith(worldsIdPrefix) && !table[id].completed);
+  if (activeWorldsId) {
+    const advanced = advanceInstance(table[activeWorldsId], currentDate);
+    if (advanced !== table[activeWorldsId]) {
+      table[activeWorldsId] = advanced;
+      changed = true;
+    }
+    return changed;
+  }
+
+  let startDate: SimDate;
+  let worldsId: string;
+  let entrants: ChampionInfo[];
+
+  if (noMajorsThisSeason) {
+    const readiness = getEarlyEraWorldsReadiness(table, discipline, currentDate);
+    if (readiness.kind !== "scheduled") return changed;
+    if (daysBetween(readiness.scheduledStart, currentDate) < 0) return changed;
+    const readinessDate = latestDate(readiness.champs.map((c) => c.completionDate));
+    worldsId = `${worldsIdPrefix}${dateKey(readinessDate)}`;
+    if (table[worldsId]) return changed; // this exact cycle's Worlds already ran
+    startDate = readiness.scheduledStart;
+    entrants = readiness.champs;
+  } else {
+    const completedMajors = MAJOR_GROUPS.map((group) => {
+      let best: TournamentInstance | null = null;
+      for (const inst of Object.values(table)) {
+        if (inst.kind !== "rlcs_major" || !inst.id.startsWith(`${majorIdPrefix}${group.id}_`) || !inst.completed || !inst.championName) continue;
+        if (!best || daysBetween(best.stageStartDate, inst.stageStartDate) > 0) best = inst;
+      }
+      return best;
+    });
+    if (completedMajors.some((m) => m === null)) return changed; // both majors have to be played first
+
+    const [major1, major2] = completedMajors as TournamentInstance[];
+    const readinessDate = latestDate([major1.stageStartDate, major2.stageStartDate]);
+    worldsId = `${worldsIdPrefix}${dateKey(readinessDate)}`;
+    if (table[worldsId]) return changed; // this exact cycle's Worlds already ran
+
+    startDate = addDays(readinessDate, WORLDS_DELAY_DAYS);
+    if (daysBetween(startDate, currentDate) < 0) return changed;
+
+    const entry1 = major1.lastStandings.find((s) => s.placement === 1);
+    const entry2 = major2.lastStandings.find((s) => s.placement === 1);
+    if (!entry1 || !entry2) return changed;
+    entrants = [
+      { team: entry1.team, completionDate: major1.stageStartDate, isPlayerChampion: major1.playerTeamId === entry1.team.id && major1.playerFinalPlacement === 1 },
+      { team: entry2.team, completionDate: major2.stageStartDate, isPlayerChampion: major2.playerTeamId === entry2.team.id && major2.playerFinalPlacement === 1 },
+    ];
+  }
+
+  const playerChamp = entrants.find((c) => c.isPlayerChampion) ?? null;
+  table[worldsId] = {
+    id: worldsId,
+    kind: "rlcs_worlds",
+    label: `RLCS ${startDate.year} World Championship${discipline === "1v1" ? " (1v1)" : ""}`,
+    region: null,
+    startDate,
+    stages: WORLDS_STAGES,
+    stageIndex: 0,
+    stageStartDate: startDate,
+    currentTeams: entrants.map((c) => c.team),
+    lastStandings: [],
+    completed: false,
+    championName: null,
+    playerTeamId: playerChamp?.team.id ?? null,
+    playerBracket: playerChamp ? { teamId: playerChamp.team.id, wins: 0, losses: 0, eliminated: false } : null,
+    pendingMatch: null,
+    playerFinalPlacement: null,
+  };
+  return true;
+}
+
+function ensureMajorsAndWorlds(table: InstanceTable, currentDate: SimDate): boolean {
+  // 3v3 must run first: 1v1's major readiness (getMajorReadiness) looks up the parent 3v3 major in the
+  // SAME table, so it needs 3v3's pass to have already landed this cycle's major before 1v1 checks it.
+  const b = ensureMajorsAndWorldsForDiscipline(table, currentDate, "3v3");
+  const a = ensureMajorsAndWorldsForDiscipline(table, currentDate, "1v1");
+  return a || b;
+}
+
+interface TournamentStoreState {
+  instances: InstanceTable;
+  /** Creates any scheduled tournament whose start date has arrived and isn't tracked yet, then advances
+   *  every non-completed instance based on elapsed in-game days. Safe to call repeatedly, no-op unless
+   *  something has actually changed. */
+  ensureProgress: (currentDate: SimDate, currentYear: number) => void;
+  /** Registers the player into an open instance, replacing a generic filler entrant with their own. */
+  /** Registers the player into an open instance. `teammateNames` (org-signed 3v3 only) fills out the rest
+   *  of the roster with the player's real org teammates instead of a lone entrant, replacing a same-size
+   *  filler team's whole roster. */
+  registerPlayer: (instanceId: string, playerName: string, playerRegion: ProRegion, playerPower: number, teammateNames?: string[]) => void;
+  /** If the player is registered, alive, the stage has actually started, and they don't already have a
+   *  pending match, picks their next live opponent for this round. No-op otherwise. Call from a
+   *  `useEffect`, not render-time (same rule as `ensureProgress`). */
+  queuePlayerMatch: (instanceId: string, currentDate: SimDate) => void;
+  /** Applies the result of the player's just-finished live series: updates their win/loss count, and
+   *  once their run through this stage is decided (advanced or eliminated), resolves the rest of the
+   *  stage's field and merges the player back into the standings at the right spot. */
+  resolvePlayerMatch: (instanceId: string, wonSeries: boolean, currentDate: SimDate) => void;
+  /** Switches this store over to a different save's tournament progress, called from AppRoot right
+   *  alongside `useSaveStore`'s `initFromSave` whenever a save is loaded or switched to. */
+  loadForSave: (saveId: string) => void;
+}
+
+export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
+  instances: loadStored(),
+
+  ensureProgress: (currentDate, currentYear) => {
+    const state = get();
+    // RLCS runs on its own year-long calendar, entirely independent of the player's ranked ladder season
+    // (which can reset on its own unrelated cadence) — see rlcsSeasonForDate's doc comment.
+    const { seasonNumber, seasonStartDate } = rlcsSeasonForDate(currentDate);
+    const scheduled = buildSeasonSchedule(seasonNumber, seasonStartDate);
+    let changed = false;
+    const next: InstanceTable = { ...state.instances };
+
+    for (const item of scheduled) {
+      // Fields open up to REGISTRATION_WINDOW_DAYS before the scheduled start so the player can see and
+      // register ahead of time, the stage itself still won't actually resolve until the real start date
+      // (daysBetween(stageStartDate, currentDate) stays negative until then, see advanceInstance).
+      if (daysBetween(item.startDate, currentDate) < -REGISTRATION_WINDOW_DAYS) continue;
+      if (!next[item.id]) {
+        next[item.id] = createInstance(item, currentYear);
+        changed = true;
+        continue;
+      }
+      if (!next[item.id].completed) {
+        const advanced = advanceInstance(next[item.id], currentDate);
+        if (advanced !== next[item.id]) {
+          next[item.id] = advanced;
+          changed = true;
+        }
+      }
+    }
+
+    if (ensureMajorsAndWorlds(next, currentDate)) changed = true;
+
+    if (changed) {
+      set({ instances: next });
+      persist(next);
+    }
+  },
+
+  registerPlayer: (instanceId, playerName, playerRegion, playerPower, teammateNames) => {
+    const state = get();
+    const instance = state.instances[instanceId];
+    if (!instance || instance.playerTeamId || instance.stageIndex > 0 || instance.completed) return;
+
+    const roster = teammateNames && teammateNames.length > 0 ? [playerName, ...teammateNames] : [playerName];
+    const playerTeam: TournamentTeam = {
+      id: `${instanceId}_player`,
+      name: playerName,
+      region: playerRegion,
+      power: playerPower,
+      players: roster,
+    };
+    // Bump a generic filler entrant of the SAME roster size, never a named real pro (a filler entrant's
+    // team name and its solo player also happen to match, same as a real pro's does, so checking the
+    // actual roster is the only reliable way to tell them apart). If the field is somehow all real pros,
+    // just add the player's team on top rather than displace one.
+    const fillerIdx = instance.currentTeams.findIndex((t) => t.players.length === roster.length && !PRO_PLAYERS.some((p) => p.name === t.name));
+    const nextTeams =
+      fillerIdx >= 0
+        ? instance.currentTeams.map((t, i) => (i === fillerIdx ? playerTeam : t))
+        : [...instance.currentTeams, playerTeam];
+
+    const nextInstance: TournamentInstance = {
+      ...instance,
+      currentTeams: nextTeams,
+      playerTeamId: playerTeam.id,
+      playerBracket: { teamId: playerTeam.id, wins: 0, losses: 0, eliminated: false },
+      pendingMatch: null,
+    };
+    const nextTable = { ...state.instances, [instanceId]: nextInstance };
+    set({ instances: nextTable });
+    persist(nextTable);
+  },
+
+  queuePlayerMatch: (instanceId, currentDate) => {
+    const state = get();
+    const instance = state.instances[instanceId];
+    if (!instance || !instance.playerBracket || instance.playerBracket.eliminated || instance.pendingMatch) return;
+    // The tournament itself is over (win or lose), there's no next stage to queue anything for, even
+    // though a won-it-all playerBracket resets to non-eliminated the same way advancing a stage does.
+    if (instance.completed || instance.stageIndex >= instance.stages.length) return;
+    if (daysBetween(instance.stageStartDate, currentDate) < 0) return; // stage hasn't actually started yet
+
+    const stage = instance.stages[instance.stageIndex];
+    const opponents = instance.currentTeams.filter((t) => t.id !== instance.playerTeamId);
+    if (opponents.length === 0) return;
+    const opponent = opponents[Math.floor(Math.random() * opponents.length)];
+    const seriesFormat = stage.format === "single_elim" ? 5 : 3;
+
+    const nextInstance: TournamentInstance = {
+      ...instance,
+      pendingMatch: { opponentId: opponent.id, opponentName: opponent.name, seriesFormat },
+    };
+    const nextTable = { ...state.instances, [instanceId]: nextInstance };
+    set({ instances: nextTable });
+    persist(nextTable);
+  },
+
+  resolvePlayerMatch: (instanceId, wonSeries, currentDate) => {
+    const state = get();
+    const instance = state.instances[instanceId];
+    if (!instance || !instance.playerBracket || !instance.pendingMatch) return;
+
+    const stage = instance.stages[instance.stageIndex];
+    const opponentId = instance.pendingMatch.opponentId;
+    const wins = instance.playerBracket.wins + (wonSeries ? 1 : 0);
+    const losses = instance.playerBracket.losses + (wonSeries ? 0 : 1);
+    const winsNeeded = stageWinsNeeded(stage, instance.currentTeams.length);
+    const eliminated = losses >= PLAYER_LOSSES_ALLOWED;
+    const advanced = wins >= winsNeeded;
+
+    // Beaten opponents are simply removed from the remaining field, they're done for this stage too.
+    const remainingField = wonSeries ? instance.currentTeams.filter((t) => t.id !== opponentId) : instance.currentTeams;
+
+    if (!eliminated && !advanced) {
+      const nextInstance: TournamentInstance = {
+        ...instance,
+        currentTeams: remainingField,
+        playerBracket: { ...instance.playerBracket, wins, losses },
+        pendingMatch: null,
+      };
+      const nextTable = { ...state.instances, [instanceId]: nextInstance };
+      set({ instances: nextTable });
+      persist(nextTable);
+      return;
+    }
+
+    // The player's own run through this stage is decided, resolve everyone else and merge them back in.
+    const playerTeam = instance.currentTeams.find((t) => t.id === instance.playerTeamId)!;
+    const aiField = remainingField.filter((t) => t.id !== instance.playerTeamId);
+    // When the player takes one of the stage's advancing slots, the AI-only sub-bracket is resolved for
+    // one fewer spot, so every placement it hands out for teams below that cutoff needs to shift down by
+    // one to account for the player occupying a slot above them.
+    const aiAdvanceCount = advanced ? Math.max(0, stage.advanceCount - 1) : stage.advanceCount;
+    const result = resolveStage(stage.format, aiField, aiAdvanceCount);
+    const aiStandings = advanced
+      ? result.standings.map((entry) => ({ ...entry, placement: entry.placement === null ? null : entry.placement + 1 }))
+      : result.standings;
+
+    const isLastStage = instance.stageIndex + 1 >= instance.stages.length;
+    const playerPlacement = advanced ? (isLastStage ? 1 : null) : stage.advanceCount + 1;
+    const mergedAdvanced = advanced ? [playerTeam, ...result.advanced] : result.advanced;
+    const mergedStandings: StandingEntry[] = advanced
+      ? [{ team: playerTeam, wins, losses, placement: playerPlacement }, ...aiStandings]
+      : [...aiStandings, { team: playerTeam, wins, losses, placement: playerPlacement }];
+
+    const nextInstance: TournamentInstance = {
+      ...instance,
+      stageIndex: instance.stageIndex + 1,
+      stageStartDate: currentDate,
+      currentTeams: mergedAdvanced,
+      lastStandings: mergedStandings,
+      completed: isLastStage && advanced ? true : isLastStage,
+      championName: isLastStage && advanced ? playerTeam.name : isLastStage ? aiStandings.find((s) => s.placement === 1)?.team.name ?? null : null,
+      playerBracket: advanced ? { teamId: playerTeam.id, wins: 0, losses: 0, eliminated: false } : { ...instance.playerBracket, wins, losses, eliminated: true },
+      pendingMatch: null,
+      playerFinalPlacement: advanced ? (isLastStage ? 1 : null) : stage.advanceCount + 1,
+    };
+    const nextTable = { ...state.instances, [instanceId]: nextInstance };
+    set({ instances: nextTable });
+    persist(nextTable);
+  },
+
+  loadForSave: (saveId) => {
+    activeSaveId = saveId;
+    set({ instances: loadStored() });
+  },
+}));
+
+/** Every real RLCS title a given name has actually earned across completed tournament history (not the
+ *  fictional past-season titles `pickAiTitle` generates), used to let AI/pro opponents in regular ranked
+ *  matches show a real, chronologically-accurate title once RLCS has genuinely produced one for them.
+ *  A fresh save starting mid-timeline (e.g. season 12) has no completed tournament instances of its own
+ *  yet to scan, even though a veteran real pro would realistically already have past RLCS results by
+ *  then, so this falls back to `pickFictionalPastRlcsTitle` for real named pros only when the actual scan
+ *  comes up empty, matching the "for the top players ofc" scope of the request. `currentYear` is the
+ *  current RLCS season year (`rlcsSeasonForDate(currentDate).seasonNumber`), needed to bound how far back
+ *  a fictional past result could plausibly be. */
+export function findRealRlcsTitlesForPlayer(playerName: string, currentYear?: number): TitleEntry[] {
+  const instances = useTournamentStore.getState().instances;
+  const titles: TitleEntry[] = [];
+  for (const inst of Object.values(instances)) {
+    if (!inst.completed) continue;
+    const entry = inst.lastStandings.find((e) => e.team.name === playerName);
+    if (!entry || entry.placement === null) continue;
+    const majorLocation = inst.kind === "rlcs_major" ? MAJOR_GROUPS.find((g) => inst.id.includes(`_${g.id}_`))?.location ?? null : null;
+    const discipline: "1v1" | "3v3" = inst.currentTeams[0]?.players.length === 1 ? "1v1" : "3v3";
+    titles.push(...titlesEarnedForKind(inst.kind, inst.startDate.year, entry.placement, majorLocation, discipline));
+  }
+  if (titles.length === 0 && currentYear !== undefined) {
+    const pro = PRO_PLAYERS.find((p) => p.name === playerName);
+    if (pro) return pickFictionalPastRlcsTitle(pro, currentYear);
+  }
+  return titles;
+}

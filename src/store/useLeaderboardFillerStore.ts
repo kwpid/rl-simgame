@@ -1,0 +1,251 @@
+// Persistent, live state for the "regular" (non-pro) names that round out the Top 50 leaderboard alongside
+// real pros. Same simulated-background-games model as useProLeaderboardStore: MMR/Game Sense/Mechanical
+// Consistency all come from actually simulating games one at a time (Elo-style deltas, placement matches
+// at the start of a season, gradual stat growth per game) rather than a smooth time-based ramp or a fresh
+// random roll per match, so a name on the board reads as the same improving person match to match, and a
+// match opponent sharing that name gets the exact stats the board is showing.
+
+import { create } from "zustand";
+import { tierMinMmr, type RankEra } from "@/data/rankSystem";
+import { hashString } from "@/data/proPlayers";
+import { estimateGameSenseForMmr, eloExpectedScore, eloKFactor } from "@/data/matchSim";
+import { LB_NAMES, type QueueMode } from "@/data/mockSave";
+import { daysBetween, type SimDate } from "@/data/dateUtils";
+
+const STORAGE_KEY = "rl-sim:leaderboard-filler-mmr-v2";
+
+// A bit more than the visible Top 50 so real pros occupying some of those spots (which varies by queue/
+// era) still leaves enough filler names to fill the board out.
+export const LEADERBOARD_FILLER_COUNT = 70;
+
+const RESET_COMPRESSION = 0.45;
+const STAT_RUST_FLOOR_FRACTION = 0.35;
+
+const GAMES_PER_DAY_MIN = 1.0;
+const GAMES_PER_DAY_SPREAD = 1.6;
+const PLACEMENT_GAMES = 10;
+const ELO_K_PLACEMENT = 60;
+const STAT_CLOSE_RATE = 0.03;
+const MAX_GAMES_PER_CATCHUP = 300;
+
+interface FillerMmrEntry {
+  mmr: number;
+  gameSense: number;
+  mechanicalConsistency: number;
+  gamesPlayedThisSeason: number;
+  targetMmr: number;
+  targetGameSense: number;
+  targetMechanicalConsistency: number;
+  seasonStartKey: string;
+}
+
+type FillerMmrTable = Record<string, Partial<Record<QueueMode, FillerMmrEntry>>>;
+
+/** The fixed pool of filler leaderboard names, same order every time so a name (and its persisted history)
+ *  always refers to the same "person" across sessions. */
+export function fillerLeaderboardNames(): string[] {
+  return Array.from({ length: LEADERBOARD_FILLER_COUNT }, (_, i) => `${LB_NAMES[i % LB_NAMES.length]}${i >= LB_NAMES.length ? i : ""}`);
+}
+
+function seasonKey(seasonStartDate: SimDate): string {
+  return `${seasonStartDate.year}-${seasonStartDate.month}-${seasonStartDate.day}`;
+}
+
+function gamesPerDay(name: string): number {
+  return GAMES_PER_DAY_MIN + ((hashString(name + "#pace")) % 100) / 100 * GAMES_PER_DAY_SPREAD;
+}
+
+/** A filler's target MMR is a stable, name-seeded spot within the top bracket rather than a fresh random
+ *  roll, the exact same name always lands in roughly the same ceiling season to season. Their target
+ *  skill is read straight off the same MMR->Game Sense curve real ranked opponents use, so a filler regular
+ *  reads as exactly as skilled as their MMR would suggest, no separate/inflated formula. */
+function reseedEntry(
+  name: string,
+  queue: QueueMode,
+  era: RankEra,
+  currentYear: number,
+  seasonStartDate: SimDate,
+  previous: FillerMmrEntry | undefined
+): FillerMmrEntry {
+  const floor = tierMinMmr(era === "modern" ? "ssl" : "grand_champion", era, queue);
+  const spread = hashString(name + queue) % 450;
+  const targetMmr = floor + 100 + spread;
+  const targetGameSense = estimateGameSenseForMmr(targetMmr, era, queue, currentYear);
+  const targetMechanicalConsistency = targetGameSense * 0.9;
+
+  const priorMmr = previous ? previous.mmr : targetMmr;
+  const mmr = Math.max(floor, Math.round(floor + (priorMmr - floor) * RESET_COMPRESSION));
+
+  const statFloor = targetGameSense * STAT_RUST_FLOOR_FRACTION;
+  const mechFloor = targetMechanicalConsistency * STAT_RUST_FLOOR_FRACTION;
+  const priorGameSense = previous ? previous.gameSense : targetGameSense;
+  const priorMech = previous ? previous.mechanicalConsistency : targetMechanicalConsistency;
+  const gameSense = Math.max(statFloor, Math.round(statFloor + (priorGameSense - statFloor) * RESET_COMPRESSION));
+  const mechanicalConsistency = Math.max(mechFloor, Math.round(mechFloor + (priorMech - mechFloor) * RESET_COMPRESSION));
+
+  return {
+    mmr,
+    gameSense,
+    mechanicalConsistency,
+    gamesPlayedThisSeason: 0,
+    targetMmr,
+    targetGameSense,
+    targetMechanicalConsistency,
+    seasonStartKey: seasonKey(seasonStartDate),
+  };
+}
+
+function simulateForward(entry: FillerMmrEntry, name: string, currentDate: SimDate, seasonStartDate: SimDate): FillerMmrEntry {
+  const daysIn = Math.max(0, daysBetween(seasonStartDate, currentDate));
+  const expectedGames = Math.floor(daysIn * gamesPerDay(name));
+  const gamesBehind = expectedGames - entry.gamesPlayedThisSeason;
+  if (gamesBehind <= 0) return entry;
+
+  if (gamesBehind > MAX_GAMES_PER_CATCHUP) {
+    return {
+      ...entry,
+      mmr: Math.round(entry.targetMmr),
+      gameSense: Math.round(entry.targetGameSense),
+      mechanicalConsistency: Math.round(entry.targetMechanicalConsistency),
+      gamesPlayedThisSeason: expectedGames,
+    };
+  }
+
+  let { mmr, gameSense, mechanicalConsistency, gamesPlayedThisSeason } = entry;
+  for (let i = 0; i < gamesBehind; i++) {
+    const isPlacement = gamesPlayedThisSeason < PLACEMENT_GAMES;
+    const oppRating = mmr + (Math.random() - 0.5) * 2 * 350;
+    const expected = eloExpectedScore(mmr, oppRating);
+    const skillPull = (entry.targetMmr - mmr) / 1600;
+    const winProb = Math.max(0.05, Math.min(0.95, expected + skillPull));
+    const won = Math.random() < winProb;
+    const k = isPlacement ? ELO_K_PLACEMENT : eloKFactor(mmr);
+    mmr = Math.max(0, mmr + k * ((won ? 1 : 0) - expected));
+    gameSense += (entry.targetGameSense - gameSense) * STAT_CLOSE_RATE;
+    mechanicalConsistency += (entry.targetMechanicalConsistency - mechanicalConsistency) * STAT_CLOSE_RATE;
+    gamesPlayedThisSeason++;
+  }
+
+  return {
+    ...entry,
+    mmr: Math.round(mmr),
+    gameSense: Math.round(gameSense),
+    mechanicalConsistency: Math.round(mechanicalConsistency),
+    gamesPlayedThisSeason,
+  };
+}
+
+function catchUp(
+  existing: FillerMmrEntry | undefined,
+  name: string,
+  queue: QueueMode,
+  era: RankEra,
+  currentYear: number,
+  currentDate: SimDate,
+  seasonStartDate: SimDate
+): FillerMmrEntry {
+  const key = seasonKey(seasonStartDate);
+  const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, queue, era, currentYear, seasonStartDate, existing);
+  return simulateForward(base, name, currentDate, seasonStartDate);
+}
+
+function loadStored(): FillerMmrTable {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function persist(table: FillerMmrTable) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(table));
+  } catch {
+    // Storage full/unavailable, the filler ladder just won't persist across reloads this session.
+  }
+}
+
+interface LeaderboardFillerState {
+  mmr: FillerMmrTable;
+  /** Current MMR for a filler name in a queue, caught up (reseeded for a new season and/or simulated
+   *  forward through background games) to `currentDate` first. Safe to call one at a time from match
+   *  generation; for a render-time loop over the whole board, call `ensureSeeded` in an effect first and
+   *  then just read `mmr` directly. */
+  getMmr: (name: string, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => number;
+  /** Same as `getMmr` but returns the persistent Game Sense/Mechanical Consistency this entry has
+   *  simulated its way to, so a filler regular's in-match stats are the SAME person the board shows. */
+  getStats: (name: string, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => { gameSense: number; mechanicalConsistency: number };
+  /** Batches catch-up for every name in the list, in one `set` call. Call this from a `useEffect`, never
+   *  from inside a render body. */
+  ensureSeeded: (names: string[], queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => void;
+  /** Applies a real match result the same Elo-style way a real ranked match would move a player's MMR, on
+   *  top of whatever this filler's simulated background games already have them at. */
+  applyResult: (name: string, queue: QueueMode, mmrDelta: number, era: RankEra, currentYear: number, seasonStartDate: SimDate) => void;
+  /** Immediately re-seeds every filler regular's MMR/skill in every queue from scratch (using whatever the
+   *  current seeding formula/tuning is), rather than just clearing the table and hoping a later screen
+   *  visit fills it back in. For a save that picked up stale/pre-tuning entries. Dev-tools only. */
+  resetAll: (era: RankEra, currentYear: number, seasonStartDate: SimDate) => void;
+}
+
+export const useLeaderboardFillerStore = create<LeaderboardFillerState>((set, get) => ({
+  mmr: loadStored(),
+
+  getMmr: (name, queue, era, currentYear, currentDate, seasonStartDate) => {
+    const state = get();
+    const entry = catchUp(state.mmr[name]?.[queue], name, queue, era, currentYear, currentDate, seasonStartDate);
+    const nextTable = { ...state.mmr, [name]: { ...state.mmr[name], [queue]: entry } };
+    set({ mmr: nextTable });
+    persist(nextTable);
+    return entry.mmr;
+  },
+
+  getStats: (name, queue, era, currentYear, currentDate, seasonStartDate) => {
+    const state = get();
+    const entry = catchUp(state.mmr[name]?.[queue], name, queue, era, currentYear, currentDate, seasonStartDate);
+    const nextTable = { ...state.mmr, [name]: { ...state.mmr[name], [queue]: entry } };
+    set({ mmr: nextTable });
+    persist(nextTable);
+    return { gameSense: entry.gameSense, mechanicalConsistency: entry.mechanicalConsistency };
+  },
+
+  ensureSeeded: (names, queue, era, currentYear, currentDate, seasonStartDate) => {
+    const state = get();
+    const nextTable = { ...state.mmr };
+    let changed = false;
+    for (const name of names) {
+      const entry = catchUp(nextTable[name]?.[queue], name, queue, era, currentYear, currentDate, seasonStartDate);
+      nextTable[name] = { ...nextTable[name], [queue]: entry };
+      changed = true;
+    }
+    if (!changed) return;
+    set({ mmr: nextTable });
+    persist(nextTable);
+  },
+
+  applyResult: (name, queue, mmrDelta, era, currentYear, seasonStartDate) => {
+    const state = get();
+    const key = seasonKey(seasonStartDate);
+    const existing = state.mmr[name]?.[queue];
+    const entry = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, queue, era, currentYear, seasonStartDate, existing);
+    const nextEntry: FillerMmrEntry = { ...entry, mmr: Math.max(0, entry.mmr + mmrDelta) };
+    const nextTable = { ...state.mmr, [name]: { ...state.mmr[name], [queue]: nextEntry } };
+    set({ mmr: nextTable });
+    persist(nextTable);
+  },
+
+  resetAll: (era, currentYear, seasonStartDate) => {
+    const nextTable: FillerMmrTable = {};
+    for (const name of fillerLeaderboardNames()) {
+      const perQueue: Partial<Record<QueueMode, FillerMmrEntry>> = {};
+      (["1v1", "2v2", "3v3"] as QueueMode[]).forEach((queue) => {
+        perQueue[queue] = reseedEntry(name, queue, era, currentYear, seasonStartDate, undefined);
+      });
+      nextTable[name] = perQueue;
+    }
+    set({ mmr: nextTable });
+    persist(nextTable);
+  },
+}));
+
+export type { FillerMmrEntry };
