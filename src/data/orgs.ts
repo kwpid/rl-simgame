@@ -6,7 +6,8 @@
 // practice (see proPlayers.ts's seedProMmr), and it's the queue eligibility/teammate-matching both key off.
 
 import { tierMinMmr, type RankEra } from "./rankSystem";
-import { estimateGameSenseForMmr } from "./matchSim";
+import { eliteGameSenseCeiling, eliteFoundationCeiling } from "./matchSim";
+import type { FoundationCategory } from "./mechanics";
 
 export type OrgTier = "bubble" | "mid" | "top";
 
@@ -29,68 +30,75 @@ export function orgRankFloorMmr(era: RankEra): number {
   return sslMin + topSpread * 0.5;
 }
 
-export interface OrgEligibilityDetail {
-  mmr: number;
-  rankFloorMmr: number;
-  meetsRankFloor: boolean;
-  gameSense: number;
-  requiredGameSense: number;
-  meetsStatFloor: boolean;
+/** Rank is a simple hard gate, nothing more nuanced: the player's 2v2 MMR either clears the floor or it
+ *  doesn't. Matches how real recruiting actually works — the rank requirement gets you a look, everything
+ *  past that point is judged on the actual stats below, not the rank number itself. */
+export function meetsOrgRankRequirement(era: RankEra, mmr2v2: number): boolean {
+  return mmr2v2 >= orgRankFloorMmr(era);
 }
 
-/** Breaks eligibility down into its two separate gates (rank floor, trained stats), rather than just a
- *  yes/no, so it's actually possible to tell WHICH one a player is failing — the Org screen's own Status
- *  message uses this instead of guessing. */
-export function orgEligibilityDetail(era: RankEra, currentYear: number, mmr2v2: number, gameSense2v2: number): OrgEligibilityDetail {
-  const rankFloorMmr = orgRankFloorMmr(era);
-  const requiredGameSense = Math.round(estimateGameSenseForMmr(mmr2v2, era, "2v2", currentYear) * 0.8);
-  return {
-    mmr: mmr2v2,
-    rankFloorMmr,
-    meetsRankFloor: mmr2v2 >= rankFloorMmr,
-    gameSense: gameSense2v2,
-    requiredGameSense,
-    meetsStatFloor: gameSense2v2 >= requiredGameSense,
-  };
+// Game Sense is the most "coachable" of the three — a real org can teach decision-making and rotations
+// far more easily than it can instill raw mechanical execution or the underlying physical foundation
+// (car control, aerial control, etc.), so those two carry noticeably more weight in how impressive a
+// prospect actually looks, Game Sense matters but isn't the differentiator.
+const ORG_STAT_WEIGHT_FOUNDATION = 0.45;
+const ORG_STAT_WEIGHT_MECHANICAL_CONSISTENCY = 0.35;
+const ORG_STAT_WEIGHT_GAME_SENSE = 0.2;
+
+export interface OrgTalentDetail {
+  foundationRatio: number;
+  mechanicalConsistencyRatio: number;
+  gameSenseRatio: number;
+  /** Weighted blend of the three ratios above, ~1.0 reads as genuine "top player" caliber (can run higher
+   *  for someone who's already exceeding that benchmark). Drives both the scouting chance and which tier
+   *  of org does the scouting. */
+  overallScore: number;
 }
 
-/** Whether this player's 2v2 numbers clear the org scouting bar at all: BOTH the rank floor above AND
- *  their actual trained stats have to hold up, someone whose MMR looks the part off a lucky/placement-
- *  amplified run but whose real Game Sense lags well behind what that MMR should imply isn't someone a
- *  real org would sign — the numbers have to be real, not just a rank number. */
-export function meetsOrgEligibility(era: RankEra, currentYear: number, mmr2v2: number, gameSense2v2: number): boolean {
-  const detail = orgEligibilityDetail(era, currentYear, mmr2v2, gameSense2v2);
-  return detail.meetsRankFloor && detail.meetsStatFloor;
+/** Compares a player's actual stats against a "top player" benchmark (see matchSim.ts's
+ *  eliteGameSenseCeiling/eliteFoundationCeiling) rather than just checking rank — someone whose MMR looks
+ *  the part off a lucky/placement-amplified run but whose real stats lag well behind top-player level
+ *  reads as a much weaker prospect here, exactly as a real org's own eye test would catch. */
+export function orgTalentDetail(
+  era: RankEra,
+  currentYear: number,
+  foundationStats: Record<FoundationCategory, number>,
+  mechanicalConsistency2v2: number,
+  gameSense2v2: number
+): OrgTalentDetail {
+  const foundationValues = Object.values(foundationStats);
+  const avgFoundation = foundationValues.reduce((sum, v) => sum + v, 0) / foundationValues.length;
+  const foundationCeiling = eliteFoundationCeiling(currentYear);
+  const gameSenseCeiling = eliteGameSenseCeiling(era, "2v2", currentYear);
+  const mechanicalConsistencyCeiling = gameSenseCeiling * 0.95;
+
+  const foundationRatio = foundationCeiling > 0 ? avgFoundation / foundationCeiling : 0;
+  const mechanicalConsistencyRatio = mechanicalConsistencyCeiling > 0 ? mechanicalConsistency2v2 / mechanicalConsistencyCeiling : 0;
+  const gameSenseRatio = gameSenseCeiling > 0 ? gameSense2v2 / gameSenseCeiling : 0;
+
+  const overallScore =
+    foundationRatio * ORG_STAT_WEIGHT_FOUNDATION +
+    mechanicalConsistencyRatio * ORG_STAT_WEIGHT_MECHANICAL_CONSISTENCY +
+    gameSenseRatio * ORG_STAT_WEIGHT_GAME_SENSE;
+
+  return { foundationRatio, mechanicalConsistencyRatio, gameSenseRatio, overallScore };
 }
 
-/** How far above the bare minimum this player actually is, 0 at the floor, 1 at a full "second floor" of
- *  overshoot — blends rank and Game Sense evenly since either one alone can be misleading (see
- *  `meetsOrgEligibility`). Determines both the odds of getting scouted at all and which tier of org does
- *  the scouting: a bubble/feeder org takes anyone clearing the floor at all, a top org only wants players
- *  who are clearly, comfortably above it already. */
-export function orgOvershoot(era: RankEra, currentYear: number, mmr2v2: number, gameSense2v2: number): number {
-  const floor = orgRankFloorMmr(era);
-  const mmrOvershoot = Math.max(0, (mmr2v2 - floor) / floor);
-  const expectedGameSense = estimateGameSenseForMmr(floor, era, "2v2", currentYear);
-  const statOvershoot = Math.max(0, (gameSense2v2 - expectedGameSense) / Math.max(1, expectedGameSense));
-  return (mmrOvershoot + statOvershoot) / 2;
-}
+const TOP_ORG_TALENT_SCORE = 0.6;
+const MID_ORG_TALENT_SCORE = 0.3;
 
-const TOP_ORG_OVERSHOOT = 0.5;
-const MID_ORG_OVERSHOOT = 0.15;
-
-export function orgTierForOvershoot(overshoot: number): OrgTier {
-  if (overshoot >= TOP_ORG_OVERSHOOT) return "top";
-  if (overshoot >= MID_ORG_OVERSHOOT) return "mid";
+export function orgTierForTalent(overallScore: number): OrgTier {
+  if (overallScore >= TOP_ORG_TALENT_SCORE) return "top";
+  if (overallScore >= MID_ORG_TALENT_SCORE) return "mid";
   return "bubble";
 }
 
-/** Real orgs (especially anything above bubble tier) don't scout every single eligible player the moment
- *  they clear the floor, most eligible players never get picked up at all — this is the daily chance an
- *  eligible, unsigned/untried player gets a fresh scouting invite. Scales up a little with how far above
- *  the floor they are, a player who's clearly overshooting gets noticed faster than one barely qualifying. */
-export function orgScoutingChance(overshoot: number): number {
-  return Math.min(0.12, 0.02 + overshoot * 0.06);
+/** Real orgs (especially anything above bubble tier) don't scout every single rank-eligible player the
+ *  moment they clear the floor, most never get picked up at all — this is the chance a rank-eligible,
+ *  unsigned/untried player gets a fresh scouting invite on any given check, scaled by how their actual
+ *  stats compare to top-player caliber rather than by rank alone. */
+export function orgScoutingChance(overallScore: number): number {
+  return Math.min(0.12, 0.02 + overallScore * 0.1);
 }
 
 /** A tryout's scrim record decides the outcome once all planned scrims are played: a strong record earns

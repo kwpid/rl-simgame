@@ -145,6 +145,21 @@ export function estimateGameSenseForMmr(mmr: number, era: RankEra, queue: RankQu
   return anchors[anchors.length - 1].value;
 }
 
+/** The curve's own topped-out ceiling for this era/queue/year — "as good as it plausibly gets short of
+ *  real pro territory" — used as the "top player" benchmark data/orgs.ts compares a player's Game Sense/
+ *  Mechanical Consistency against, rather than an absolute number that'd drift out of sync with the rest
+ *  of the year-scaled rank curve. */
+export function eliteGameSenseCeiling(era: RankEra, queue: RankQueue, currentYear: number): number {
+  const anchors = gameSenseAnchors(era, queue, currentYear);
+  return anchors[anchors.length - 1].value;
+}
+
+/** Same idea as `eliteGameSenseCeiling` but for foundation stats (car control, aerial control, etc.) —
+ *  the SSL tier baseline is the highest rung the rank-tier curve itself defines, year-scaled the same way. */
+export function eliteFoundationCeiling(currentYear: number): number {
+  return RANK_STAT_BASELINE.ssl * yearSkillGrowthFactor(currentYear);
+}
+
 // Real pros run circles around even a Grand Champion/SSL rando: years of grinding accumulate way past
 // what the tier-baseline curve alone would produce. There's no hard ceiling (a decade-deep veteran keeps
 // climbing), but diminishing returns per year mean most pros cluster in the same rough band rather than

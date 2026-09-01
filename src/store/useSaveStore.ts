@@ -17,7 +17,7 @@ import { addDays, daysBetween, type SimDate } from "@/data/dateUtils";
 import { eraForDate, deriveRankFromMmr, divisionProgressFromMmr, tierRank, type RankTierId, type RankEra } from "@/data/rankSystem";
 import { SEASON_LENGTH_DAYS, seasonEndDate, seasonTitleFor, softResetMmr, applyRewardProgress, rewardTierSequence, REWARD_WINS_REQUIRED, type TitleEntry } from "@/data/seasons";
 import { STREAMERS, eligibleStreamers, pickShowmatchOpponent } from "@/data/showmatches";
-import { meetsOrgEligibility, orgOvershoot, orgTierForOvershoot, orgScoutingChance, resolveTryoutOutcome, rollContractLengthSeasons, scrimIntervalDaysForTier, ORG_TIER_LABELS } from "@/data/orgs";
+import { meetsOrgRankRequirement, orgTalentDetail, orgTierForTalent, orgScoutingChance, resolveTryoutOutcome, rollContractLengthSeasons, scrimIntervalDaysForTier, ORG_TIER_LABELS } from "@/data/orgs";
 import { ORG_NAMES, saveRegionToProRegion } from "@/data/tournaments";
 
 // The save is now a live, mutable Zustand store instead of a frozen constant. `mockSave` in data/mockSave.ts
@@ -171,9 +171,10 @@ interface SaveStoreState extends SaveData {
   recordShowmatchResult: (win: boolean) => void;
 
   /** Org/pro-scene track, entirely separate from ranked (see mockSave.ts's OrgContract doc comment).
-   *  Date-gated same as showmatches: rolls whether the player's live 2v2 numbers (rank AND actual stats,
-   *  see data/orgs.ts's meetsOrgEligibility) earn a scouting invite from an org. No-op while a contract,
-   *  tryout, or unanswered invite is already active — only one thing happening at a time. */
+   *  Date-gated same as showmatches: 2v2 rank is a simple hard gate (meetsOrgRankRequirement), then the
+   *  player's ACTUAL stats compared against top-player caliber (data/orgs.ts's orgTalentDetail) decide
+   *  both the odds of a scouting invite firing at all and which tier of org does the scouting. No-op while
+   *  a contract, tryout, or unanswered invite is already active — only one thing happening at a time. */
   ensureOrgScouting: (currentDate: SimDate, era: RankEra, currentYear: number) => void;
   declineOrgInvite: () => void;
   /** Accepts the pending invite and starts the tryout: `teammates` are picked by the caller (needs live
@@ -690,18 +691,18 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     if (daysBetween(state.lastOrgScoutCheckDate, currentDate) < ORG_SCOUT_CHECK_INTERVAL_DAYS) return;
 
     const profile = state.rankedProfiles["2v2"];
-    if (profile.placementMatchesRemaining > 0 || !meetsOrgEligibility(era, currentYear, profile.mmr, state.player.gameSense["2v2"])) {
+    if (profile.placementMatchesRemaining > 0 || !meetsOrgRankRequirement(era, profile.mmr)) {
       set({ lastOrgScoutCheckDate: currentDate });
       return;
     }
 
-    const overshoot = orgOvershoot(era, currentYear, profile.mmr, state.player.gameSense["2v2"]);
-    if (Math.random() > orgScoutingChance(overshoot)) {
+    const talent = orgTalentDetail(era, currentYear, state.foundationStats, state.player.mechanicalConsistency["2v2"], state.player.gameSense["2v2"]);
+    if (Math.random() > orgScoutingChance(talent.overallScore)) {
       set({ lastOrgScoutCheckDate: currentDate });
       return;
     }
 
-    const tier = orgTierForOvershoot(overshoot);
+    const tier = orgTierForTalent(talent.overallScore);
     const proRegion = saveRegionToProRegion(state.region);
     const orgNames = ORG_NAMES[proRegion] ?? Object.values(ORG_NAMES).flat();
     const orgName = orgNames[Math.floor(Math.random() * orgNames.length)];

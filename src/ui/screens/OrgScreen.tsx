@@ -8,7 +8,9 @@ import { activeProPlayers } from "@/data/proPlayers";
 import { saveRegionToProRegion, rlcsSeasonForDate, ORG_NAMES } from "@/data/tournaments";
 import {
   ORG_TIER_LABELS,
-  orgEligibilityDetail,
+  meetsOrgRankRequirement,
+  orgRankFloorMmr,
+  orgTalentDetail,
   resolveContractRenewal,
   promotedTier,
   rollsTeammateChurn,
@@ -172,8 +174,9 @@ export function OrgScreen() {
   }
 
   const inPlacements = s.rankedProfiles["2v2"].placementMatchesRemaining > 0;
-  const eligibilityDetail = orgEligibilityDetail(era, currentYear, playerMmr, s.player.gameSense["2v2"]);
-  const eligible = !inPlacements && eligibilityDetail.meetsRankFloor && eligibilityDetail.meetsStatFloor;
+  const meetsRank = meetsOrgRankRequirement(era, playerMmr);
+  const talent = orgTalentDetail(era, currentYear, s.foundationStats, s.player.mechanicalConsistency["2v2"], s.player.gameSense["2v2"]);
+  const eligible = !inPlacements && meetsRank;
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
@@ -252,23 +255,27 @@ export function OrgScreen() {
               <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
                 {inPlacements
                   ? "Finish your 2v2 placements first, orgs don't scout during placements."
-                  : eligible
-                    ? "You're playing at a level orgs scout — keep grinding 2v2, a tryout invite could come any day (checked every few days, not guaranteed)."
-                    : "Not scouted yet — one or both of the gates below aren't cleared."}
+                  : !meetsRank
+                    ? `Not scouted yet — 2v2 rank is the first gate, and yours isn't there (${playerMmr} / ${Math.round(orgRankFloorMmr(era))} MMR needed).`
+                    : "Rank requirement met — from here it's about how your actual stats compare to top-player caliber, not the rank number itself. A tryout invite could come any day (checked every few days, not guaranteed)."}
               </div>
-              {!inPlacements && (
+              {!inPlacements && meetsRank && (
                 <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "var(--text-tertiary)" }}>2v2 MMR</span>
-                    <span style={{ color: eligibilityDetail.meetsRankFloor ? "var(--text-primary)" : "var(--danger)" }}>
-                      {eligibilityDetail.mmr} / {eligibilityDetail.rankFloorMmr} needed
-                    </span>
+                    <span style={{ color: "var(--text-tertiary)" }}>Foundation stats (vs top-player)</span>
+                    <span style={{ color: "var(--text-primary)" }}>{Math.round(talent.foundationRatio * 100)}%</span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "var(--text-tertiary)" }}>2v2 Game Sense</span>
-                    <span style={{ color: eligibilityDetail.meetsStatFloor ? "var(--text-primary)" : "var(--danger)" }}>
-                      {eligibilityDetail.gameSense} / {eligibilityDetail.requiredGameSense} needed
-                    </span>
+                    <span style={{ color: "var(--text-tertiary)" }}>Mechanical Consistency (vs top-player)</span>
+                    <span style={{ color: "var(--text-primary)" }}>{Math.round(talent.mechanicalConsistencyRatio * 100)}%</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-tertiary)" }}>Game Sense (vs top-player)</span>
+                    <span style={{ color: "var(--text-primary)" }}>{Math.round(talent.gameSenseRatio * 100)}%</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontWeight: 700 }}>
+                    <span style={{ color: "var(--text-secondary)" }}>Overall prospect score</span>
+                    <span style={{ color: "var(--text-primary)" }}>{Math.round(talent.overallScore * 100)}%</span>
                   </div>
                 </div>
               )}
