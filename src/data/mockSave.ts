@@ -342,7 +342,7 @@ export const mockSave = {
     "1v1": { queue: "1v1", mmr: 1820, rankTier: "grand_champion", division: 0, divisionProgress: 0, seasonMatchesPlayed: 63, placementMatchesRemaining: 0, peakRankTier: "grand_champion", peakDivision: 0, peakMmr: 1820, peakMmrSeason: 4, streakType: "win", streakCount: 3 }, // temp: set to top rank for testing
     "2v2": { queue: "2v2", mmr: 940, rankTier: "champion", division: 2, divisionProgress: 3, seasonMatchesPlayed: 118, placementMatchesRemaining: 0, peakRankTier: "champion", peakDivision: 2, peakMmr: 1010, peakMmrSeason: 3, streakType: "loss", streakCount: 1 },
     "3v3": { queue: "3v3", mmr: 705, rankTier: "platinum", division: 3, divisionProgress: 1, seasonMatchesPlayed: 40, placementMatchesRemaining: 0, peakRankTier: "platinum", peakDivision: 3, peakMmr: 705, peakMmrSeason: 4, streakType: "win", streakCount: 1 },
-  } satisfies Record<QueueMode, RankedProfile>,
+  } satisfies Record<QueueMode, RankedProfile> as Record<QueueMode, RankedProfile>,
 
   careerStats: {
     "1v1": { wins: 38, losses: 25, goals: 210, assists: 12, saves: 88, mvps: 14 },
