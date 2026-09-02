@@ -14,6 +14,7 @@ import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore } from "@/store/useLeaderboardFillerStore";
 import { useTournamentStore } from "@/store/useTournamentStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
+import { rlcsSeasonForDate } from "@/data/tournaments";
 
 const DEV_MODE_KEY = "rl-sim:dev-mode";
 const REWARD_TIER_OPTIONS: RankTierId[] = [
@@ -316,6 +317,8 @@ function DeveloperToolsSection() {
   const resetRlcsTeams = useSaveStore((store) => store.resetRlcsTeams);
   const forceOrgInvite = useSaveStore((store) => store.forceOrgInvite);
   const releaseOrgContract = useSaveStore((store) => store.releaseOrgContract);
+  const recordOrgTryoutScrim = useSaveStore((store) => store.recordOrgTryoutScrim);
+  const recordOrgScrimResult = useSaveStore((store) => store.recordOrgScrimResult);
 
   const [mmrQueue, setMmrQueue] = useState<QueueMode>("2v2");
   const [mmrValue, setMmrValue] = useState(String(s.rankedProfiles["2v2"].mmr));
@@ -573,6 +576,19 @@ function DeveloperToolsSection() {
                 }}
               >
                 Force Org Invite / Tryout (skips phase, rank, and chance gates)
+              </button>
+              <button
+                className="dev-btn"
+                disabled={!s.pendingOrgTryout && !s.orgContract}
+                onClick={() => {
+                  if (s.pendingOrgTryout) {
+                    recordOrgTryoutScrim(true, s.currentDate, rlcsSeasonForDate(s.currentDate).seasonNumber);
+                  } else if (s.orgContract) {
+                    recordOrgScrimResult(true, s.currentDate);
+                  }
+                }}
+              >
+                Force Win Scrim (tryout or signed contract)
               </button>
               <button
                 className="dev-btn"
