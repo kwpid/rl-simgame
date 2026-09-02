@@ -170,6 +170,7 @@ export function OrgScreen() {
         playstyle: s.playstyleProfiles["3v3"],
       },
       orgTag: orgTagForOrgName(contract.orgName),
+      region: saveRegionToProRegion(s.region),
     };
     const used = new Set([s.displayName, ...contract.teammates]);
     const opponents = randomScrimOpponents(used);
@@ -193,6 +194,7 @@ export function OrgScreen() {
         queueConceptMastery: flattenProgress(s.queueConceptProgress),
         playstyle: s.playstyleProfiles["3v3"],
       },
+      region: saveRegionToProRegion(s.region),
     };
     const used = new Set([s.displayName, ...tryout.teammates]);
     const opponents = randomScrimOpponents(used);

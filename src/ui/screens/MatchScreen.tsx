@@ -13,6 +13,7 @@ import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 import { regionalGrinderRoster } from "@/data/regionalGrinders";
 import { computeMmrDelta, computeOverallRating } from "@/data/matchSim";
 import { OrgTag } from "@/ui/components/OrgTag";
+import { livePingMs } from "@/data/pingModel";
 
 const ALL_MATCHMAKING_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
 
@@ -160,6 +161,7 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
 
   const blueTeam = players.filter((p) => p.team === "blue");
   const orangeTeam = players.filter((p) => p.team === "orange");
+  const selfRegion = players.find((p) => p.isSelf)?.region;
   const clockLabel = overtime
     ? `OT ${Math.floor(otSeconds / 60)}:${(otSeconds % 60).toString().padStart(2, "0")}`
     : `${Math.floor(clockSeconds / 60)}:${(clockSeconds % 60).toString().padStart(2, "0")}`;
@@ -318,13 +320,18 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
                   </span>
                 )}
               </div>
-              {phase === "post_match" && !isSeriesMatch ? (
-                <span className={"roster-mmr-delta" + (deltaForPlayer(p, blueDelta) > 0 ? " mmr-delta-up" : " mmr-delta-down")}>
-                  {deltaForPlayer(p, blueDelta) > 0 ? `+${deltaForPlayer(p, blueDelta)}` : deltaForPlayer(p, blueDelta)}
-                </span>
-              ) : (
-                <span className="roster-points">{p.points}</span>
-              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {!isSeriesMatch && !p.isSelf && selfRegion && (
+                  <span className="roster-ping">{livePingMs(selfRegion, p.region, p.name, clockSeconds)}ms</span>
+                )}
+                {phase === "post_match" && !isSeriesMatch ? (
+                  <span className={"roster-mmr-delta" + (deltaForPlayer(p, blueDelta) > 0 ? " mmr-delta-up" : " mmr-delta-down")}>
+                    {deltaForPlayer(p, blueDelta) > 0 ? `+${deltaForPlayer(p, blueDelta)}` : deltaForPlayer(p, blueDelta)}
+                  </span>
+                ) : (
+                  <span className="roster-points">{p.points}</span>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -346,13 +353,18 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
                   </span>
                 )}
               </div>
-              {phase === "post_match" && !isSeriesMatch ? (
-                <span className={"roster-mmr-delta" + (deltaForPlayer(p, orangeDelta) > 0 ? " mmr-delta-up" : " mmr-delta-down")}>
-                  {deltaForPlayer(p, orangeDelta) > 0 ? `+${deltaForPlayer(p, orangeDelta)}` : deltaForPlayer(p, orangeDelta)}
-                </span>
-              ) : (
-                <span className="roster-points">{p.points}</span>
-              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {!isSeriesMatch && !p.isSelf && selfRegion && (
+                  <span className="roster-ping">{livePingMs(selfRegion, p.region, p.name, clockSeconds)}ms</span>
+                )}
+                {phase === "post_match" && !isSeriesMatch ? (
+                  <span className={"roster-mmr-delta" + (deltaForPlayer(p, orangeDelta) > 0 ? " mmr-delta-up" : " mmr-delta-down")}>
+                    {deltaForPlayer(p, orangeDelta) > 0 ? `+${deltaForPlayer(p, orangeDelta)}` : deltaForPlayer(p, orangeDelta)}
+                  </span>
+                ) : (
+                  <span className="roster-points">{p.points}</span>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -533,6 +545,11 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
         .roster-orange { border-left-color: var(--team-orange); }
         .roster-self { font-weight: 700; color: var(--text-primary); }
         .roster-points { color: var(--text-tertiary); }
+        .roster-ping {
+          font-size: 11px;
+          color: var(--text-tertiary);
+          font-variant-numeric: tabular-nums;
+        }
         .roster-mmr {
           color: var(--text-tertiary);
           font-variant-numeric: tabular-nums;

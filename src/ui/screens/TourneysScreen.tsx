@@ -191,6 +191,7 @@ export function TourneysScreen() {
         playstyle: s.playstyleProfiles[pendingDiscipline],
       },
       orgTag: s.orgContract ? orgTagForOrgName(s.orgContract.orgName) : undefined,
+      region: playerProRegion,
     };
     const instanceLabel = instances[pendingInstanceId]?.label ?? "the tournament";
     const pendingInstance = instances[pendingInstanceId];

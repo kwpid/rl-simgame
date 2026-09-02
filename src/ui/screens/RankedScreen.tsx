@@ -159,6 +159,7 @@ export function RankedScreen() {
           playstyle: s.playstyleProfiles[q],
         },
         orgTag: s.orgContract ? orgTagForOrgName(s.orgContract.orgName) : undefined,
+        region: saveRegionToProRegion(s.region),
       },
     };
   }

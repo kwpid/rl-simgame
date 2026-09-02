@@ -57,6 +57,9 @@ export interface SelfStats {
   /** [TAG] shown before the player's own name, derived from their live orgContract (see mockSave.ts), or
    *  undefined when between orgs/never signed. */
   orgTag?: string;
+  /** The player's own real region (see data/tournaments.ts's saveRegionToProRegion), drives the live ping
+   *  readout (see data/pingModel.ts) for every other player in the match. */
+  region?: ProRegion;
 }
 
 /** One queue to search as part of a (possibly multi-queue) search — each queue needs its own rank tier/
@@ -301,6 +304,7 @@ function buildOpponent(
   return {
     ...generateOpponentStats(name, team, rankTier, era, seasonNumber, currentYear, playerMmr, queue, proQueueOverride, false, realRlcsTitles, persistentStats),
     points: 0,
+    region: pro?.region ?? grinderRegion,
   };
 }
 
@@ -347,6 +351,7 @@ function generateRoster(
       partyId: selfPartyId,
       duelMastery: self.duelMastery,
       orgTag: self.orgTag,
+      region: self.region,
     },
   ];
 
@@ -459,7 +464,7 @@ function tryRematchRoster(
   }
 
   const players: MatchPlayer[] = [
-    { name: self.name, team: "blue", isSelf: true, gameSense: self.gameSense, mechanicalConsistency: self.mechanicalConsistency, foundationStats: self.foundationStats, title: self.title, mmr: playerMmr, points: 0, duelMastery: self.duelMastery, orgTag: self.orgTag },
+    { name: self.name, team: "blue", isSelf: true, gameSense: self.gameSense, mechanicalConsistency: self.mechanicalConsistency, foundationStats: self.foundationStats, title: self.title, mmr: playerMmr, points: 0, duelMastery: self.duelMastery, orgTag: self.orgTag, region: self.region },
   ];
   shuffled.slice(0, totalSlots).forEach((name, i) => {
     const team = i < perTeam - 1 ? "blue" : "orange";
@@ -575,6 +580,7 @@ function buildAutoQueueRequest(save: ReturnType<typeof useSaveStore.getState>, e
         playstyle: save.playstyleProfiles[q],
       },
       orgTag: save.orgContract ? orgTagForOrgName(save.orgContract.orgName) : undefined,
+      region: saveRegionToProRegion(save.region),
     },
   };
 }

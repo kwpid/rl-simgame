@@ -13,7 +13,7 @@ import { eraForDate } from "@/data/rankSystem";
 import { daysBetween } from "@/data/dateUtils";
 import { FOUNDATION_LABELS, type FoundationCategory } from "@/data/mechanics";
 import type { FriendRecord } from "@/data/mockSave";
-import { orgTagForOrgName } from "@/data/tournaments";
+import { orgTagForOrgName, saveRegionToProRegion } from "@/data/tournaments";
 
 // A real pro or leaderboard regular sitting far above (or below) the player's own actual skill has no real
 // reason to accept a friend request or a party invite from a total stranger, let alone keep queuing with
@@ -457,6 +457,7 @@ function ShowmatchesTab() {
         playstyle: s.playstyleProfiles["1v1"],
       },
       orgTag: s.orgContract ? orgTagForOrgName(s.orgContract.orgName) : undefined,
+      region: saveRegionToProRegion(s.region),
     };
     startTournamentSeries(self, [invite.opponentName], 1, era, s.seasonNumber, s.currentDate.year, (wonSeries) => {
       recordShowmatchResult(wonSeries);

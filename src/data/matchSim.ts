@@ -6,7 +6,7 @@
 import { MECHANICS, type FoundationCategory } from "./mechanics";
 import { deriveRankFromMmr, tierMinMmr, type RankEra, type RankQueue, type RankTierId } from "./rankSystem";
 import { pickAiTitle, type TitleEntry } from "./seasons";
-import { PRO_PLAYERS, isGenerationalTalent, experienceGrowth, hashString } from "./proPlayers";
+import { PRO_PLAYERS, isGenerationalTalent, experienceGrowth, hashString, type ProRegion } from "./proPlayers";
 import type { PlaystyleProfile } from "./mockSave";
 import { ORG_NAMES, orgTagForOrgName } from "./tournaments";
 
@@ -41,6 +41,10 @@ export interface MatchParticipantStats {
    *  they're not signed to anything. For the human player this comes from their own orgContract; for an AI
    *  opponent see orgTagForOpponent below. */
   orgTag?: string;
+  /** This player's real region (their own save region for the human, or a real pro's/regional grinder's
+   *  tracked region for an AI opponent) — undefined for an untracked generic filler name. Purely cosmetic,
+   *  drives the live ping readout (see data/pingModel.ts), no gameplay effect. */
+  region?: ProRegion;
 }
 
 const ALL_ORG_NAMES = Object.values(ORG_NAMES).flat();
@@ -309,6 +313,7 @@ export function generateOpponentStats(
     title,
     mmr,
     orgTag: orgTagForOpponent(name, effectiveTier, !!pro, era, mmr, proQueueOverride?.queue ?? queue),
+    region: pro?.region,
   };
 }
 

@@ -1,8 +1,12 @@
 // The "ranked grinder" identity pool: real named GC+/SSL opponents who AREN'T signed pros (see
 // proPlayers.ts), filling out the Low/Mid density bands of each region's roster (see useRegionalRosterStore.ts
-// for their persistent MMR/stats, aiActivity.ts for their online/offline schedule). Wholly synthetic and
-// disjoint from LB_NAMES (the old generic ranked-filler pool) so a grinder identity never collides with a
-// name that pool might still produce for below-GC matches.
+// for their persistent MMR/stats, aiActivity.ts for their online/offline schedule). Names are wholly
+// fictional but styled per-region to read like real ranked tags from that scene (NA leans clean/meme with
+// dots and numbers, EU stylish with creative zero-spellings, SAM aggressive Portuguese-flavored x/z endings,
+// MENA short and numeric with Arabic-transliterated roots, OCE casual Aussie/Kiwi energy, APAC an English/
+// East-Asian mix, SSA simple and still-emerging) — deliberately disjoint from every real name in
+// proPlayers.ts and from LB_NAMES (the old generic ranked-filler pool) so nothing here ever collides with
+// an already-tracked identity.
 
 import { hashString, activeProPlayers, type ProRegion } from "./proPlayers";
 
@@ -15,22 +19,91 @@ export interface GrinderIdentity {
   band: RosterBand;
 }
 
-// Deliberately disjoint in flavor from LB_NAMES's cosmetic gamertags and from PRO_PLAYERS's real handles.
-const GRINDER_PREFIXES = [
-  "Nova", "Zen", "Volt", "Rift", "Echo", "Static", "Drift", "Halo", "Vex", "Prism",
-  "Ember", "Frost", "Glide", "Hex", "Kilo", "Lumen", "Onyx", "Pulse", "Quartz", "Rogue",
-  "Solar", "Tidal", "Umbra", "Vertex", "Wisp", "Zephyr", "Axiom", "Blitz", "Cobalt", "Dune",
-];
-const GRINDER_SUFFIXES = [
-  "shot", "flip", "reader", "wave", "boost", "dash", "clip", "line", "ghost", "byte",
-  "core", "flux", "pace", "reset", "sync", "drive", "loop", "wing", "surge", "trail",
-];
+interface RegionNameStyle {
+  words: string[];
+  /** Must return a distinct string for every distinct `variant` applied to the same `word` — this is what
+   *  guarantees every generated name in a region is unique without needing a runtime collision check. */
+  decorate: (word: string, variant: number) => string;
+}
 
-function grinderName(index: number, seed: number): string {
-  const prefix = GRINDER_PREFIXES[Math.abs(seed) % GRINDER_PREFIXES.length];
-  const suffix = GRINDER_SUFFIXES[Math.abs(seed >> 4) % GRINDER_SUFFIXES.length];
-  const tag = Math.abs(seed >> 8) % 100;
-  return `${prefix}${suffix}${index}${tag < 15 ? tag : ""}`;
+const NA_NUMBERS = [1, 2, 7, 9, 97, 21, 44, 88, 11, 23, 3, 12];
+const MENA_NUMBERS = [9, 7, 511, 21, 44, 90, 17, 13];
+
+const REGION_NAME_STYLES: Record<ProRegion, RegionNameStyle> = {
+  NA: {
+    words: [
+      "Voltaic", "Nitro", "Blazeon", "Rampage", "Kodiak", "Maverick", "Jetstream", "Ignite", "Ranger",
+      "Wolfpack", "Highnoon", "Lonestar", "Roughneck", "Ironclad", "Redline", "Overdrive", "Suncoast", "Highkey",
+    ],
+    decorate: (word, variant) => {
+      if (variant === 0) return word;
+      if (variant === 1) return `${word}.`;
+      return `${word}${NA_NUMBERS[(variant - 2) % NA_NUMBERS.length]}`;
+    },
+  },
+  EU: {
+    words: [
+      "Vantage", "Nebula", "Frostbyte", "Solace", "Cinder", "Halcyon", "Quartz", "Obscur", "Lumire",
+      "Zephyra", "Rivale", "Auren", "Skyline", "Nocturne", "Velvex", "Ashfall",
+    ],
+    decorate: (word, variant) => {
+      if (variant === 0) return word;
+      if (variant === 1) return word.replace(/o/gi, "0");
+      if (variant === 2) return `${word}.`;
+      return `${word}_${variant}`;
+    },
+  },
+  SAM: {
+    words: [
+      "Furacao", "Malandro", "Trovao", "Fenix", "Samba", "Correnteza", "Tuff", "Estrela", "Vulcan",
+      "Relamp", "Xoque", "Carioca", "Fervo", "Braziux",
+    ],
+    decorate: (word, variant) => {
+      if (variant === 0) return `${word}x`;
+      if (variant === 1) return `${word}z`;
+      if (variant === 2) return `${word}zz`;
+      return `${word}${variant}`;
+    },
+  },
+  MENA: {
+    words: [
+      "Zaeem", "Malik", "Amiro", "Sahaba", "Qasim", "Faris", "Tariq", "Bilal", "Hamzah", "Anwar",
+      "Rashed", "Khalidi", "Jaser", "Mansour",
+    ],
+    decorate: (word, variant) => {
+      if (variant === 0) return word;
+      if (variant === 1) return `${word}.`;
+      return `${word}${MENA_NUMBERS[(variant - 2) % MENA_NUMBERS.length]}`;
+    },
+  },
+  OCE: {
+    words: [
+      "Dingo", "Bushfire", "Larrikin", "Stoked", "Wombat", "Outback", "Rowdy", "Coastal", "Barra",
+      "Reckless", "Sunburnt", "Cobber",
+    ],
+    decorate: (word, variant) => (variant === 0 ? word : `${word}${variant}`),
+  },
+  APAC: {
+    words: [
+      "Kamiyo", "Ronin", "Tenrai", "Sable", "Zenpo", "Sundial", "Kirin", "Yomei", "Aurorae", "Ondori", "Tsukimi", "Skyfarer",
+    ],
+    decorate: (word, variant) => {
+      if (variant === 0) return word;
+      if (variant === 1) return `${word}.`;
+      return `${word}${variant}`;
+    },
+  },
+  SSA: {
+    words: ["Baraka", "Simba", "Jengo", "Nairobi", "Zolan", "Tundu", "Amara", "Kwame", "Zawadi"],
+    decorate: (word, variant) => (variant === 0 ? word : `${word}${variant}`),
+  },
+};
+
+function grinderNameForRegion(region: ProRegion, index: number): string {
+  const style = REGION_NAME_STYLES[region];
+  const wordIndex = index % style.words.length;
+  const variant = Math.floor(index / style.words.length);
+  return style.decorate(style.words[wordIndex], variant);
 }
 
 const MIN_GRINDERS_PER_REGION = 20;
@@ -55,7 +128,7 @@ export function regionalGrinderRoster(region: ProRegion, currentYear: number): G
   const roster: GrinderIdentity[] = [];
   for (let i = 0; i < count; i++) {
     const seed = hashString(`${region}#grinder#${i}`);
-    const name = grinderName(i, seed);
+    const name = grinderNameForRegion(region, i);
     const band: RosterBand = (seed % 100) < LOW_BAND_SHARE * 100 ? "low" : "mid";
     roster.push({ name, region, band });
   }
