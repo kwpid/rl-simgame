@@ -5,11 +5,13 @@ import type { QueueMode } from "@/data/mockSave";
 import { eraForDate, tierColor, divisionLabel as rankDivisionLabel } from "@/data/rankSystem";
 import { formatClockHour, formatSimDate } from "@/data/dateUtils";
 import { useSaveStore } from "@/store/useSaveStore";
+import { useAiProfileStore } from "@/store/useAiProfileStore";
 
 const QUEUES: QueueMode[] = ["1v1", "2v2", "3v3"];
 
 export function HomeScreen() {
   const s = useSaveStore();
+  const openAiProfile = useAiProfileStore((store) => store.open);
   const rest = useSaveStore((store) => store.rest);
   const sleepToNextDay = useSaveStore((store) => store.sleepToNextDay);
   const era = eraForDate(s.currentDate);
@@ -112,10 +114,17 @@ export function HomeScreen() {
               key={i}
               style={{
                 display: "flex",
-                alignItems: "center",
-                gap: "var(--space-3)",
+                flexDirection: "column",
+                gap: 4,
                 padding: "var(--space-2) 0",
                 borderTop: i > 0 ? "1px solid var(--border-subtle)" : "none",
+              }}
+            >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "var(--space-3)",
               }}
             >
               <span
@@ -134,11 +143,39 @@ export function HomeScreen() {
               <span style={{ fontSize: 13, fontWeight: 600 }}>{m.score}</span>
               <span style={{ fontSize: 12, color: "var(--text-tertiary)", flex: 1 }}>{m.note}</span>
             </div>
+            {m.opponents.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, paddingLeft: 2 }}>
+                {m.opponents.map((name, oi) => (
+                  <button
+                    key={`${name}-${oi}`}
+                    className="recent-match-opponent"
+                    onClick={() => openAiProfile(name)}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            )}
+            </div>
           ))}
         </div>
       </Card>
 
       <style>{`
+        .recent-match-opponent {
+          background: var(--bg-surface-raised);
+          border: 1px solid var(--border-subtle);
+          border-radius: 999px;
+          color: var(--text-secondary);
+          font-size: 11px;
+          padding: 2px 10px;
+          cursor: pointer;
+          transition: border-color 150ms ease, color 150ms ease;
+        }
+        .recent-match-opponent:hover {
+          border-color: var(--accent);
+          color: var(--accent);
+        }
         .home-grid {
           display: grid;
           grid-template-columns: 1fr;

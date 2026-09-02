@@ -41,6 +41,10 @@ interface ProMmrEntry {
   targetGameSense: number;
   targetMechanicalConsistency: number;
   seasonStartKey: string;
+  /** Highest MMR this pro/queue has ever actually reached, carried forward across every season reset
+   *  (unlike `mmr` itself, which compresses back down each season) — same "all-time best" concept as the
+   *  player's own RankedProfile.peakMmr, shown on the AI profile view. */
+  peakMmr: number;
 }
 
 type ProMmrTable = Record<string, Partial<Record<QueueMode, ProMmrEntry>>>;
@@ -106,6 +110,7 @@ function reseedEntry(
     targetGameSense,
     targetMechanicalConsistency,
     seasonStartKey: seasonKey(seasonStartDate),
+    peakMmr: Math.max(previous?.peakMmr ?? 0, priorMmr, mmr, targetMmr),
   };
 }
 
@@ -128,10 +133,11 @@ function simulateForward(entry: ProMmrEntry, proName: string, currentDate: SimDa
       gameSense: Math.round(entry.targetGameSense),
       mechanicalConsistency: Math.round(entry.targetMechanicalConsistency),
       gamesPlayedThisSeason: expectedGames,
+      peakMmr: Math.max(entry.peakMmr, entry.targetMmr),
     };
   }
 
-  let { mmr, gameSense, mechanicalConsistency, gamesPlayedThisSeason } = entry;
+  let { mmr, gameSense, mechanicalConsistency, gamesPlayedThisSeason, peakMmr } = entry;
   for (let i = 0; i < gamesBehind; i++) {
     const isPlacement = gamesPlayedThisSeason < PLACEMENT_GAMES;
     const oppRating = mmr + (Math.random() - 0.5) * 2 * 350;
@@ -146,6 +152,7 @@ function simulateForward(entry: ProMmrEntry, proName: string, currentDate: SimDa
     gameSense += (entry.targetGameSense - gameSense) * STAT_CLOSE_RATE;
     mechanicalConsistency += (entry.targetMechanicalConsistency - mechanicalConsistency) * STAT_CLOSE_RATE;
     gamesPlayedThisSeason++;
+    peakMmr = Math.max(peakMmr, mmr);
   }
 
   return {
@@ -154,6 +161,7 @@ function simulateForward(entry: ProMmrEntry, proName: string, currentDate: SimDa
     gameSense: Math.round(gameSense),
     mechanicalConsistency: Math.round(mechanicalConsistency),
     gamesPlayedThisSeason,
+    peakMmr: Math.round(peakMmr),
   };
 }
 
@@ -169,7 +177,9 @@ function catchUp(
 ): ProMmrEntry {
   const key = seasonKey(seasonStartDate);
   const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, seasonStartDate, existing);
-  return simulateForward(base, proName, currentDate, seasonStartDate);
+  // Guards against a pre-existing localStorage entry saved before `peakMmr` was tracked at all.
+  const safeBase = typeof base.peakMmr === "number" ? base : { ...base, peakMmr: base.mmr };
+  return simulateForward(safeBase, proName, currentDate, seasonStartDate);
 }
 
 interface ProLeaderboardState {
@@ -182,7 +192,7 @@ interface ProLeaderboardState {
   /** Same as `getMmr` but returns the persistent Game Sense/Mechanical Consistency this same pro/queue
    *  entry has simulated its way to, so their in-match stats are the SAME person as the leaderboard shows,
    *  not a fresh jittered roll. */
-  getStats: (proName: string, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => { gameSense: number; mechanicalConsistency: number };
+  getStats: (proName: string, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => { gameSense: number; mechanicalConsistency: number; peakMmr: number };
   /** Batches catch-up (reseed + simulate-forward) for every name in the list, in one `set` call. Call
    *  this from a `useEffect`, never from inside a render body — after it runs, render can read `mmr`
    *  directly without needing `getMmr`/`getStats` again. */
@@ -211,13 +221,13 @@ export const useProLeaderboardStore = create<ProLeaderboardState>((set, get) => 
   },
 
   getStats: (proName, queue, era, currentYear, currentDate, seasonStartDate) => {
-    if (!PRO_PLAYERS.some((p) => p.name === proName)) return { gameSense: 0, mechanicalConsistency: 0 };
+    if (!PRO_PLAYERS.some((p) => p.name === proName)) return { gameSense: 0, mechanicalConsistency: 0, peakMmr: 0 };
     const state = get();
     const entry = catchUp(state.mmr[proName]?.[queue], proName, queue, era, currentYear, currentDate, seasonStartDate);
     const nextTable = { ...state.mmr, [proName]: { ...state.mmr[proName], [queue]: entry } };
     set({ mmr: nextTable });
     persist(nextTable);
-    return { gameSense: entry.gameSense, mechanicalConsistency: entry.mechanicalConsistency };
+    return { gameSense: entry.gameSense, mechanicalConsistency: entry.mechanicalConsistency, peakMmr: entry.peakMmr };
   },
 
   ensureSeeded: (proNames, queue, era, currentYear, currentDate, seasonStartDate) => {
@@ -239,8 +249,10 @@ export const useProLeaderboardStore = create<ProLeaderboardState>((set, get) => 
     const state = get();
     const key = seasonKey(seasonStartDate);
     const existing = state.mmr[proName]?.[queue];
-    const entry = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, seasonStartDate, existing);
-    const nextEntry: ProMmrEntry = { ...entry, mmr: Math.max(0, entry.mmr + mmrDelta) };
+    const rawEntry = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, seasonStartDate, existing);
+    const entry = typeof rawEntry.peakMmr === "number" ? rawEntry : { ...rawEntry, peakMmr: rawEntry.mmr };
+    const nextMmr = Math.max(0, entry.mmr + mmrDelta);
+    const nextEntry: ProMmrEntry = { ...entry, mmr: nextMmr, peakMmr: Math.max(entry.peakMmr, nextMmr) };
     const nextTable = { ...state.mmr, [proName]: { ...state.mmr[proName], [queue]: nextEntry } };
     set({ mmr: nextTable });
     persist(nextTable);

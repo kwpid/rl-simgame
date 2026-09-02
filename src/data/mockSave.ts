@@ -138,6 +138,9 @@ export interface RecentMatchEntry {
   result: "win" | "loss";
   score: string;
   note: string;
+  /** Every other player's name from this match (teammates and opponents alike). Clicking one in the Recent
+   *  Matches list opens their stats if they resolve to a real tracked identity (see AiProfileModal.tsx). */
+  opponents: string[];
 }
 
 // Org/pro-scene system: entirely separate from ranked (an org contract never touches ranked MMR/progress),
@@ -374,9 +377,9 @@ export const mockSave = {
   lastOrgBootcampDate: null as SimDate | null,
 
   recentMatches: [
-    { queue: "2v2" as const, result: "win" as const, score: "4-2", note: "Clean rotation, one whiffed flip reset attempt." },
-    { queue: "1v1" as const, result: "loss" as const, score: "2-3", note: "Lost the double-tap read late in OT." },
-    { queue: "2v2" as const, result: "win" as const, score: "3-1", note: "MVP, two solo plays off boost-starved reads." },
+    { queue: "2v2" as const, result: "win" as const, score: "4-2", note: "Clean rotation, one whiffed flip reset attempt.", opponents: [] },
+    { queue: "1v1" as const, result: "loss" as const, score: "2-3", note: "Lost the double-tap read late in OT.", opponents: [] },
+    { queue: "2v2" as const, result: "win" as const, score: "3-1", note: "MVP, two solo plays off boost-starved reads.", opponents: [] },
   ] satisfies RecentMatchEntry[] as RecentMatchEntry[],
 
   // Default titles are grey ("none" glow), earned through ordinary play. Glow titles (gold/red/white)

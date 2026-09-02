@@ -7,7 +7,7 @@ import type { RankEra, RankQueue } from "./rankSystem";
 import type { QueueMode } from "./mockSave";
 import type { SimDate } from "./dateUtils";
 import { regionalGrinderRoster, type RosterBand } from "./regionalGrinders";
-import { isOnlineNow, REGION_HOUR_OFFSET } from "./aiActivity";
+import { isOnlineNow, isActivelyQueueing, REGION_HOUR_OFFSET } from "./aiActivity";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useRegionalRosterStore, bandForMmr } from "@/store/useRegionalRosterStore";
 
@@ -46,7 +46,8 @@ export function gatherEligibleOpponents(
   const rankQueue = queue as RankQueue;
   const inBand = (mmr: number) =>
     mmr >= playerMmr - LEADERBOARD_MATCH_BAND_BELOW[queue] * bandMultiplier && mmr <= playerMmr + LEADERBOARD_MATCH_BAND_ABOVE * bandMultiplier;
-  const online = (name: string, region: ProRegion) => isOnlineNow(name, region, currentDate, (hourOfDay + REGION_HOUR_OFFSET[region]) % 24, queue);
+  const online = (name: string, region: ProRegion) =>
+    isOnlineNow(name, region, currentDate, (hourOfDay + REGION_HOUR_OFFSET[region]) % 24, queue) && isActivelyQueueing(name, region);
 
   const candidates: EligibleCandidate[] = [];
 

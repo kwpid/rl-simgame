@@ -154,6 +154,9 @@ export interface MatchResultInput {
   selfGoals: number;
   selfSaves: number;
   note: string;
+  /** Every other player's name from this match (teammates and opponents alike), shown in the Recent
+   *  Matches list and clickable there to pull up that name's stats (see AiProfileModal.tsx). */
+  opponentNames: string[];
 }
 
 interface SaveStoreState extends SaveData {
@@ -445,7 +448,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
 
   initFromSave: (data) => set({ ...data }),
 
-  recordMatchResult: ({ queue, win, mmrDelta, scoreSelf, scoreOpp, selfGoals, selfSaves, note }) => {
+  recordMatchResult: ({ queue, win, mmrDelta, scoreSelf, scoreOpp, selfGoals, selfSaves, note, opponentNames }) => {
     const state = get();
     const profile = state.rankedProfiles[queue];
     const careerStats = state.careerStats[queue];
@@ -499,6 +502,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       result: win ? "win" : "loss",
       score: `${scoreSelf}-${scoreOpp}`,
       note,
+      opponents: opponentNames,
     };
 
     set({

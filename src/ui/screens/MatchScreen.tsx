@@ -200,6 +200,7 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
         selfGoals,
         selfSaves,
         note,
+        opponentNames: players.filter((p) => !p.isSelf).map((p) => p.name),
       });
 
       // The match actually matters to any real pro or leaderboard regular who was in it: their queue MMR

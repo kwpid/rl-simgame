@@ -59,6 +59,11 @@ function migrateSaveData(raw: any): SaveData {
   // region, same as a fresh save.
   if (data.selectedMatchmakingRegions === undefined) data.selectedMatchmakingRegions = [saveRegionToProRegion(data.region)];
 
+  // Recent matches used to not track who was in them at all.
+  if (Array.isArray(data.recentMatches)) {
+    data.recentMatches = data.recentMatches.map((m: any) => (Array.isArray(m.opponents) ? m : { ...m, opponents: [] }));
+  }
+
   // Display Name (the free-text, always-editable name shown everywhere) didn't exist before, the fixed
   // username used to double as the shown name. Old saves keep whatever they already had as their display
   // name so nothing appears to change on load, the username itself is left untouched even if it happens

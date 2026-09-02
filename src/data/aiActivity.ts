@@ -78,3 +78,21 @@ export function isOnlineNow(name: string, region: ProRegion, currentDate: SimDat
   }
   return true;
 }
+
+// "Online" only means this identity is playing ranked SOMEWHERE right now — it doesn't mean they're
+// sitting in queue at this exact instant. A real grinder spends most of their time actually IN a match or
+// in the post-game menu, and only a slice of that loop actually searching. This cycles on real wall-clock
+// time (not in-game date/hour) since it's meant to simulate moment-to-moment queue availability across a
+// live search session, layered on top of isOnlineNow's coarser in-game-hour gate.
+const QUEUE_CYCLE_MS = 5 * 60 * 1000; // one rough game+menu loop
+const QUEUEING_FRACTION = 0.3; // only about this slice of the loop is spent actually sitting in queue
+
+/** Given that `name` is already online (see isOnlineNow), whether they're actually sitting in queue RIGHT
+ *  NOW as opposed to mid-match or between games. Cycles over real time, so a search that keeps rechecking
+ *  every few seconds can catch someone the moment they requeue rather than everyone online being available
+ *  every single tick. */
+export function isActivelyQueueing(name: string, region: ProRegion): boolean {
+  const phase = hashString(name + region + "#cyclephase") % QUEUE_CYCLE_MS;
+  const t = (Date.now() + phase) % QUEUE_CYCLE_MS;
+  return t < QUEUE_CYCLE_MS * QUEUEING_FRACTION;
+}

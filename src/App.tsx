@@ -15,6 +15,7 @@ import { TourneysScreen } from "@/ui/screens/TourneysScreen";
 import { OrgScreen } from "@/ui/screens/OrgScreen";
 import { MatchScreen } from "@/ui/screens/MatchScreen";
 import { SeasonAnnouncementModal } from "@/ui/components/SeasonAnnouncementModal";
+import { AiProfileModal } from "@/ui/components/AiProfileModal";
 import { AutoQueueBanner } from "@/ui/components/AutoQueueBanner";
 
 export default function App() {
@@ -51,6 +52,7 @@ export default function App() {
     <>
       <AutoQueueBanner />
       <SeasonAnnouncementModal />
+      <AiProfileModal />
       <div style={{ paddingTop: autoQueueActive ? 36 : 0 }}>
         <NavShell>
           <div key={screen} className="fade-in">

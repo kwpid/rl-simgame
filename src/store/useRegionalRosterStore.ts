@@ -49,6 +49,9 @@ export interface RosterMmrEntry {
   targetMechanicalConsistency: number;
   seasonStartKey: string;
   band: RosterBand;
+  /** Highest MMR this grinder/queue has ever actually reached, carried forward across every season reset —
+   *  same "all-time best" concept as the player's own RankedProfile.peakMmr, shown on the AI profile view. */
+  peakMmr: number;
 }
 
 type RegionMmrTable = Record<string, Partial<Record<QueueMode, RosterMmrEntry>>>;
@@ -102,6 +105,7 @@ function reseedEntry(
     targetMechanicalConsistency,
     seasonStartKey: seasonKey(seasonStartDate),
     band,
+    peakMmr: Math.max(previous?.peakMmr ?? 0, priorMmr, mmr, targetMmr),
   };
 }
 
@@ -118,10 +122,11 @@ function simulateForward(entry: RosterMmrEntry, name: string, region: ProRegion,
       gameSense: Math.round(entry.targetGameSense),
       mechanicalConsistency: Math.round(entry.targetMechanicalConsistency),
       gamesPlayedThisSeason: expectedGames,
+      peakMmr: Math.max(entry.peakMmr, entry.targetMmr),
     };
   }
 
-  let { mmr, gameSense, mechanicalConsistency, gamesPlayedThisSeason } = entry;
+  let { mmr, gameSense, mechanicalConsistency, gamesPlayedThisSeason, peakMmr } = entry;
   for (let i = 0; i < gamesBehind; i++) {
     const isPlacement = gamesPlayedThisSeason < PLACEMENT_GAMES;
     const oppRating = mmr + (Math.random() - 0.5) * 2 * 350;
@@ -134,6 +139,7 @@ function simulateForward(entry: RosterMmrEntry, name: string, region: ProRegion,
     gameSense += (entry.targetGameSense - gameSense) * STAT_CLOSE_RATE;
     mechanicalConsistency += (entry.targetMechanicalConsistency - mechanicalConsistency) * STAT_CLOSE_RATE;
     gamesPlayedThisSeason++;
+    peakMmr = Math.max(peakMmr, mmr);
   }
 
   return {
@@ -142,6 +148,7 @@ function simulateForward(entry: RosterMmrEntry, name: string, region: ProRegion,
     gameSense: Math.round(gameSense),
     mechanicalConsistency: Math.round(mechanicalConsistency),
     gamesPlayedThisSeason,
+    peakMmr: Math.round(peakMmr),
   };
 }
 
@@ -158,7 +165,9 @@ function catchUp(
 ): RosterMmrEntry {
   const key = seasonKey(seasonStartDate);
   const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, region, band, queue, era, currentYear, seasonStartDate, existing);
-  return simulateForward(base, name, region, currentDate, seasonStartDate);
+  // Guards against a pre-existing localStorage entry saved before `peakMmr` was tracked at all.
+  const safeBase = typeof base.peakMmr === "number" ? base : { ...base, peakMmr: base.mmr };
+  return simulateForward(safeBase, name, region, currentDate, seasonStartDate);
 }
 
 function loadStored(): RosterMmrTable {
@@ -200,7 +209,7 @@ export function bandForMmr(mmr: number, era: RankEra, queue: QueueMode): RosterB
 interface RegionalRosterState {
   mmr: RosterMmrTable;
   getMmr: (name: string, region: ProRegion, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => number;
-  getStats: (name: string, region: ProRegion, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => { gameSense: number; mechanicalConsistency: number };
+  getStats: (name: string, region: ProRegion, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => { gameSense: number; mechanicalConsistency: number; peakMmr: number };
   /** Batches catch-up for every grinder identity in a region, in one `set` call. Call from a `useEffect`. */
   ensureSeeded: (region: ProRegion, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => void;
   applyResult: (name: string, region: ProRegion, queue: QueueMode, mmrDelta: number, era: RankEra, currentYear: number, seasonStartDate: SimDate) => void;
@@ -226,13 +235,13 @@ export const useRegionalRosterStore = create<RegionalRosterState>((set, get) => 
 
   getStats: (name, region, queue, era, currentYear, currentDate, seasonStartDate) => {
     const grinder = findGrinder(name, region, currentYear);
-    if (!grinder) return { gameSense: 0, mechanicalConsistency: 0 };
+    if (!grinder) return { gameSense: 0, mechanicalConsistency: 0, peakMmr: 0 };
     const state = get();
     const entry = catchUp(state.mmr[region]?.[name]?.[queue], name, region, grinder.band, queue, era, currentYear, currentDate, seasonStartDate);
     const nextTable: RosterMmrTable = { ...state.mmr, [region]: { ...state.mmr[region], [name]: { ...state.mmr[region]?.[name], [queue]: entry } } };
     set({ mmr: nextTable });
     persist(nextTable);
-    return { gameSense: entry.gameSense, mechanicalConsistency: entry.mechanicalConsistency };
+    return { gameSense: entry.gameSense, mechanicalConsistency: entry.mechanicalConsistency, peakMmr: entry.peakMmr };
   },
 
   ensureSeeded: (region, queue, era, currentYear, currentDate, seasonStartDate) => {
@@ -256,8 +265,10 @@ export const useRegionalRosterStore = create<RegionalRosterState>((set, get) => 
     const state = get();
     const key = seasonKey(seasonStartDate);
     const existing = state.mmr[region]?.[name]?.[queue];
-    const entry = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, region, grinder.band, queue, era, currentYear, seasonStartDate, existing);
-    const nextEntry: RosterMmrEntry = { ...entry, mmr: Math.max(0, entry.mmr + mmrDelta) };
+    const rawEntry = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, region, grinder.band, queue, era, currentYear, seasonStartDate, existing);
+    const entry = typeof rawEntry.peakMmr === "number" ? rawEntry : { ...rawEntry, peakMmr: rawEntry.mmr };
+    const nextMmr = Math.max(0, entry.mmr + mmrDelta);
+    const nextEntry: RosterMmrEntry = { ...entry, mmr: nextMmr, peakMmr: Math.max(entry.peakMmr, nextMmr) };
     const nextTable: RosterMmrTable = { ...state.mmr, [region]: { ...state.mmr[region], [name]: { ...state.mmr[region]?.[name], [queue]: nextEntry } } };
     set({ mmr: nextTable });
     persist(nextTable);
