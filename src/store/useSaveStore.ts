@@ -237,6 +237,11 @@ interface SaveStoreState extends SaveData {
    *  both the odds of a scouting invite firing at all and which tier of org does the scouting. No-op while
    *  a contract, tryout, or unanswered invite is already active — only one thing happening at a time. */
   ensureOrgScouting: (currentDate: SimDate, era: RankEra, currentYear: number) => void;
+  /** Dev-tools-only escape hatch for testing the org track: creates a pending invite immediately, ignoring
+   *  every real-world gate ensureOrgScouting applies (RLCS phase, rank floor, scout-check cooldown, the
+   *  random chance roll) and clearing whatever invite/tryout/contract already exists so it always produces
+   *  a fresh one. Tier is still computed from the player's actual talent, same as a real invite. */
+  forceOrgInvite: (currentDate: SimDate, era: RankEra, currentYear: number) => void;
   declineOrgInvite: () => void;
   /** Accepts the pending invite and starts the tryout: `teammates` are picked by the caller (needs live
    *  pro-leaderboard MMR lookups, which live outside this store, see OrgScreen.tsx) since they have to be
@@ -817,6 +822,23 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       expiresDate: addDays(currentDate, ORG_INVITE_EXPIRY_DAYS),
     };
     set({ pendingOrgInvite: invite, lastOrgScoutCheckDate: currentDate });
+  },
+
+  forceOrgInvite: (currentDate, era, currentYear) => {
+    const state = get();
+    const talent = orgTalentDetail(era, currentYear, state.foundationStats, state.player.mechanicalConsistency["2v2"], state.player.gameSense["2v2"]);
+    const tier = orgTierForTalent(talent.overallScore);
+    const proRegion = saveRegionToProRegion(state.region);
+    const orgNames = ORG_NAMES[proRegion] ?? Object.values(ORG_NAMES).flat();
+    const orgName = orgNames[Math.floor(Math.random() * orgNames.length)];
+    const invite: OrgInvite = {
+      id: `org_${orgName.replace(/\s+/g, "_")}_${currentDate.year}${currentDate.month}${currentDate.day}`,
+      orgName,
+      tier,
+      offeredDate: currentDate,
+      expiresDate: addDays(currentDate, ORG_INVITE_EXPIRY_DAYS),
+    };
+    set({ pendingOrgInvite: invite, pendingOrgTryout: null, orgContract: null, lastOrgScoutCheckDate: currentDate });
   },
 
   declineOrgInvite: () => set({ pendingOrgInvite: null }),

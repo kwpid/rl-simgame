@@ -314,6 +314,8 @@ function DeveloperToolsSection() {
   const resetRegionalRoster = useRegionalRosterStore((store) => store.resetAll);
   const resetAllInstances = useTournamentStore((store) => store.resetAllInstances);
   const resetRlcsTeams = useSaveStore((store) => store.resetRlcsTeams);
+  const forceOrgInvite = useSaveStore((store) => store.forceOrgInvite);
+  const releaseOrgContract = useSaveStore((store) => store.releaseOrgContract);
 
   const [mmrQueue, setMmrQueue] = useState<QueueMode>("2v2");
   const [mmrValue, setMmrValue] = useState(String(s.rankedProfiles["2v2"].mmr));
@@ -557,6 +559,28 @@ function DeveloperToolsSection() {
                 }}
               >
                 Reset Teams (regenerates every region's real rosters, also resets RLCS season)
+              </button>
+            </div>
+          </div>
+
+          <div className="dev-tools-group">
+            <span className="dev-tools-label">Org</span>
+            <div className="dev-tools-row">
+              <button
+                className="dev-btn"
+                onClick={() => {
+                  forceOrgInvite(s.currentDate, eraForDate(s.currentDate), s.currentDate.year);
+                }}
+              >
+                Force Org Invite / Tryout (skips phase, rank, and chance gates)
+              </button>
+              <button
+                className="dev-btn"
+                onClick={() => {
+                  releaseOrgContract(s.currentDate);
+                }}
+              >
+                Release Current Org Contract
               </button>
             </div>
           </div>
