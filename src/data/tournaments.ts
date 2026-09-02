@@ -213,6 +213,28 @@ export function generateTeamsForRegion(region: ProRegion, currentYear: number, s
   return teams;
 }
 
+/** Reconciles a generated team list with the player's own signed org, if any: `generateTeamsForRegion`/
+ *  `generateGlobalTeams` have no notion of the player at all, so the org the player actually signed with
+ *  still lists its original 3 real AI names verbatim — including whichever one the player's own tryout
+ *  replaced (see useSaveStore.ts's pickRealOrgTeam, which excludes exactly one of the 3 to make room for
+ *  the player). Called wherever those generated rosters are DISPLAYED (never inside the generators
+ *  themselves, which must stay pure/deterministic) so the player's org always reads as
+ *  [player, teammate, teammate] instead of the stale pre-signing trio. Matches by org name plus "does this
+ *  team contain both contract teammates" rather than by id, since the generated ids aren't stable across
+ *  separate calls/instances the way the roster contents are. */
+export function applyPlayerOrgOverride<T extends TournamentTeam>(
+  teams: T[],
+  orgContract: { orgName: string; teammates: [string, string] } | null,
+  playerName: string
+): T[] {
+  if (!orgContract) return teams;
+  return teams.map((team) => {
+    if (team.name !== orgContract.orgName) return team;
+    if (!orgContract.teammates.every((tm) => team.players.includes(tm))) return team;
+    return { ...team, players: [playerName, ...orgContract.teammates] };
+  });
+}
+
 /** WORK IN PROGRESS, currently unreachable — EWC/ELEAGUE aren't scheduled at all right now (see
  *  buildSeasonSchedule's doc comment), so nothing calls this. Kept for when they're rebuilt around their
  *  real structure (a per-region squad, not club orgs) rather than deleted outright; whatever replaces it

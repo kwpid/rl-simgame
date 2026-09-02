@@ -13,6 +13,7 @@ import {
   orgTagForOrgName,
   generateTeamsForRegion,
   generateGlobalTeams,
+  applyPlayerOrgOverride,
   REGION_LABELS,
   rlcsSeasonPhase,
 } from "@/data/tournaments";
@@ -104,10 +105,12 @@ export function OrgScreen() {
   const [topRegionTeams, setTopRegionTeams] = useState<ReturnType<typeof generateTeamsForRegion>>([]);
   const [topWorldTeams, setTopWorldTeams] = useState<ReturnType<typeof generateGlobalTeams>>([]);
   useEffect(() => {
-    setTopRegionTeams(generateTeamsForRegion(proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, `orgtop_region_${proRegion}`, era, s.currentDate, s.seasonStartDate).sort((a, b) => b.power - a.power));
-    setTopWorldTeams(generateGlobalTeams(currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, "orgtop_world", era, s.currentDate, s.seasonStartDate).sort((a, b) => b.power - a.power));
+    const regionTeams = generateTeamsForRegion(proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, `orgtop_region_${proRegion}`, era, s.currentDate, s.seasonStartDate);
+    const worldTeams = generateGlobalTeams(currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, "orgtop_world", era, s.currentDate, s.seasonStartDate);
+    setTopRegionTeams(applyPlayerOrgOverride(regionTeams, s.orgContract, s.displayName).sort((a, b) => b.power - a.power));
+    setTopWorldTeams(applyPlayerOrgOverride(worldTeams, s.orgContract, s.displayName).sort((a, b) => b.power - a.power));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, era, s.currentDate.year, s.currentDate.month, s.currentDate.day]);
+  }, [proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, era, s.currentDate.year, s.currentDate.month, s.currentDate.day, s.orgContract, s.displayName]);
 
   useEffect(() => {
     ensureOrgScouting(s.currentDate, era, currentYear);
