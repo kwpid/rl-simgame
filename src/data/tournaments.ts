@@ -201,19 +201,22 @@ export function generateTeamsForRegion(region: ProRegion, currentYear: number, s
   return teams;
 }
 
-/** Builds a globally-open real field (EWC, ELEAGUE): pulls eligible real players from every region rather
- *  than one, for events that aren't region-locked the way an RLCS qualifier is. Same locked-per-season
- *  determinism as `generateTeamsForRegion`. */
+/** Builds a globally-open real field (EWC, ELEAGUE): every region's own ALREADY-real, season-locked teams
+ *  (the exact same team objects that region's regional bracket uses, see `generateTeamsForRegion`) enter
+ *  as themselves — never reshuffled into a fresh cross-region "best XI", real orgs bring their own existing
+ *  roster to a global event, they don't dissolve into a brand-new dream team. Interleaved one rank at a
+ *  time across regions (every region's own #1 team first, then every region's #2, ...) so the field is a
+ *  genuine mix of top teams from everywhere rather than skewed toward whichever region has the deepest
+ *  player pool. */
 export function generateGlobalTeams(currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string, era: RankEra, currentDate: SimDate, seasonStartDate: SimDate): TournamentTeam[] {
-  const byPower = ALL_PRO_REGIONS.flatMap((r) => eligibleRealPlayersForRegion(r, currentYear, era, currentDate, seasonStartDate)).sort((a, b) => b.power - a.power);
-  const eligible = jitterRankOrder(byPower, `GLOBAL-${seasonNumber}-${resetSeed}`);
-  const orgNames = Object.values(ORG_NAMES).flat();
-  const teamCount = Math.min(Math.floor(eligible.length / 3), orgNames.length);
+  const perRegionTeams = ALL_PRO_REGIONS.map((r) => generateTeamsForRegion(r, currentYear, seasonNumber, resetSeed, `${idPrefix}_src_${r}`, era, currentDate, seasonStartDate));
+  const maxTeamsInAnyRegion = Math.max(0, ...perRegionTeams.map((t) => t.length));
   const teams: TournamentTeam[] = [];
-  for (let i = 0; i < teamCount; i++) {
-    const roster = eligible.slice(i * 3, i * 3 + 3);
-    const power = Math.round(roster.reduce((sum, p) => sum + p.power, 0) / roster.length);
-    teams.push({ id: `${idPrefix}_${i}`, name: orgNames[i], region: "NA", power, players: roster.map((p) => p.name) });
+  for (let rank = 0; rank < maxTeamsInAnyRegion; rank++) {
+    for (const regionTeams of perRegionTeams) {
+      const team = regionTeams[rank];
+      if (team) teams.push({ ...team, id: `${idPrefix}_${teams.length}` });
+    }
   }
   return teams;
 }
