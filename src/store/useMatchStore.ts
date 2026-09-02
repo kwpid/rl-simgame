@@ -748,7 +748,12 @@ interface MatchStoreState {
     /** Real named teammates for this series (org scrims/tryouts), filling out the blue side alongside
      *  self instead of the player standing in alone against the full opposing lineup. Empty/omitted for
      *  every other tournament context, which still models the player's own match as a solo effort. */
-    teammateNames?: string[]
+    teammateNames?: string[],
+    /** Org scrims specifically: the opposing org's real tag (see data/tournaments.ts's orgTagForOrgName),
+     *  shared by all 3 opponents since they're a real signed roster, not a name-by-name coinflip like the
+     *  generic per-opponent org-tag hash generateOpponentStats otherwise falls back to. Omitted for every
+     *  other tournament context. */
+    opponentOrgTag?: string
   ) => void;
   /** The "Continue" action for a series match's post-game screen: starts the next game on the same
    *  roster if the series isn't decided yet, otherwise fires `onSeriesComplete` and returns to idle. */
@@ -1065,7 +1070,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     startTicking(set, get);
   },
 
-  startTournamentSeries: (self, opponentNames, seriesFormat, era, seasonNumber, currentYear, currentDate, seasonStartDate, onSeriesComplete, stageProgress = 0, teammateNames = []) => {
+  startTournamentSeries: (self, opponentNames, seriesFormat, era, seasonNumber, currentYear, currentDate, seasonStartDate, onSeriesComplete, stageProgress = 0, teammateNames = [], opponentOrgTag) => {
     clearAllTimers();
     const perTeam = opponentNames.length;
     const queue = perTeam === 1 ? "1v1" : perTeam === 2 ? "2v2" : "3v3";
@@ -1112,6 +1117,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       ...opponentNames.map((name) => ({
         ...generateOpponentStats(name, "orange" as const, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, tournamentPersistentStats(name), stageProgress),
         points: 0,
+        ...(opponentOrgTag ? { orgTag: opponentOrgTag } : {}),
         teamChemistry: queue === "3v3" ? aiTeamChemistryForDate(currentDate, seasonStartDate) : undefined,
       })),
     ];

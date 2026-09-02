@@ -5,7 +5,7 @@ import { SectionShell } from "@/ui/components/LockedSection";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
-import { activeProPlayers } from "@/data/proPlayers";
+import { activeProPlayers, type ProRegion } from "@/data/proPlayers";
 import {
   saveRegionToProRegion,
   rlcsSeasonForDate,
@@ -64,14 +64,35 @@ function pickOrgPros(
   return shuffled.slice(0, count).map((p) => p.name);
 }
 
-function randomScrimOpponents(used: Set<string>): string[] {
+/** Org scrims/tryouts scrimmage a real rival org's actual current-season roster (see
+ *  data/tournaments.ts's generateTeamsForRegion) instead of generic filler names — a scrim opponent is
+ *  always a real, named, org-signed lineup, same as the player's own. Falls back to generic filler names
+ *  only in the genuinely-empty-region edge case (too early in a fresh save for 2+ real teams to exist
+ *  yet), same "not enough real players yet" guard used elsewhere in this screen. */
+function pickScrimOpponents(
+  proRegion: ProRegion,
+  currentYear: number,
+  seasonNumber: number,
+  resetSeed: number,
+  era: RankEra,
+  currentDate: SimDate,
+  seasonStartDate: SimDate,
+  excludeOrgName: string
+): { orgName: string | null; players: string[] } {
+  const teams = generateTeamsForRegion(proRegion, currentYear, seasonNumber, resetSeed, "orgscrim_opp", era, currentDate, seasonStartDate).filter(
+    (t) => t.name !== excludeOrgName
+  );
+  if (teams.length > 0) {
+    const team = teams[Math.floor(Math.random() * teams.length)];
+    return { orgName: team.name, players: team.players };
+  }
   const names: string[] = [];
   while (names.length < 3) {
     const name = LB_NAMES[Math.floor(Math.random() * LB_NAMES.length)];
-    if (used.has(name) || names.includes(name)) continue;
+    if (names.includes(name)) continue;
     names.push(name);
   }
-  return names;
+  return { orgName: null, players: names };
 }
 
 export function OrgScreen() {
@@ -172,12 +193,11 @@ export function OrgScreen() {
       region: saveRegionToProRegion(s.region),
       teamChemistry: contract.chemistry,
     };
-    const used = new Set([s.displayName, ...contract.teammates]);
-    const opponents = randomScrimOpponents(used);
+    const opponent = pickScrimOpponents(proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, era, s.currentDate, s.seasonStartDate, contract.orgName);
     const seriesFormat = Math.random() < 0.5 ? 5 : 7;
-    startTournamentSeries(self, opponents, seriesFormat, era, s.seasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
+    startTournamentSeries(self, opponent.players, seriesFormat, era, s.seasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
       recordOrgScrimResult(wonSeries, s.currentDate);
-    }, 0.6, contract.teammates);
+    }, 0.6, contract.teammates, opponent.orgName ? orgTagForOrgName(opponent.orgName) : undefined);
   }
 
   function handlePlayScrim() {
@@ -196,12 +216,11 @@ export function OrgScreen() {
       },
       region: saveRegionToProRegion(s.region),
     };
-    const used = new Set([s.displayName, ...tryout.teammates]);
-    const opponents = randomScrimOpponents(used);
+    const opponent = pickScrimOpponents(proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, era, s.currentDate, s.seasonStartDate, tryout.orgName);
     const seriesFormat = Math.random() < 0.5 ? 5 : 7;
-    startTournamentSeries(self, opponents, seriesFormat, era, s.seasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
+    startTournamentSeries(self, opponent.players, seriesFormat, era, s.seasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
       recordOrgTryoutScrim(wonSeries, s.currentDate, rlcsSeasonNumber);
-    }, 0.6, tryout.teammates);
+    }, 0.6, tryout.teammates, opponent.orgName ? orgTagForOrgName(opponent.orgName) : undefined);
   }
 
   function handleAttendCoaching() {

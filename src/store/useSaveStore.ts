@@ -34,7 +34,7 @@ import {
 } from "@/data/orgs";
 import { ORG_NAMES, saveRegionToProRegion, rlcsSeasonPhase, rlcsSeasonForDate, generateTeamsForRegion } from "@/data/tournaments";
 import { QUEUES } from "@/data/queues";
-import type { ProRegion } from "@/data/proPlayers";
+import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { useTournamentStore } from "@/store/useTournamentStore";
 
 // The save is now a live, mutable Zustand store instead of a frozen constant. `mockSave` in data/mockSave.ts
@@ -149,6 +149,15 @@ function pickRealOrgTeam(
   const teammates = team.players.filter((_, i) => i !== excludedIdx);
   if (teammates.length < 2) return null;
   return { orgName: team.name, teammates: [teammates[0], teammates[1]] };
+}
+
+/** A real org teammate is either an actual named pro (their own region, from PRO_PLAYERS) or one of the
+ *  player's own region's grinders (regionalGrinderRoster only ever draws from that one region, see
+ *  eligibleRealPlayersForRegion) — never anything else, so this is a simple either/or, no separate lookup
+ *  table needed. */
+function resolveTeammateFriendInfo(name: string, proRegion: ProRegion): { region: string; isPro: boolean } {
+  const pro = PRO_PLAYERS.find((p) => p.name === name);
+  return pro ? { region: pro.region, isPro: true } : { region: proRegion, isPro: false };
 }
 
 function fatiguePenalty(fatigue: number): number {
@@ -946,6 +955,13 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       text: `${tryout.orgName} signed you as a ${outcome === "starter" ? "full starter" : "sub"} after tryouts (${record} in scrims), alongside ${tryout.teammates[0]} and ${tryout.teammates[1]}.`,
     };
     set({ pendingOrgTryout: null, orgContract: contract, orgNews: [news, ...state.orgNews].slice(0, ORG_NEWS_LIMIT) });
+    // Getting signed alongside two real teammates is the kind of thing you'd actually add each other over,
+    // not something the player has to separately go find them on the Social screen and friend-request.
+    const proRegion = saveRegionToProRegion(state.region);
+    for (const name of tryout.teammates) {
+      const info = resolveTeammateFriendInfo(name, proRegion);
+      get().addFriend(name, info.region, info.isPro, currentDate);
+    }
   },
 
   recordOrgScrimResult: (won, currentDate) => {
@@ -1009,6 +1025,13 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       text,
     };
     set({ orgContract: nextContract, orgNews: [news, ...state.orgNews].slice(0, ORG_NEWS_LIMIT) });
+    if (churned || promoted) {
+      const proRegion = saveRegionToProRegion(state.region);
+      for (const name of newTeammates) {
+        const info = resolveTeammateFriendInfo(name, proRegion);
+        get().addFriend(name, info.region, info.isPro, currentDate);
+      }
+    }
   },
 
   attendOrgCoaching: () => {
