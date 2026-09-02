@@ -6,7 +6,7 @@ import type { TitleEntry } from "@/data/seasons";
 import type { SimDate } from "@/data/dateUtils";
 import { LB_NAMES } from "@/data/mockSave";
 import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
-import { rlcsSeasonForDate, orgTagForOrgName, saveRegionToProRegion } from "@/data/tournaments";
+import { rlcsSeasonForDate, orgTagForOrgName, saveRegionToProRegion, generateTeamsForRegion } from "@/data/tournaments";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
@@ -277,6 +277,30 @@ function pickName(
   return { name };
 }
 
+/** Whether `name` is a real, currently-signed org player, and which org — determined from the SAME
+ *  real, season-locked team rosters the RLCS brackets/Org screen use (see data/tournaments.ts's
+ *  generateTeamsForRegion), not the independent per-name coinflip generateOpponentStats otherwise falls
+ *  back to for a generic ranked opponent. A real pro/regional grinder either actually has a roster spot
+ *  this season or doesn't — no randomness once that's known, and a plain filler regular (never eligible
+ *  for a real team at all, see eligibleRealPlayersForRegion) always reads as unsigned. Region-less names
+ *  (no pro/grinder region resolved) can't be checked against any region's rosters, so they fall back to
+ *  unsigned too. */
+function realOrgTagForPlayer(
+  name: string,
+  region: ProRegion | undefined,
+  currentYear: number,
+  era: RankEra,
+  currentDate: SimDate,
+  seasonStartDate: SimDate,
+  resetSeed: number
+): string | undefined {
+  if (!region) return undefined;
+  const { seasonNumber } = rlcsSeasonForDate(currentDate);
+  const teams = generateTeamsForRegion(region, currentYear, seasonNumber, resetSeed, "orgtagcheck", era, currentDate, seasonStartDate);
+  const team = teams.find((t) => t.players.includes(name));
+  return team ? orgTagForOrgName(team.name) : undefined;
+}
+
 function buildOpponent(
   name: string,
   team: "blue" | "orange",
@@ -296,7 +320,10 @@ function buildOpponent(
   /** Which region this name's grinder identity belongs to (see pickName's return), needed to look its
    *  persistent stats up in useRegionalRosterStore. Irrelevant for a real pro (region is looked up straight
    *  off PRO_PLAYERS) or a plain filler/friend name. */
-  grinderRegion?: ProRegion
+  grinderRegion?: ProRegion,
+  /** Which season's real RLCS team rosters to check this opponent against for a real org tag (see
+   *  realOrgTagForPlayer) — the save's `rlcsTeamsResetSeed`, bumped by the dev "Reset Teams" tool. */
+  rlcsTeamsResetSeed = 0
 ): MatchPlayer {
   const effectiveMmr = friendOverride?.mmr ?? leaderboardMmr;
   const proQueueOverride = effectiveMmr !== undefined ? { mmr: effectiveMmr, queue } : undefined;
@@ -314,10 +341,12 @@ function buildOpponent(
         : grinderRegion
           ? useRegionalRosterStore.getState().getStats(name, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate)
           : useLeaderboardFillerStore.getState().getStats(name, queue, era, currentYear, currentDate, seasonStartDate);
+  const region = pro?.region ?? grinderRegion;
   return {
     ...generateOpponentStats(name, team, rankTier, era, seasonNumber, currentYear, playerMmr, queue, proQueueOverride, false, realRlcsTitles, persistentStats),
     points: 0,
-    region: pro?.region ?? grinderRegion,
+    region,
+    orgTag: realOrgTagForPlayer(name, region, currentYear, era, currentDate, seasonStartDate, rlcsTeamsResetSeed),
   };
 }
 
@@ -341,7 +370,8 @@ function generateRoster(
    *  those matches on the plain generic-filler path regardless. */
   regions: ProRegion[] = [],
   hourOfDay = 0,
-  bandMultiplier = 1
+  bandMultiplier = 1,
+  rlcsTeamsResetSeed = 0
 ): MatchPlayer[] {
   const perTeam = queue === "1v1" ? 1 : queue === "2v2" ? 2 : 3;
   const used = new Set<string>([self.name]);
@@ -383,12 +413,12 @@ function generateRoster(
           ? useLeaderboardFillerStore.getState().getMmr(partyName, queue, era, currentYear, currentDate, seasonStartDate)
           : undefined;
     const friendOverride = !pro && !grinderRegion && !isFiller ? friendStatsForQueue[partyName] : undefined;
-    const friendPlayer = buildOpponent(partyName, "blue", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, leaderboardMmr, friendOverride, grinderRegion);
+    const friendPlayer = buildOpponent(partyName, "blue", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, leaderboardMmr, friendOverride, grinderRegion, rlcsTeamsResetSeed);
     players.push({ ...friendPlayer, partyId: selfPartyId });
     blueSlotsRemaining--;
   }
-  fillTeamSlots("blue", blueSlotsRemaining, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier);
-  fillTeamSlots("orange", perTeam, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier);
+  fillTeamSlots("blue", blueSlotsRemaining, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier, rlcsTeamsResetSeed);
+  fillTeamSlots("orange", perTeam, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier, rlcsTeamsResetSeed);
   return applyPartyFlavor(players);
 }
 
@@ -412,12 +442,13 @@ function fillTeamSlots(
   seasonStartDate: SimDate,
   regions: ProRegion[],
   hourOfDay: number,
-  bandMultiplier: number
+  bandMultiplier: number,
+  rlcsTeamsResetSeed: number
 ) {
   let remaining = slotCount;
   while (remaining > 0) {
     const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier);
-    players.push(buildOpponent(picked.name, team, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, picked.leaderboardMmr, undefined, picked.region));
+    players.push(buildOpponent(picked.name, team, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, picked.leaderboardMmr, undefined, picked.region, rlcsTeamsResetSeed));
     remaining--;
 
     if (queue !== "2v2" || remaining <= 0 || !picked.region) continue;
@@ -433,7 +464,7 @@ function fillTeamSlots(
       : useRegionalRosterStore.getState().getMmr(partner.name, partner.region, queue, era, currentYear, currentDate, seasonStartDate);
     const partyId = `${picked.name}+${partner.name}`;
     used.add(partner.name);
-    const partnerPlayer = buildOpponent(partner.name, team, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, partnerLeaderboardMmr, undefined, partner.region);
+    const partnerPlayer = buildOpponent(partner.name, team, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, partnerLeaderboardMmr, undefined, partner.region, rlcsTeamsResetSeed);
     players.push({ ...partnerPlayer, partyId });
     const pickedIdx = players.findIndex((p) => p.name === picked.name && p.team === team);
     if (pickedIdx >= 0) players[pickedIdx] = { ...players[pickedIdx], partyId };
@@ -508,7 +539,8 @@ function tryRematchRoster(
   currentDate: SimDate,
   seasonStartDate: SimDate,
   regions: ProRegion[],
-  hourOfDay: number
+  hourOfDay: number,
+  rlcsTeamsResetSeed: number
 ): MatchPlayer[] | null {
   const eligible = recentLobbies.filter((l) => l.queue === queue && l.regions.some((r) => regions.includes(r)));
   if (eligible.length === 0) return null;
@@ -542,7 +574,7 @@ function tryRematchRoster(
       : grinderRegion
         ? useRegionalRosterStore.getState().getMmr(name, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate)
         : undefined;
-    players.push(buildOpponent(name, team, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, leaderboardMmr, undefined, grinderRegion));
+    players.push(buildOpponent(name, team, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, leaderboardMmr, undefined, grinderRegion, rlcsTeamsResetSeed));
   });
   return applyPartyFlavor(players);
 }
@@ -724,7 +756,10 @@ interface MatchStoreState {
     currentDate: SimDate,
     seasonStartDate: SimDate,
     partyMemberNames?: string[],
-    partyFriendStats?: Record<string, PartyFriendStats>
+    partyFriendStats?: Record<string, PartyFriendStats>,
+    /** The save's `rlcsTeamsResetSeed` — which real, season-locked RLCS team rosters to check a real pro/
+     *  grinder opponent against for a real org tag (see realOrgTagForPlayer). */
+    rlcsTeamsResetSeed?: number
   ) => void;
   /** Starts a scheduled match directly (no queue wait) against a fixed opponent roster, for tournament
    *  play: same self as SelfStats, `opponentNames` become the enemy team at a competitive (GC-tier)
@@ -935,7 +970,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   duelNextAttacker: null,
   duelIsCounter: false,
 
-  startQueue: (requests, hourOfDay, era, seasonNumber, currentYear, currentDate, seasonStartDate, partyMemberNames, partyFriendStats) => {
+  startQueue: (requests, hourOfDay, era, seasonNumber, currentYear, currentDate, seasonStartDate, partyMemberNames, partyFriendStats, rlcsTeamsResetSeed = 0) => {
     clearAllTimers();
     const estimatedQueueDurationsMs: Partial<Record<QueueMode, number>> = {};
     requests.forEach((req) => {
@@ -1020,7 +1055,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         if (pool.length >= neededOpponents) {
           const popChance = Math.max(0.1, Math.min(0.85, 0.15 + (pool.length - neededOpponents) * 0.08));
           if (Math.random() < popChance) {
-            const players = generateRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, partyMemberNames, friendStatsForQueue(req), regions, hourOfDay, bandMultiplier);
+            const players = generateRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, partyMemberNames, friendStatsForQueue(req), regions, hourOfDay, bandMultiplier, rlcsTeamsResetSeed);
             finalizeFoundMatch(req, players, elapsed);
             return;
           }
@@ -1043,11 +1078,11 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         const noParty = !partyMemberNames || partyMemberNames.length === 0;
         const rematch =
           isEligibleTier && noParty && regions.length > 0 && Math.random() < REMATCH_CHANCE
-            ? tryRematchRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, regions, hourOfDay)
+            ? tryRematchRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, regions, hourOfDay, rlcsTeamsResetSeed)
             : null;
         const players =
           rematch ??
-          generateRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, partyMemberNames, friendStatsForQueue(req), regions, hourOfDay);
+          generateRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, partyMemberNames, friendStatsForQueue(req), regions, hourOfDay, 1, rlcsTeamsResetSeed);
         if (isEligibleTier && regions.length > 0) {
           recordRecentLobby(req.queue, players.filter((p) => !p.isSelf).map((p) => p.name), regions);
         }
@@ -1252,7 +1287,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         save.currentDate,
         save.seasonStartDate,
         save.partyMembers,
-        partyFriendStats
+        partyFriendStats,
+        save.rlcsTeamsResetSeed
       );
     }
   },

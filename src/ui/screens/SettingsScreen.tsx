@@ -310,6 +310,7 @@ function DeveloperToolsSection() {
   const devAddSkillPoints = useSaveStore((store) => store.devAddSkillPoints);
   const devSetMmr = useSaveStore((store) => store.devSetMmr);
   const devSetRewardLevel = useSaveStore((store) => store.devSetRewardLevel);
+  const devSetSeasonNumber = useSaveStore((store) => store.devSetSeasonNumber);
   const resetProLeaderboard = useProLeaderboardStore((store) => store.resetAll);
   const resetFillerLeaderboard = useLeaderboardFillerStore((store) => store.resetAll);
   const resetRegionalRoster = useRegionalRosterStore((store) => store.resetAll);
@@ -327,6 +328,7 @@ function DeveloperToolsSection() {
   const [mechConsistencyValue, setMechConsistencyValue] = useState(String(s.player.mechanicalConsistency["2v2"]));
   const [rewardTier, setRewardTier] = useState<RankTierId>(s.rewardTierUnlocked);
   const [rewardWins, setRewardWins] = useState("0");
+  const [seasonNumberValue, setSeasonNumberValue] = useState(String(s.seasonNumber));
 
   const [mechanicId, setMechanicId] = useState(MECHANICS[0].id);
   const [mechanicValue, setMechanicValue] = useState("1000");
@@ -617,6 +619,23 @@ function DeveloperToolsSection() {
                 title="Wins progress toward the next tier, 0-10"
               />
               <button className="dev-btn" onClick={() => devSetRewardLevel(rewardTier, Number(rewardWins) || 0)}>Set</button>
+            </div>
+          </div>
+
+          <div className="dev-tools-group">
+            <span className="dev-tools-label">Set Ranked Season</span>
+            <div className="dev-tools-row">
+              <input
+                className="dev-input"
+                type="number"
+                min={1}
+                value={seasonNumberValue}
+                onChange={(e) => setSeasonNumberValue(e.target.value)}
+                title="Current season number, 1+"
+              />
+              <button className="dev-btn" onClick={() => devSetSeasonNumber(Number(seasonNumberValue) || 1)}>
+                Set (AI titles from earlier seasons show up automatically)
+              </button>
             </div>
           </div>
         </div>

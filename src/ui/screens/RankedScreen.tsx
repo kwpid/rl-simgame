@@ -181,7 +181,7 @@ export function RankedScreen() {
       if (friend) partyFriendStats[name] = { mmr: friend.mmr, gameSense: friend.gameSense, mechanicalConsistency: friend.mechanicalConsistency };
     }
     setAutoQueueModes(autoQueueChecked ? queuesToSearch : null);
-    startQueue(queuesToSearch.map(buildQueueRequest), s.clockHour, era, s.seasonNumber, s.currentDate.year, s.currentDate, s.seasonStartDate, s.partyMembers, partyFriendStats);
+    startQueue(queuesToSearch.map(buildQueueRequest), s.clockHour, era, s.seasonNumber, s.currentDate.year, s.currentDate, s.seasonStartDate, s.partyMembers, partyFriendStats, s.rlcsTeamsResetSeed);
   }
 
   return (

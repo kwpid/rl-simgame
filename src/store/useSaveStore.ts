@@ -374,6 +374,16 @@ interface SaveStoreState extends SaveData {
    *  matches use, clearing placements and bumping peak rank if this is a new high. */
   devSetMmr: (queue: QueueMode, mmr: number) => void;
   devSetRewardLevel: (tier: RankTierId, winsProgress: number) => void;
+  /** Dev-only: forces the ranked ladder's current season number, and resets `seasonStartDate` to right
+   *  now so the natural day-based rollover doesn't immediately re-fire from a now-stale season-start date.
+   *  Lets past-season AI titles (see data/seasons.ts's pickAiTitle, which only ever looks strictly BEFORE
+   *  the current season number — jump from 1 to 2 and AI immediately have a season 1 title to draw from)
+   *  be tested without actually playing through however many real seasons it'd take to get there. Doesn't
+   *  touch MMR, season history, or reward progress — a real rollover through processSeasonRollover still
+   *  handles all of that untouched, this only changes what match sim / title generation reads as "the
+   *  current season" going forward. RLCS's own season numbering (rlcsSeasonForDate) runs on the calendar
+   *  year instead and is entirely unaffected either way. */
+  devSetSeasonNumber: (seasonNumber: number) => void;
 }
 
 function rollClock(
@@ -1391,5 +1401,10 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const nextTier = sequence[tierIdx + 1];
     if (nextTier) rewardProgressByTier[nextTier] = Math.max(0, Math.min(REWARD_WINS_REQUIRED, winsProgress));
     set({ rewardTierUnlocked: tier, rewardProgressByTier });
+  },
+
+  devSetSeasonNumber: (seasonNumber) => {
+    const state = get();
+    set({ seasonNumber: Math.max(1, Math.round(seasonNumber)), seasonStartDate: state.currentDate });
   },
 }));
