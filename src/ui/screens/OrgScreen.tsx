@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Card } from "@/ui/components/Card";
 import { SectionShell } from "@/ui/components/LockedSection";
 import { useSaveStore } from "@/store/useSaveStore";
@@ -14,11 +14,14 @@ import {
   resolveContractRenewal,
   promotedTier,
   rollsTeammateChurn,
+  coachingIntervalDaysForTier,
+  bootcampIntervalDaysForTier,
 } from "@/data/orgs";
 import { eraForDate, type RankEra } from "@/data/rankSystem";
 import { flattenProgress } from "@/data/matchSim";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
-import { LB_NAMES } from "@/data/mockSave";
+import { LB_NAMES, type QueueMode } from "@/data/mockSave";
+import { QUEUE_LABELS } from "@/data/queues";
 
 // Teammates are picked in roughly the player's own 2v2 skill range (needs live pro-leaderboard MMR, which
 // lives outside useSaveStore, same reason TourneysScreen/SocialScreen do this kind of lookup in the UI
@@ -74,8 +77,12 @@ export function OrgScreen() {
   const recordOrgScrimResult = useSaveStore((st) => st.recordOrgScrimResult);
   const releaseOrgContract = useSaveStore((st) => st.releaseOrgContract);
   const renewOrgContract = useSaveStore((st) => st.renewOrgContract);
+  const attendOrgCoaching = useSaveStore((st) => st.attendOrgCoaching);
+  const runOrgBootcamp = useSaveStore((st) => st.runOrgBootcamp);
   const startTournamentSeries = useMatchStore((m) => m.startTournamentSeries);
   const matchPhase = useMatchStore((m) => m.phase);
+  const [coachingResult, setCoachingResult] = useState<{ gameSense: Record<QueueMode, number>; mechanicalConsistency: Record<QueueMode, number> } | null>(null);
+  const [bootcampResult, setBootcampResult] = useState<{ scrimWins: number; scrimLosses: number; gameSense: Record<QueueMode, number>; mechanicalConsistency: Record<QueueMode, number> } | null>(null);
 
   const era = eraForDate(s.currentDate);
   const currentYear = s.currentDate.year;
@@ -174,6 +181,16 @@ export function OrgScreen() {
     }, 0.6, tryout.teammates);
   }
 
+  function handleAttendCoaching() {
+    const result = attendOrgCoaching();
+    if (result) setCoachingResult(result);
+  }
+
+  function handleRunBootcamp() {
+    const result = runOrgBootcamp();
+    if (result) setBootcampResult(result);
+  }
+
   const inPlacements = s.rankedProfiles["2v2"].placementMatchesRemaining > 0;
   const meetsRank = meetsOrgRankRequirement(era, playerMmr);
   const talent = orgTalentDetail(era, currentYear, s.foundationStats, s.player.mechanicalConsistency["2v2"], s.player.gameSense["2v2"]);
@@ -248,7 +265,72 @@ export function OrgScreen() {
             )}
           </Card>
         </SectionShell>
-      ) : (
+      ) : null}
+
+      {s.orgContract ? (
+        <SectionShell title="Coaching & Bootcamps">
+          <div className="card-grid">
+            <Card title="Coaching">
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 10 }}>
+                A session with the org's coach: boosts Game Sense and Mechanical Consistency in every
+                queue, leaning hardest into 3v3 (the org's own competitive queue).
+              </div>
+              {(() => {
+                const cooldownDays = coachingIntervalDaysForTier(s.orgContract!.tier);
+                const daysSince = s.lastOrgCoachingDate ? daysBetween(s.lastOrgCoachingDate, s.currentDate) : cooldownDays;
+                const ready = daysSince >= cooldownDays;
+                return ready ? (
+                  <button className="org-btn org-btn-primary" onClick={handleAttendCoaching}>
+                    Attend Coaching Session
+                  </button>
+                ) : (
+                  <div className="sp-locked">Next session in {cooldownDays - daysSince}d</div>
+                );
+              })()}
+              {coachingResult && (
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 10 }}>
+                  {(["1v1", "2v2", "3v3"] as QueueMode[]).map((q) => (
+                    <div key={q}>
+                      {QUEUE_LABELS[q]}: Game Sense +{coachingResult.gameSense[q]}, Mechanical Consistency +{coachingResult.mechanicalConsistency[q]}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+
+            <Card title="Bootcamp">
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 10 }}>
+                A multi-day team retreat, a ton of scrims back to back against org-caliber lineups, plus a
+                bigger Game Sense/Mechanical Consistency bump than a single coaching session.
+              </div>
+              {(() => {
+                const cooldownDays = bootcampIntervalDaysForTier(s.orgContract!.tier);
+                const daysSince = s.lastOrgBootcampDate ? daysBetween(s.lastOrgBootcampDate, s.currentDate) : cooldownDays;
+                const ready = daysSince >= cooldownDays;
+                return ready ? (
+                  <button className="org-btn org-btn-primary" onClick={handleRunBootcamp}>
+                    Run Bootcamp
+                  </button>
+                ) : (
+                  <div className="sp-locked">Next bootcamp in {cooldownDays - daysSince}d</div>
+                );
+              })()}
+              {bootcampResult && (
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 10 }}>
+                  <div>Scrims: {bootcampResult.scrimWins}W-{bootcampResult.scrimLosses}L</div>
+                  {(["1v1", "2v2", "3v3"] as QueueMode[]).map((q) => (
+                    <div key={q}>
+                      {QUEUE_LABELS[q]}: Game Sense +{bootcampResult.gameSense[q]}, Mechanical Consistency +{bootcampResult.mechanicalConsistency[q]}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+        </SectionShell>
+      ) : null}
+
+      {!s.orgContract && (
         !s.pendingOrgInvite &&
         !s.pendingOrgTryout && (
           <SectionShell title="Status">

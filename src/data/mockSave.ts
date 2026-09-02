@@ -363,6 +363,10 @@ export const mockSave = {
   orgContract: null as OrgContract | null,
   orgNews: [] as OrgNewsEntry[],
   lastOrgScoutCheckDate: DEMO_CURRENT_DATE,
+  // Both null until the player's first session of each kind (only reachable once actually signed, not
+  // during a tryout), see useSaveStore.ts's attendOrgCoaching/runOrgBootcamp.
+  lastOrgCoachingDate: null as SimDate | null,
+  lastOrgBootcampDate: null as SimDate | null,
 
   recentMatches: [
     { queue: "2v2" as const, result: "win" as const, score: "4-2", note: "Clean rotation, one whiffed flip reset attempt." },

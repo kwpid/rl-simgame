@@ -18,8 +18,22 @@ import { addDays, daysBetween, type SimDate } from "@/data/dateUtils";
 import { eraForDate, deriveRankFromMmr, divisionProgressFromMmr, tierRank, type RankTierId, type RankEra } from "@/data/rankSystem";
 import { SEASON_LENGTH_DAYS, seasonEndDate, seasonTitleFor, softResetMmr, applyRewardProgress, rewardTierSequence, REWARD_WINS_REQUIRED, type TitleEntry } from "@/data/seasons";
 import { STREAMERS, eligibleStreamers, pickShowmatchOpponent } from "@/data/showmatches";
-import { meetsOrgRankRequirement, orgTalentDetail, orgTierForTalent, orgScoutingChance, resolveTryoutOutcome, rollContractLengthSeasons, scrimIntervalDaysForTier, ORG_TIER_LABELS } from "@/data/orgs";
+import {
+  meetsOrgRankRequirement,
+  orgTalentDetail,
+  orgTierForTalent,
+  orgScoutingChance,
+  resolveTryoutOutcome,
+  rollContractLengthSeasons,
+  scrimIntervalDaysForTier,
+  coachingIntervalDaysForTier,
+  bootcampIntervalDaysForTier,
+  bootcampScrimWinChance,
+  BOOTCAMP_SCRIM_COUNT,
+  ORG_TIER_LABELS,
+} from "@/data/orgs";
 import { ORG_NAMES, saveRegionToProRegion } from "@/data/tournaments";
+import { QUEUES } from "@/data/queues";
 
 // The save is now a live, mutable Zustand store instead of a frozen constant. `mockSave` in data/mockSave.ts
 // still supplies a placeholder shape at module load (before the real active save finishes loading from
@@ -29,6 +43,19 @@ const BASE_TRAINING_GAIN_PER_HOUR = 55;
 const FATIGUE_COST_PER_HOUR = 6;
 const REST_RECOVERY_PER_HOUR = 15;
 const SLEEP_RECOVERY = 45; // a full "End Day" sleep recovers much more than an hourly rest block
+
+// Org-provided Game Sense/Mechanical Consistency training (see attendOrgCoaching/runOrgBootcamp): both run
+// at a richer efficiency than a solo training session (a real coach/teammates accelerate learning), and
+// both lean specifically into 3v3 since that's the org's actual competitive queue.
+const ORG_3V3_EMPHASIS = 1.6;
+const ORG_COACHING_HOURS = 3;
+const ORG_COACHING_EFFICIENCY = 140;
+// A bootcamp's in-fiction length (used for the calendar/fatigue cost) is deliberately separate from its
+// training-formula "hours" (used only to size the stat gain) — the gain should read as "a serious multi-day
+// block", not scale literally with 96 real hours of the diminishing-returns formula.
+const ORG_BOOTCAMP_CALENDAR_DAYS = 4;
+const ORG_BOOTCAMP_TRAINING_HOURS = 10;
+const ORG_BOOTCAMP_EFFICIENCY = 130;
 
 // EXP only comes from playing ranked, this is the whole point: tactical growth and playlist concepts
 // require a Skill Point, and Skill Points only come from leveling up, which only comes from playing.
@@ -211,6 +238,17 @@ interface SaveStoreState extends SaveData {
    *  `newOrgName`/`newTier`/`newTeammates` are computed by the caller (OrgScreen.tsx, needs live pro-
    *  leaderboard lookups for a churned teammate the same way accepting an invite does). */
   renewOrgContract: (currentDate: SimDate, newOrgName: string, newTier: OrgTier, newTeammates: [string, string]) => void;
+  /** A routine perk of being signed to an org: a coaching session bumps Game Sense and Mechanical
+   *  Consistency in all three queues (Game Sense leaning hardest into 3v3, the org's own competitive
+   *  queue), gated to a tryout-free `orgContract` (a tryout doesn't qualify) and a per-tier cooldown (see
+   *  coachingIntervalDaysForTier). Returns null (no-op) if not signed or still on cooldown. */
+  attendOrgCoaching: () => { gameSense: Record<QueueMode, number>; mechanicalConsistency: Record<QueueMode, number> } | null;
+  /** "A ton of scrims" in one intensive multi-day block: resolves BOOTCAMP_SCRIM_COUNT scrims at once
+   *  (rolled abstractly, not played live) into the contract's running scrim record, plus a bigger Game
+   *  Sense/Mechanical Consistency bump than a single coaching session (again leaning into 3v3). Same signed-
+   *  contract gate as coaching, on its own (much longer) per-tier cooldown. Returns null if not signed or
+   *  still on cooldown. */
+  runOrgBootcamp: () => { scrimWins: number; scrimLosses: number; gameSense: Record<QueueMode, number>; mechanicalConsistency: Record<QueueMode, number> } | null;
 
   /** All three roll the clock forward and, if enough days pass, process one or more ranked-season
    *  rollovers (soft MMR reset, fresh placements, season-title/reward payout) via `processSeasonRollover`. */
@@ -859,6 +897,108 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       text,
     };
     set({ orgContract: nextContract, orgNews: [news, ...state.orgNews].slice(0, ORG_NEWS_LIMIT) });
+  },
+
+  attendOrgCoaching: () => {
+    const state = get();
+    const contract = state.orgContract;
+    if (!contract) return null;
+    if (
+      state.lastOrgCoachingDate &&
+      daysBetween(state.lastOrgCoachingDate, state.currentDate) < coachingIntervalDaysForTier(contract.tier)
+    ) {
+      return null;
+    }
+
+    const gameSenseGains = {} as Record<QueueMode, number>;
+    const consistencyGains = {} as Record<QueueMode, number>;
+    const nextGameSense = { ...state.player.gameSense };
+    const nextConsistency = { ...state.player.mechanicalConsistency };
+    for (const q of QUEUES) {
+      const emphasis = q === "3v3" ? ORG_3V3_EMPHASIS : 1;
+      const gsGain = Math.round(diminishingGain(nextGameSense[q], ORG_COACHING_HOURS, ORG_COACHING_EFFICIENCY, state.player.fatigue) * emphasis);
+      const mcGain = Math.round(diminishingGain(nextConsistency[q], ORG_COACHING_HOURS, ORG_COACHING_EFFICIENCY, state.player.fatigue) * emphasis);
+      nextGameSense[q] = nextGameSense[q] + gsGain;
+      nextConsistency[q] = nextConsistency[q] + mcGain;
+      gameSenseGains[q] = gsGain;
+      consistencyGains[q] = mcGain;
+    }
+
+    set({
+      player: {
+        ...state.player,
+        gameSense: nextGameSense,
+        mechanicalConsistency: nextConsistency,
+        // A classroom/VOD-review session is far less taxing than actually playing, half the usual training cost.
+        fatigue: Math.min(100, state.player.fatigue + FATIGUE_COST_PER_HOUR * ORG_COACHING_HOURS * 0.5),
+      },
+      lastOrgCoachingDate: state.currentDate,
+      totalMinutesPlayed: state.totalMinutesPlayed + ORG_COACHING_HOURS * 60,
+      ...withDateAdvance(state, ORG_COACHING_HOURS),
+    });
+    return { gameSense: gameSenseGains, mechanicalConsistency: consistencyGains };
+  },
+
+  runOrgBootcamp: () => {
+    const state = get();
+    const contract = state.orgContract;
+    if (!contract) return null;
+    if (
+      state.lastOrgBootcampDate &&
+      daysBetween(state.lastOrgBootcampDate, state.currentDate) < bootcampIntervalDaysForTier(contract.tier)
+    ) {
+      return null;
+    }
+
+    const era = eraForDate(state.currentDate);
+    const talent = orgTalentDetail(era, state.currentDate.year, state.foundationStats, state.player.mechanicalConsistency["2v2"], state.player.gameSense["2v2"]);
+    const winChance = bootcampScrimWinChance(talent.overallScore);
+    let scrimWins = 0;
+    let scrimLosses = 0;
+    for (let i = 0; i < BOOTCAMP_SCRIM_COUNT; i++) {
+      if (Math.random() < winChance) scrimWins++;
+      else scrimLosses++;
+    }
+
+    const gameSenseGains = {} as Record<QueueMode, number>;
+    const consistencyGains = {} as Record<QueueMode, number>;
+    const nextGameSense = { ...state.player.gameSense };
+    const nextConsistency = { ...state.player.mechanicalConsistency };
+    for (const q of QUEUES) {
+      const emphasis = q === "3v3" ? ORG_3V3_EMPHASIS : 1;
+      const gsGain = Math.round(diminishingGain(nextGameSense[q], ORG_BOOTCAMP_TRAINING_HOURS, ORG_BOOTCAMP_EFFICIENCY, state.player.fatigue) * emphasis);
+      const mcGain = Math.round(diminishingGain(nextConsistency[q], ORG_BOOTCAMP_TRAINING_HOURS, ORG_BOOTCAMP_EFFICIENCY, state.player.fatigue) * emphasis);
+      nextGameSense[q] = nextGameSense[q] + gsGain;
+      nextConsistency[q] = nextConsistency[q] + mcGain;
+      gameSenseGains[q] = gsGain;
+      consistencyGains[q] = mcGain;
+    }
+
+    const news: OrgNewsEntry = {
+      id: `orgnews_${state.currentDate.year}${state.currentDate.month}${state.currentDate.day}_bootcamp`,
+      date: state.currentDate,
+      text: `Bootcamp with ${contract.orgName}: ${scrimWins}-${scrimLosses} in scrims, noticeable reps gained.`,
+    };
+
+    set({
+      player: {
+        ...state.player,
+        gameSense: nextGameSense,
+        mechanicalConsistency: nextConsistency,
+        fatigue: Math.min(100, state.player.fatigue + FATIGUE_COST_PER_HOUR * ORG_BOOTCAMP_CALENDAR_DAYS * 4),
+      },
+      orgContract: {
+        ...contract,
+        scrimWins: contract.scrimWins + scrimWins,
+        scrimLosses: contract.scrimLosses + scrimLosses,
+        nextScrimDate: addDays(state.currentDate, scrimIntervalDaysForTier(contract.tier)),
+      },
+      lastOrgBootcampDate: state.currentDate,
+      orgNews: [news, ...state.orgNews].slice(0, ORG_NEWS_LIMIT),
+      totalMinutesPlayed: state.totalMinutesPlayed + ORG_BOOTCAMP_CALENDAR_DAYS * 24 * 60,
+      ...withDateAdvance(state, ORG_BOOTCAMP_CALENDAR_DAYS * 24),
+    });
+    return { scrimWins, scrimLosses, gameSense: gameSenseGains, mechanicalConsistency: consistencyGains };
   },
 
   advanceClock: (hours) => {

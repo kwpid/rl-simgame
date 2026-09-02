@@ -131,6 +131,33 @@ export function scrimIntervalDaysForTier(tier: OrgTier): number {
   return 6;
 }
 
+/** Coaching sessions are a routine perk of being signed (not tied to scrim scheduling): a top org can
+ *  afford to bring in a coach far more often than a bubble one just scraping by. */
+export function coachingIntervalDaysForTier(tier: OrgTier): number {
+  if (tier === "top") return 5;
+  if (tier === "mid") return 7;
+  return 10;
+}
+
+/** A bootcamp is a much bigger, rarer commitment than routine coaching or a single scrim: a real team
+ *  retreat the org only runs a handful of times a season, scaled the same way by tier. */
+export function bootcampIntervalDaysForTier(tier: OrgTier): number {
+  if (tier === "top") return 14;
+  if (tier === "mid") return 18;
+  return 24;
+}
+
+/** How many scrims a single bootcamp packs in — "a ton of scrims" in one intensive block, rather than the
+ *  usual one-at-a-time scrim cadence. */
+export const BOOTCAMP_SCRIM_COUNT = 6;
+
+/** Bootcamp scrims are against comparable org-caliber opposition, roughly competitive either way, but a
+ *  stronger prospect (see orgTalentDetail's overallScore) still tilts the record in their favor, same as a
+ *  real scrim would. */
+export function bootcampScrimWinChance(overallScore: number): number {
+  return Math.max(0.25, Math.min(0.75, 0.35 + overallScore * 0.35));
+}
+
 export type ContractRenewalOutcome = "renew" | "promote" | "release";
 
 /** Same win-rate bands as a fresh tryout decide whether a contract gets renewed at all: a strong season of
