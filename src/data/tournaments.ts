@@ -6,7 +6,8 @@
 // stays ranked-only.
 
 import type { StageConfig, TournamentTeam } from "./tournamentFormats";
-import { activeProPlayers, experienceGrowth, isGenerationalTalent, type ProRegion } from "./proPlayers";
+import { activeProPlayers, experienceGrowth, isGenerationalTalent, hashString, type ProRegion } from "./proPlayers";
+import { regionalGrinderRoster } from "./regionalGrinders";
 import { LB_NAMES, type Region } from "./mockSave";
 import type { TitleEntry, TitleGlow } from "./seasons";
 import type { SimDate } from "./dateUtils";
@@ -25,6 +26,10 @@ export function rlcsStructureEra(year: number): RlcsStructureEra {
   if (year <= 2022) return "mid";
   return "modern";
 }
+
+/** 1v1 doesn't exist as its own RLCS discipline before this season — 3v3 is the only RLCS discipline until
+ *  then. (2v2 following a year later, in 2024, isn't built at all yet — a separate future addition.) */
+export const RLCS_1V1_INTRODUCED_SEASON = 2023;
 
 export const RLCS_REGIONS: ProRegion[] = ["NA", "EU", "SAM", "OCE", "MENA"];
 
@@ -132,28 +137,38 @@ const PRO_TEAM_POWER_BASE = 1500;
 const AMATEUR_TEAM_POWER_MIN = 500;
 const AMATEUR_TEAM_POWER_SPREAD = 200;
 
-function buildTeamsFromPros(pros: { name: string; debutYear: number }[], region: ProRegion, currentYear: number, orgNames: string[], idPrefix: string): TournamentTeam[] {
-  const teams: TournamentTeam[] = [];
-  const names = [...orgNames];
-  let proIdx = 0;
-  let teamIdx = 0;
-  while (proIdx + 3 <= pros.length && names.length > 0) {
-    const roster = pros.slice(proIdx, proIdx + 3);
-    proIdx += 3;
-    const orgName = names.shift()!;
-    const experienceYears = Math.max(...roster.map((p) => Math.max(0, currentYear - p.debutYear)));
-    const talentCount = roster.filter((p) => isGenerationalTalent(p.name)).length;
-    const power = PRO_TEAM_POWER_BASE + experienceGrowth(experienceYears, 40, 5000) + talentCount * 120;
-    teams.push({
-      id: `${idPrefix}_${teamIdx}`,
-      name: orgName,
-      region,
-      power: Math.round(power * (0.95 + Math.random() * 0.1)),
-      players: roster.map((p) => p.name),
+interface EligibleRealPlayer {
+  name: string;
+  power: number;
+}
+
+/** Every player legitimately good enough to be on a real RLCS team this year: active pros from the region,
+ *  plus that region's `mid`-band ranked grinders (never `low` band — those read as ranked-ladder regulars,
+ *  not remotely pro-caliber) — never a generic filler name. This is the entire "no filler teams" fix: a
+ *  thin region (APAC/SSA) just fields fewer, entirely real teams instead of padding the field out. */
+function eligibleRealPlayersForRegion(region: ProRegion, currentYear: number): EligibleRealPlayer[] {
+  const pros = activeProPlayers(currentYear)
+    .filter((p) => p.region === region)
+    .map((p) => {
+      const experienceYears = Math.max(0, currentYear - p.debutYear);
+      const talentBonus = isGenerationalTalent(p.name) ? 120 : 0;
+      return { name: p.name, power: PRO_TEAM_POWER_BASE + experienceGrowth(experienceYears, 40, 5000) + talentBonus };
     });
-    teamIdx++;
+  const grinders = regionalGrinderRoster(region, currentYear)
+    .filter((g) => g.band === "mid")
+    .map((g) => ({ name: g.name, power: PRO_TEAM_POWER_BASE * 0.85 }));
+  return [...pros, ...grinders];
+}
+
+/** Deterministic per `seedKey` (not `Math.random`) — this is what lets a region's RLCS roster stay
+ *  identical (locked) for the whole season: same season number + reset seed always shuffles the same way. */
+function seededShuffle<T>(items: T[], seedKey: string): T[] {
+  const arr = [...items];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = hashString(`${seedKey}#${i}`) % (i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
   }
-  return teams;
+  return arr;
 }
 
 function fillWithAmateurTeams(teams: TournamentTeam[], region: ProRegion, fieldSize: number, idPrefix: string): TournamentTeam[] {
@@ -174,23 +189,41 @@ function fillWithAmateurTeams(teams: TournamentTeam[], region: ProRegion, fieldS
   return teams;
 }
 
-/** Builds a regional field of teams for an RLCS qualifier: real active pros from that region (grouped
- *  into teams of 3, named after real-flavor orgs) fill in first, everything else is a generic filler/
- *  amateur team with a lower power rating, so an early-game field (few pros debuted yet) still fills out
- *  realistically. */
-export function generateTeamsForRegion(region: ProRegion, currentYear: number, fieldSize: number, idPrefix: string): TournamentTeam[] {
-  const pros = shuffle(activeProPlayers(currentYear).filter((p) => p.region === region));
-  const teams = buildTeamsFromPros(pros, region, currentYear, [...(ORG_NAMES[region] ?? [])], idPrefix);
-  return fillWithAmateurTeams(teams, region, fieldSize, idPrefix);
+const ALL_PRO_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
+
+/** Builds a region's real, season-locked RLCS field: every team is real active pros and/or mid-band ranked
+ *  grinders from that region, grouped into teams of 3 and named after real-flavor orgs (`ORG_NAMES`) — no
+ *  amateur/filler padding at all, a thin region just fields fewer teams. Deterministic per
+ *  `(region, seasonNumber, resetSeed)` (see `seededShuffle`) — call this again for the same three inputs
+ *  any time this season and the SAME roster comes back, which is what "locked for the season" means at the
+ *  data layer: nothing has to actively enforce the lock, there's just nothing that would change it. */
+export function generateTeamsForRegion(region: ProRegion, currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string): TournamentTeam[] {
+  const eligible = seededShuffle(eligibleRealPlayersForRegion(region, currentYear), `${region}-${seasonNumber}-${resetSeed}`);
+  const orgNames = seededShuffle([...(ORG_NAMES[region] ?? [])], `${region}-${seasonNumber}-${resetSeed}-names`);
+  const teamCount = Math.min(Math.floor(eligible.length / 3), orgNames.length);
+  const teams: TournamentTeam[] = [];
+  for (let i = 0; i < teamCount; i++) {
+    const roster = eligible.slice(i * 3, i * 3 + 3);
+    const power = Math.round(roster.reduce((sum, p) => sum + p.power, 0) / roster.length);
+    teams.push({ id: `${idPrefix}_${i}`, name: orgNames[i], region, power, players: roster.map((p) => p.name) });
+  }
+  return teams;
 }
 
-/** Builds a globally-open field (EWC, ELEAGUE): pulls active pros from every region rather than one, for
- *  events that aren't region-locked the way an RLCS qualifier is. */
-export function generateGlobalTeams(currentYear: number, fieldSize: number, idPrefix: string): TournamentTeam[] {
-  const pros = shuffle(activeProPlayers(currentYear));
-  const allOrgNames = shuffle(Object.values(ORG_NAMES).flat());
-  const teams = buildTeamsFromPros(pros, "NA", currentYear, allOrgNames, idPrefix);
-  return fillWithAmateurTeams(teams, "NA", fieldSize, idPrefix);
+/** Builds a globally-open real field (EWC, ELEAGUE): pulls eligible real players from every region rather
+ *  than one, for events that aren't region-locked the way an RLCS qualifier is. Same locked-per-season
+ *  determinism as `generateTeamsForRegion`. */
+export function generateGlobalTeams(currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string): TournamentTeam[] {
+  const eligible = seededShuffle(ALL_PRO_REGIONS.flatMap((r) => eligibleRealPlayersForRegion(r, currentYear)), `GLOBAL-${seasonNumber}-${resetSeed}`);
+  const orgNames = seededShuffle(Object.values(ORG_NAMES).flat(), `GLOBAL-${seasonNumber}-${resetSeed}-names`);
+  const teamCount = Math.min(Math.floor(eligible.length / 3), orgNames.length);
+  const teams: TournamentTeam[] = [];
+  for (let i = 0; i < teamCount; i++) {
+    const roster = eligible.slice(i * 3, i * 3 + 3);
+    const power = Math.round(roster.reduce((sum, p) => sum + p.power, 0) / roster.length);
+    teams.push({ id: `${idPrefix}_${i}`, name: orgNames[i], region: "NA", power, players: roster.map((p) => p.name) });
+  }
+  return teams;
 }
 
 // --- 1v1 individual-entrant RLCS: players register solo, not as a 3-person org. Reuses the exact same
@@ -459,18 +492,23 @@ export function buildSeasonSchedule(seasonNumber: number, seasonStartDate: SimDa
     fieldSize: RLCS_OPEN_FIELD_SIZE,
   }));
 
-  // 1v1 regionals run alongside the 3v3 ones, staggered the same way across all 7 (larger) region list.
-  RLCS_1V1_REGIONS.forEach((region, i) => {
-    schedule.push({
-      id: `rlcs1v1_s${seasonNumber}_${region}`,
-      kind: "rlcs_1v1_regional" as const,
-      label: `1v1 Regional Season ${seasonNumber} — ${REGION_LABELS[region]}`,
-      region,
-      startDate: addDays(seasonStartDate, i * RLCS_REGION_STAGGER_DAYS),
-      stages: RLCS_1V1_REGIONAL_STAGES,
-      fieldSize: RLCS_1V1_REGIONAL_FIELD_SIZE,
+  // 1v1 RLCS doesn't exist yet as its own discipline before season 2023 — 3v3 is the only RLCS discipline
+  // for the sim's early years, matching the intended fiction (2v2 following a year later, in 2024, isn't
+  // built at all yet, a separate future addition). 1v1 regionals run alongside the 3v3 ones once they do
+  // exist, staggered the same way across all 7 (larger) region list.
+  if (seasonNumber >= RLCS_1V1_INTRODUCED_SEASON) {
+    RLCS_1V1_REGIONS.forEach((region, i) => {
+      schedule.push({
+        id: `rlcs1v1_s${seasonNumber}_${region}`,
+        kind: "rlcs_1v1_regional" as const,
+        label: `1v1 Regional Season ${seasonNumber} — ${REGION_LABELS[region]}`,
+        region,
+        startDate: addDays(seasonStartDate, i * RLCS_REGION_STAGGER_DAYS),
+        stages: RLCS_1V1_REGIONAL_STAGES,
+        fieldSize: RLCS_1V1_REGIONAL_FIELD_SIZE,
+      });
     });
-  });
+  }
 
   // Rival Series only ever existed in the early era (2015-2019), a real developmental league beneath the
   // main 3v3 regional. Staggered the same way, offset slightly so it doesn't share the exact same start

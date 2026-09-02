@@ -188,6 +188,11 @@ export interface OrgContract {
   scrimWins: number;
   scrimLosses: number;
   nextScrimDate: SimDate;
+  /** 0-100, how well this roster actually plays together — a fresh signing starts low, scrims/bootcamps/
+   *  real matches raise it (see useSaveStore.ts's recordOrgScrimResult/runOrgBootcamp/recordOrgTryoutScrim),
+   *  a teammate-churn renewal drops it partway back down. Applied as a 3v3 sim multiplier, see
+   *  data/matchSim.ts's simulateTeamPossession. */
+  chemistry: number;
 }
 
 export interface OrgNewsEntry {
@@ -378,6 +383,11 @@ export const mockSave = {
   // during a tryout), see useSaveStore.ts's attendOrgCoaching/runOrgBootcamp.
   lastOrgCoachingDate: null as SimDate | null,
   lastOrgBootcampDate: null as SimDate | null,
+  // Bumped by the dev "Reset Teams" tool to force every region's real RLCS roster (see
+  // data/tournaments.ts's generateTeamsForRegion/generateGlobalTeams) to reshuffle from scratch, without
+  // needing a whole fresh save. Never changes any other way — a roster only otherwise changes when the
+  // RLCS season number itself rolls over.
+  rlcsTeamsResetSeed: 0,
 
   recentMatches: [
     { queue: "2v2" as const, result: "win" as const, score: "4-2", note: "Clean rotation, one whiffed flip reset attempt.", opponents: [] },

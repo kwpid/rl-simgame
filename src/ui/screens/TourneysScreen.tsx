@@ -92,7 +92,7 @@ export function TourneysScreen() {
   const addTitle = useSaveStore((st) => st.addTitle);
 
   useEffect(() => {
-    ensureProgress(currentDate, currentYear);
+    ensureProgress(currentDate, currentYear, s.startDate.year, s.rlcsTeamsResetSeed);
     Object.keys(instances).forEach((id) => {
       if (instances[id].playerTeamId) queuePlayerMatch(id, currentDate);
     });
@@ -192,11 +192,12 @@ export function TourneysScreen() {
       },
       orgTag: s.orgContract ? orgTagForOrgName(s.orgContract.orgName) : undefined,
       region: playerProRegion,
+      teamChemistry: pendingDiscipline === "3v3" ? s.orgContract?.chemistry : undefined,
     };
     const instanceLabel = instances[pendingInstanceId]?.label ?? "the tournament";
     const pendingInstance = instances[pendingInstanceId];
     const stageProgress = pendingInstance ? pendingInstance.stageIndex / Math.max(1, pendingInstance.stages.length - 1) : 0;
-    startTournamentSeries(self, [pendingMatch.opponentName], pendingMatch.seriesFormat, era, rankedSeasonNumber, currentYear, (wonSeries) => {
+    startTournamentSeries(self, [pendingMatch.opponentName], pendingMatch.seriesFormat, era, rankedSeasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
       const before = useTournamentStore.getState().instances[pendingInstanceId];
       const stageLabelBefore = before?.stages[before.stageIndex]?.label;
       resolvePlayerMatch(pendingInstanceId, wonSeries, currentDate);

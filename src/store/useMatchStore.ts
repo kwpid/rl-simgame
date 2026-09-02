@@ -14,6 +14,7 @@ import { regionalGrinderRoster, type RosterBand } from "@/data/regionalGrinders"
 import { gatherEligibleOpponents, type EligibleCandidate } from "@/data/matchmakingPool";
 import { isOnlineNow, isActivelyQueueing, REGION_HOUR_OFFSET } from "@/data/aiActivity";
 import { regionCompatiblePeers, partyPartnerFor, isCurrentlyPartied } from "@/data/aiParties";
+import { aiTeamChemistryForDate } from "@/data/orgs";
 import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
 import { useSaveStore } from "@/store/useSaveStore";
 import {
@@ -61,6 +62,9 @@ export interface SelfStats {
   /** The player's own real region (see data/tournaments.ts's saveRegionToProRegion), drives the live ping
    *  readout (see data/pingModel.ts) for every other player in the match. */
   region?: ProRegion;
+  /** The player's own signed org roster's chemistry (see mockSave.ts's OrgContract.chemistry), only ever
+   *  set for an org scrim/real RLCS 3v3 match — undefined (no team concept) for ordinary ranked play. */
+  teamChemistry?: number;
 }
 
 /** One queue to search as part of a (possibly multi-queue) search — each queue needs its own rank tier/
@@ -732,6 +736,10 @@ interface MatchStoreState {
     era: RankEra,
     seasonNumber: number,
     currentYear: number,
+    /** Needed to look up a real pro/regional grinder's actual persistent stats (see buildOpponent's
+     *  identical resolution) instead of a fresh one-off jittered roll for tournament teammates/opponents. */
+    currentDate: SimDate,
+    seasonStartDate: SimDate,
     onSeriesComplete: (selfWonSeries: boolean) => void,
     /** 0 (first stage) to 1 (final stage), how far into the bracket this match is — later stages roll a
      *  tougher amateur-tournament baseline (closer to real pro level), on top of the field itself already
@@ -1057,11 +1065,21 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     startTicking(set, get);
   },
 
-  startTournamentSeries: (self, opponentNames, seriesFormat, era, seasonNumber, currentYear, onSeriesComplete, stageProgress = 0, teammateNames = []) => {
+  startTournamentSeries: (self, opponentNames, seriesFormat, era, seasonNumber, currentYear, currentDate, seasonStartDate, onSeriesComplete, stageProgress = 0, teammateNames = []) => {
     clearAllTimers();
     const perTeam = opponentNames.length;
     const queue = perTeam === 1 ? "1v1" : perTeam === 2 ? "2v2" : "3v3";
     logIdCounter = 0;
+    // A real pro/regional grinder tournament teammate or opponent uses their actual persistent Game Sense/
+    // Mechanical Consistency (same resolution buildOpponent uses for ranked matchmaking) instead of a fresh
+    // one-off jittered roll every series — same person, same stats, everywhere they show up.
+    function tournamentPersistentStats(name: string) {
+      const pro = PRO_PLAYERS.find((p) => p.name === name);
+      if (pro) return useProLeaderboardStore.getState().getStats(pro.name, queue, era, currentYear, currentDate, seasonStartDate);
+      const grinderRegion = findGrinderRegion(name, currentYear);
+      if (grinderRegion) return useRegionalRosterStore.getState().getStats(name, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate);
+      return undefined;
+    }
     const players: MatchPlayer[] = [
       {
         name: self.name,
@@ -1075,21 +1093,26 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         points: 0,
         duelMastery: self.duelMastery,
         orgTag: self.orgTag,
+        teamChemistry: self.teamChemistry,
       },
       // Real named teammates (org scrims/tryouts) fill out the rest of the blue side at the same flat
       // elite/competitive strength as the opponents below, rather than the player standing in alone. They're
-      // signed to the exact same org as the player, so they always carry the player's own tag rather than
-      // whatever generateOpponentStats would have randomly assigned.
+      // signed to the exact same org as the player, so they always carry the player's own tag (and the same
+      // team's chemistry) rather than whatever generateOpponentStats would have randomly assigned.
       ...teammateNames.map((name) => ({
-        ...generateOpponentStats(name, "blue" as const, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, undefined, stageProgress),
+        ...generateOpponentStats(name, "blue" as const, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, tournamentPersistentStats(name), stageProgress),
         points: 0,
         orgTag: self.orgTag,
+        teamChemistry: self.teamChemistry,
       })),
       // Tournament opponents are evaluated at flat elite/competitive strength, not their casual ranked
       // ladder MMR, a pro's neglected ranked 3s number would badly understate an actual tournament team.
+      // Their team's chemistry (see aiTeamChemistryForDate) ramps with how far into the RLCS season it is,
+      // not tracked per-team — no per-team scrim history exists for every generated AI team.
       ...opponentNames.map((name) => ({
-        ...generateOpponentStats(name, "orange" as const, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, undefined, stageProgress),
+        ...generateOpponentStats(name, "orange" as const, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, tournamentPersistentStats(name), stageProgress),
         points: 0,
+        teamChemistry: queue === "3v3" ? aiTeamChemistryForDate(currentDate, seasonStartDate) : undefined,
       })),
     ];
     set({

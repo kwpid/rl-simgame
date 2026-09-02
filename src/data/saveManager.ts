@@ -81,12 +81,18 @@ function migrateSaveData(raw: any): SaveData {
   // Coaching/bootcamp didn't exist before, null means "never attended one yet" same as a fresh save.
   if (data.lastOrgCoachingDate === undefined) data.lastOrgCoachingDate = null;
   if (data.lastOrgBootcampDate === undefined) data.lastOrgBootcampDate = null;
+  if (data.rlcsTeamsResetSeed === undefined) data.rlcsTeamsResetSeed = 0;
   // Ongoing post-signing scrims/renewal didn't exist in the very first cut of the org system, an
   // already-signed save from that window is missing these, backfill so it doesn't crash on read.
   if (data.orgContract && data.orgContract.scrimWins === undefined) {
     data.orgContract.scrimWins = 0;
     data.orgContract.scrimLosses = 0;
     data.orgContract.nextScrimDate = data.currentDate;
+  }
+  // Team chemistry didn't exist before — a save already mid-contract gets a middling default rather than
+  // the fresh-signing floor, they've presumably played together a while already.
+  if (data.orgContract && data.orgContract.chemistry === undefined) {
+    data.orgContract.chemistry = 55;
   }
 
   // Social (friends + showmatches) didn't exist before.
@@ -333,6 +339,7 @@ function createFreshSaveData(config: NewSaveConfig): SaveData {
     lastOrgScoutCheckDate: startDate,
     lastOrgCoachingDate: null,
     lastOrgBootcampDate: null,
+    rlcsTeamsResetSeed: 0,
     recentMatches: [],
     titles: [{ id: "rookie", label: "Rookie", glow: "none" }],
     equippedTitleId: "rookie",

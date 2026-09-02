@@ -313,6 +313,7 @@ function DeveloperToolsSection() {
   const resetFillerLeaderboard = useLeaderboardFillerStore((store) => store.resetAll);
   const resetRegionalRoster = useRegionalRosterStore((store) => store.resetAll);
   const resetAllInstances = useTournamentStore((store) => store.resetAllInstances);
+  const resetRlcsTeams = useSaveStore((store) => store.resetRlcsTeams);
 
   const [mmrQueue, setMmrQueue] = useState<QueueMode>("2v2");
   const [mmrValue, setMmrValue] = useState(String(s.rankedProfiles["2v2"].mmr));
@@ -546,6 +547,16 @@ function DeveloperToolsSection() {
                 }}
               >
                 Restart RLCS Season (fresh regionals, re-signs org if under contract)
+              </button>
+            </div>
+            <div className="dev-tools-row">
+              <button
+                className="dev-btn"
+                onClick={() => {
+                  resetRlcsTeams();
+                }}
+              >
+                Reset Teams (regenerates every region's real rosters, also resets RLCS season)
               </button>
             </div>
           </div>

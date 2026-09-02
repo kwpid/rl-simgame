@@ -8,7 +8,7 @@
 import { tierMinMmr, type RankEra } from "./rankSystem";
 import { eliteGameSenseCeiling, eliteFoundationCeiling } from "./matchSim";
 import type { FoundationCategory } from "./mechanics";
-import type { RlcsSeasonPhase } from "./tournaments";
+import { daysBetween, type SimDate } from "./dateUtils";
 
 export type OrgTier = "bubble" | "mid" | "top";
 
@@ -94,19 +94,29 @@ export function orgTierForTalent(overallScore: number): OrgTier {
   return "bubble";
 }
 
-// Real rosters overwhelmingly move in the off-season, an org going shopping mid-split (an injury/burnout
-// replacement, a struggling roster panic-swap) happens, but it's the exception, not the norm.
-const OFF_SEASON_SCOUTING_MULTIPLIER = 1;
-const IN_SEASON_SCOUTING_MULTIPLIER = 0.2;
-
 /** Real orgs (especially anything above bubble tier) don't scout every single rank-eligible player the
  *  moment they clear the floor, most never get picked up at all — this is the chance a rank-eligible,
  *  unsigned/untried player gets a fresh scouting invite on any given check, scaled by how their actual
- *  stats compare to top-player caliber rather than by rank alone, and by whether it's currently the RLCS
- *  off-season (see tournaments.ts's rlcsSeasonPhase) — that's when rosters typically actually shuffle. */
-export function orgScoutingChance(overallScore: number, phase: RlcsSeasonPhase): number {
-  const base = Math.min(0.12, 0.02 + overallScore * 0.1);
-  return base * (phase === "off_season" ? OFF_SEASON_SCOUTING_MULTIPLIER : IN_SEASON_SCOUTING_MULTIPLIER);
+ *  stats compare to top-player caliber rather than by rank alone. Whether scouting can happen AT ALL right
+ *  now (real orgs don't sign new players mid-split) is a separate hard gate on `rlcsSeasonPhase`, see
+ *  useSaveStore.ts's ensureOrgScouting — this function is only ever called once that's already off-season. */
+export function orgScoutingChance(overallScore: number): number {
+  return Math.min(0.12, 0.02 + overallScore * 0.1);
+}
+
+const AI_TEAM_CHEMISTRY_FLOOR = 30;
+const AI_TEAM_CHEMISTRY_RAMP_DAYS = 240; // roughly the Jan-Aug in-season window
+
+/** A generated RLCS/scrim-opponent team's chemistry (see OrgContract.chemistry for the player's own
+ *  equivalent) — no per-team scrim history is tracked for every AI team in every region, so this models it
+ *  as a deterministic ramp over how far into the current RLCS season it is instead: bubble-fresh right after
+ *  a season's rosters lock in, approaching a well-oiled top team's level by the time the season's winding
+ *  down. Cheap and stateless, but still makes "should be fairly hard, especially on bubble teams" true
+ *  early in a season and less true later. */
+export function aiTeamChemistryForDate(currentDate: SimDate, seasonStartDate: SimDate): number {
+  const daysIn = Math.max(0, daysBetween(seasonStartDate, currentDate));
+  const progress = Math.min(1, daysIn / AI_TEAM_CHEMISTRY_RAMP_DAYS);
+  return Math.round(AI_TEAM_CHEMISTRY_FLOOR + progress * (100 - AI_TEAM_CHEMISTRY_FLOOR));
 }
 
 /** A tryout's scrim record decides the outcome once all planned scrims are played: a strong record earns

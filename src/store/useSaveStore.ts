@@ -35,6 +35,7 @@ import {
 import { ORG_NAMES, saveRegionToProRegion, rlcsSeasonPhase } from "@/data/tournaments";
 import { QUEUES } from "@/data/queues";
 import type { ProRegion } from "@/data/proPlayers";
+import { useTournamentStore } from "@/store/useTournamentStore";
 
 // The save is now a live, mutable Zustand store instead of a frozen constant. `mockSave` in data/mockSave.ts
 // still supplies a placeholder shape at module load (before the real active save finishes loading from
@@ -50,6 +51,13 @@ const SLEEP_RECOVERY = 45; // a full "End Day" sleep recovers much more than an 
 // both lean specifically into 3v3 since that's the org's actual competitive queue.
 const ORG_3V3_EMPHASIS = 1.6;
 const ORG_COACHING_HOURS = 3;
+
+// Team chemistry (see OrgContract.chemistry): how well a roster actually plays together, separate from any
+// individual player's own skill — a fresh signing barely knows its teammates yet.
+const CHEMISTRY_FRESH_SIGNING = 20;
+const CHEMISTRY_SCRIM_GAIN_FRACTION = 0.06; // fraction of the remaining gap to 100 closed per ordinary scrim
+const CHEMISTRY_BOOTCAMP_GAIN_FRACTION = 0.35; // "a ton of scrims" closes a lot more of that gap at once
+const CHEMISTRY_CHURN_RETENTION = 0.5; // a teammate swap (or org promotion) keeps only half of it
 const ORG_COACHING_EFFICIENCY = 140;
 // A bootcamp's in-fiction length (used for the calendar/fatigue cost) is deliberately separate from its
 // training-formula "hours" (used only to size the stat gain) — the gain should read as "a serious multi-day
@@ -177,6 +185,11 @@ interface SaveStoreState extends SaveData {
   /** Which regions GC+/SSL ranked matchmaking draws real named opponents from (see useMatchStore.ts's
    *  pickName/gatherEligibleOpponents) — account-wide, not per-queue. Ignored below GC. */
   setSelectedMatchmakingRegions: (regions: ProRegion[]) => void;
+  /** Dev-only: bumps `rlcsTeamsResetSeed` so every region's real RLCS roster reshuffles from scratch (see
+   *  data/tournaments.ts's generateTeamsForRegion/generateGlobalTeams), and also wipes every tracked
+   *  tournament instance (a roster change invalidates any in-progress bracket) — a fresh-team test run
+   *  without needing a whole new save. */
+  resetRlcsTeams: () => void;
   setEquippedTitleId: (id: string | null) => void;
   /** Adds a title to the player's collection if they don't already have it (deduped by id). Used for
    *  tournament results, competitive titles are earned once and kept forever, same as season titles. */
@@ -589,6 +602,11 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     set({ displayName: trimmed.slice(0, 24) });
   },
   setSelectedMatchmakingRegions: (regions) => set({ selectedMatchmakingRegions: regions.length > 0 ? regions : get().selectedMatchmakingRegions }),
+  resetRlcsTeams: () => {
+    const state = get();
+    set({ rlcsTeamsResetSeed: state.rlcsTeamsResetSeed + 1 });
+    useTournamentStore.getState().resetAllInstances();
+  },
   setEquippedTitleId: (id) => set({ equippedTitleId: id }),
   dismissSeasonAnnouncement: () => set({ pendingSeasonAnnouncement: null }),
   dismissPendingPlacementResult: () => set({ pendingPlacementResult: null }),
@@ -760,6 +778,10 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       return;
     }
     if (state.pendingOrgInvite || state.pendingOrgTryout || state.orgContract) return; // one thing at a time
+    // Real orgs don't sign new players mid-split — scouting only happens at all during the RLCS off-season
+    // (an already-signed contract rides out its season untouched regardless, see releaseOrgContract/
+    // renewOrgContract, this only gates whether a FRESH invite can appear).
+    if (rlcsSeasonPhase(currentDate) === "in_season") return;
     if (daysBetween(state.lastOrgScoutCheckDate, currentDate) < ORG_SCOUT_CHECK_INTERVAL_DAYS) return;
 
     const profile = state.rankedProfiles["2v2"];
@@ -769,7 +791,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     }
 
     const talent = orgTalentDetail(era, currentYear, state.foundationStats, state.player.mechanicalConsistency["2v2"], state.player.gameSense["2v2"]);
-    if (Math.random() > orgScoutingChance(talent.overallScore, rlcsSeasonPhase(currentDate))) {
+    if (Math.random() > orgScoutingChance(talent.overallScore)) {
       set({ lastOrgScoutCheckDate: currentDate });
       return;
     }
@@ -847,6 +869,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       scrimWins: 0,
       scrimLosses: 0,
       nextScrimDate: addDays(currentDate, scrimIntervalDaysForTier(tryout.tier)),
+      chemistry: CHEMISTRY_FRESH_SIGNING,
     };
     const news: OrgNewsEntry = {
       id: `orgnews_${currentDate.year}${currentDate.month}${currentDate.day}_signed`,
@@ -862,13 +885,14 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     if (!contract) return;
     const scrimWins = contract.scrimWins + (won ? 1 : 0);
     const scrimLosses = contract.scrimLosses + (won ? 0 : 1);
+    const chemistry = Math.round(contract.chemistry + (100 - contract.chemistry) * CHEMISTRY_SCRIM_GAIN_FRACTION);
     const news: OrgNewsEntry = {
       id: `orgnews_${currentDate.year}${currentDate.month}${currentDate.day}_scrim_${scrimWins + scrimLosses}`,
       date: currentDate,
       text: `Scrim result vs an org-caliber lineup: ${won ? "Won" : "Lost"}.`,
     };
     set({
-      orgContract: { ...contract, scrimWins, scrimLosses, nextScrimDate: addDays(currentDate, scrimIntervalDaysForTier(contract.tier)) },
+      orgContract: { ...contract, scrimWins, scrimLosses, chemistry, nextScrimDate: addDays(currentDate, scrimIntervalDaysForTier(contract.tier)) },
       orgNews: [news, ...state.orgNews].slice(0, ORG_NEWS_LIMIT),
     });
   },
@@ -901,6 +925,9 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       scrimWins: 0,
       scrimLosses: 0,
       nextScrimDate: addDays(currentDate, scrimIntervalDaysForTier(newTier)),
+      // A roster that stays together keeps its chemistry into the new contract; a teammate swap (or a
+      // promotion to a new org, which is really a re-formed roster in spirit) knocks a chunk of it back down.
+      chemistry: churned || promoted ? Math.round(contract.chemistry * CHEMISTRY_CHURN_RETENTION) : contract.chemistry,
     };
     const text = promoted
       ? `Poached by ${newOrgName} (${ORG_TIER_LABELS[newTier]}) after a strong contract, alongside ${newTeammates[0]} and ${newTeammates[1]}.`
@@ -1008,6 +1035,8 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
         scrimWins: contract.scrimWins + scrimWins,
         scrimLosses: contract.scrimLosses + scrimLosses,
         nextScrimDate: addDays(state.currentDate, scrimIntervalDaysForTier(contract.tier)),
+        // "A ton of scrims" builds real chemistry fast — a much bigger jump than one ordinary scrim.
+        chemistry: Math.round(contract.chemistry + (100 - contract.chemistry) * CHEMISTRY_BOOTCAMP_GAIN_FRACTION),
       },
       lastOrgBootcampDate: state.currentDate,
       orgNews: [news, ...state.orgNews].slice(0, ORG_NEWS_LIMIT),

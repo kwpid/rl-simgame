@@ -45,6 +45,11 @@ export interface MatchParticipantStats {
    *  tracked region for an AI opponent) — undefined for an untracked generic filler name. Purely cosmetic,
    *  drives the live ping readout (see data/pingModel.ts), no gameplay effect. */
   region?: ProRegion;
+  /** 0-100, how well this player's REAL TEAM (an org roster or a generated RLCS team, see OrgContract.chemistry
+   *  and data/tournaments.ts) plays together — shared by every player on that team. Undefined for ordinary
+   *  ranked matches (no team concept there), which keeps regular ranked play byte-for-byte unaffected: see
+   *  simulateTeamPossession's neutral fallback. Only ever set for 3v3 org-scrim/tournament matches. */
+  teamChemistry?: number;
 }
 
 const ALL_ORG_NAMES = Object.values(ORG_NAMES).flat();
@@ -613,9 +618,14 @@ export function simulateTeamPossession(
     // A disciplined rotator earns real relief here on top of raw stats — Rotation Discipline is exactly
     // the trained tendency that keeps someone from ball-chasing into a bad spot in the first place.
     const disciplineRelief = (effectivePlaystyle(teammate).rotationDiscipline - 50) / 300;
+    // Team chemistry (org rosters/RLCS teams only, see OrgContract.chemistry) is a SEPARATE axis from any
+    // individual's own discipline — a fresh, unproven roster still miscommunicates rotations even with
+    // individually disciplined players, baseline 70 (an established-but-unremarkable team) reads neutral so
+    // ordinary ranked matches (no team concept, teamChemistry undefined) are byte-for-byte unaffected.
+    const chemistryRelief = ((teammate.teamChemistry ?? 70) - 70) / 300;
     const mistakeChance = Math.max(
       TEAM_ROTATION_MISTAKE_MIN,
-      Math.min(TEAM_ROTATION_MISTAKE_MAX, TEAM_ROTATION_MISTAKE_BASE - rotationPower / TEAM_ROTATION_MISTAKE_SCALE - disciplineRelief)
+      Math.min(TEAM_ROTATION_MISTAKE_MAX, TEAM_ROTATION_MISTAKE_BASE - rotationPower / TEAM_ROTATION_MISTAKE_SCALE - disciplineRelief - chemistryRelief)
     );
     isLastMan = Math.random() < mistakeChance;
     if (isLastMan) {

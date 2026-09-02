@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/ui/components/Card";
+import { StatBar } from "@/ui/components/StatBar";
 import { SectionShell } from "@/ui/components/LockedSection";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
@@ -100,15 +101,15 @@ export function OrgScreen() {
   const proRegion = saveRegionToProRegion(s.region);
   const { seasonNumber: rlcsSeasonNumber } = rlcsSeasonForDate(s.currentDate);
 
-  // Purely informational, not tied to any actual RLCS bracket state: a snapshot of who the top orgs are
-  // right now, regenerated only when the region/year actually changes so it doesn't reshuffle every render.
+  // The SAME real, season-locked rosters the actual RLCS brackets use (see data/tournaments.ts) — a real
+  // snapshot of who the top orgs are this season, not a separate one-off generation.
   const topRegionTeams = useMemo(
-    () => generateTeamsForRegion(proRegion, currentYear, 8, `orgtop_region_${proRegion}_${currentYear}`).sort((a, b) => b.power - a.power),
-    [proRegion, currentYear]
+    () => generateTeamsForRegion(proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, `orgtop_region_${proRegion}`).sort((a, b) => b.power - a.power),
+    [proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed]
   );
   const topWorldTeams = useMemo(
-    () => generateGlobalTeams(currentYear, 10, `orgtop_world_${currentYear}`).sort((a, b) => b.power - a.power),
-    [currentYear]
+    () => generateGlobalTeams(currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, "orgtop_world").sort((a, b) => b.power - a.power),
+    [currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed]
   );
 
   useEffect(() => {
@@ -171,11 +172,12 @@ export function OrgScreen() {
       },
       orgTag: orgTagForOrgName(contract.orgName),
       region: saveRegionToProRegion(s.region),
+      teamChemistry: contract.chemistry,
     };
     const used = new Set([s.displayName, ...contract.teammates]);
     const opponents = randomScrimOpponents(used);
     const seriesFormat = Math.random() < 0.5 ? 5 : 7;
-    startTournamentSeries(self, opponents, seriesFormat, era, s.seasonNumber, currentYear, (wonSeries) => {
+    startTournamentSeries(self, opponents, seriesFormat, era, s.seasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
       recordOrgScrimResult(wonSeries, s.currentDate);
     }, 0.6, contract.teammates);
   }
@@ -199,7 +201,7 @@ export function OrgScreen() {
     const used = new Set([s.displayName, ...tryout.teammates]);
     const opponents = randomScrimOpponents(used);
     const seriesFormat = Math.random() < 0.5 ? 5 : 7;
-    startTournamentSeries(self, opponents, seriesFormat, era, s.seasonNumber, currentYear, (wonSeries) => {
+    startTournamentSeries(self, opponents, seriesFormat, era, s.seasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
       recordOrgTryoutScrim(wonSeries, s.currentDate, rlcsSeasonNumber);
     }, 0.6, tryout.teammates);
   }
@@ -280,6 +282,9 @@ export function OrgScreen() {
             </div>
             <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
               Scrim record this contract: {s.orgContract.scrimWins}W-{s.orgContract.scrimLosses}L
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <StatBar label="Team Chemistry" value={s.orgContract.chemistry} color="var(--accent)" />
             </div>
             {matchPhase === "idle" && daysBetween(s.orgContract.nextScrimDate, s.currentDate) >= 0 && (
               <button className="org-btn org-btn-primary" style={{ marginTop: 12 }} onClick={handlePlayOrgScrim}>

@@ -835,7 +835,7 @@ function ShowmatchesTab() {
       orgTag: s.orgContract ? orgTagForOrgName(s.orgContract.orgName) : undefined,
       region: saveRegionToProRegion(s.region),
     };
-    startTournamentSeries(self, [invite.opponentName], 1, era, s.seasonNumber, s.currentDate.year, (wonSeries) => {
+    startTournamentSeries(self, [invite.opponentName], 1, era, s.seasonNumber, s.currentDate.year, s.currentDate, s.seasonStartDate, (wonSeries) => {
       recordShowmatchResult(wonSeries);
     });
   }

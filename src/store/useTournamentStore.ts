@@ -102,6 +102,10 @@ export interface TournamentInstance {
  *  generated), so the player can see and join it ahead of time, not just the instant it begins. */
 export const REGISTRATION_WINDOW_DAYS = 7;
 
+/** A fresh save doesn't open its very first RLCS season immediately — a few months' on-ramp first, same
+ *  spirit as a real rookie season not starting mid-split. Only ever applies to the save's first season. */
+export const RLCS_FIRST_SEASON_DELAY_DAYS = 90;
+
 /** Simplified, uniform rule for the player's own live journey through a stage: win enough series to
  *  clinch one of the stage's advancing spots, two losses (regardless of the stage's real-world format,
  *  Swiss/GSL included) always ends your run there, a generous safety net so one bad series doesn't feel
@@ -218,15 +222,15 @@ function resolveStage(format: StageConfig["format"], teams: TournamentTeam[], ad
   return runSingleElimStage(teams);
 }
 
-function createInstance(scheduled: ScheduledTournament, currentYear: number): TournamentInstance {
+function createInstance(scheduled: ScheduledTournament, currentYear: number, seasonNumber: number, teamsResetSeed: number): TournamentInstance {
   const teams =
     scheduled.region === null
-      ? generateGlobalTeams(currentYear, scheduled.fieldSize, scheduled.id)
+      ? generateGlobalTeams(currentYear, seasonNumber, teamsResetSeed, scheduled.id)
       : scheduled.kind === "rlcs_1v1_regional"
         ? generateSoloEntrantsForRegion(scheduled.region, currentYear, scheduled.fieldSize, scheduled.id)
         : scheduled.kind === "rlrs_regional"
           ? generateRivalSeriesTeamsForRegion(scheduled.region, scheduled.fieldSize, scheduled.id)
-          : generateTeamsForRegion(scheduled.region, currentYear, scheduled.fieldSize, scheduled.id);
+          : generateTeamsForRegion(scheduled.region, currentYear, seasonNumber, teamsResetSeed, scheduled.id);
   return {
     id: scheduled.id,
     kind: scheduled.kind,
@@ -531,7 +535,11 @@ interface TournamentStoreState {
   /** Creates any scheduled tournament whose start date has arrived and isn't tracked yet, then advances
    *  every non-completed instance based on elapsed in-game days. Safe to call repeatedly, no-op unless
    *  something has actually changed. */
-  ensureProgress: (currentDate: SimDate, currentYear: number) => void;
+  /** `saveStartYear` gates the very first RLCS season a fresh save reaches — see RLCS_FIRST_SEASON_DELAY_DAYS,
+   *  every later season is unaffected. `teamsResetSeed` (see SaveData.rlcsTeamsResetSeed) feeds real team
+   *  roster generation (see data/tournaments.ts's generateTeamsForRegion), bumped by the dev "Reset Teams"
+   *  tool to force a fresh deterministic roster shuffle. */
+  ensureProgress: (currentDate: SimDate, currentYear: number, saveStartYear: number, teamsResetSeed: number) => void;
   /** Registers the player into an open instance, replacing a generic filler entrant with their own. */
   /** Registers the player into an open instance. `teammateNames` (org-signed 3v3 only) fills out the rest
    *  of the roster with the player's real org teammates instead of a lone entrant, replacing a same-size
@@ -557,7 +565,7 @@ interface TournamentStoreState {
 export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
   instances: loadStored(),
 
-  ensureProgress: (currentDate, currentYear) => {
+  ensureProgress: (currentDate, currentYear, saveStartYear, teamsResetSeed) => {
     const state = get();
     // RLCS runs on its own year-long calendar, entirely independent of the player's ranked ladder season
     // (which can reset on its own unrelated cadence) — see rlcsSeasonForDate's doc comment.
@@ -565,14 +573,20 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
     const scheduled = buildSeasonSchedule(seasonNumber, seasonStartDate);
     let changed = false;
     const next: InstanceTable = { ...state.instances };
+    // A brand-new save doesn't drop the player into a live RLCS season on day one — the very first season
+    // only opens once RLCS_FIRST_SEASON_DELAY_DAYS have passed, same on-ramp a real fresh career would get.
+    // Every later season (seasonNumber !== saveStartYear) is unaffected, still opens right on its own Jan 1.
+    const isFirstSeason = seasonNumber === saveStartYear;
+    const firstSeasonGateDate = isFirstSeason ? addDays(seasonStartDate, RLCS_FIRST_SEASON_DELAY_DAYS) : seasonStartDate;
 
     for (const item of scheduled) {
       // Fields open up to REGISTRATION_WINDOW_DAYS before the scheduled start so the player can see and
       // register ahead of time, the stage itself still won't actually resolve until the real start date
       // (daysBetween(stageStartDate, currentDate) stays negative until then, see advanceInstance).
       if (daysBetween(item.startDate, currentDate) < -REGISTRATION_WINDOW_DAYS) continue;
+      if (isFirstSeason && daysBetween(firstSeasonGateDate, currentDate) < 0) continue;
       if (!next[item.id]) {
-        next[item.id] = createInstance(item, currentYear);
+        next[item.id] = createInstance(item, currentYear, seasonNumber, teamsResetSeed);
         changed = true;
         continue;
       }
