@@ -156,6 +156,11 @@ export interface OrgInvite {
   id: string;
   orgName: string;
   tier: OrgTier;
+  /** The two real teammates the player would join if they accept — always 2 of the 3 actual players on
+   *  this season's real, region-locked roster for `orgName` (see data/tournaments.ts's
+   *  generateTeamsForRegion), never a separately-picked pair. Keeps the org's displayed roster (e.g. the
+   *  Org screen's Top Teams list) and the player's own tryout/contract teammates consistent. */
+  teammates: [string, string];
   offeredDate: SimDate;
   expiresDate: SimDate;
 }

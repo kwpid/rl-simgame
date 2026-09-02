@@ -32,7 +32,7 @@ import {
   BOOTCAMP_SCRIM_COUNT,
   ORG_TIER_LABELS,
 } from "@/data/orgs";
-import { ORG_NAMES, saveRegionToProRegion, rlcsSeasonPhase } from "@/data/tournaments";
+import { ORG_NAMES, saveRegionToProRegion, rlcsSeasonPhase, rlcsSeasonForDate, generateTeamsForRegion } from "@/data/tournaments";
 import { QUEUES } from "@/data/queues";
 import type { ProRegion } from "@/data/proPlayers";
 import { useTournamentStore } from "@/store/useTournamentStore";
@@ -117,6 +117,39 @@ const ORG_TRYOUT_SCRIMS_PLANNED = 5;
 const ORG_NEWS_LIMIT = 30;
 const RECENTLY_PLAYED_WITH_LIMIT = 20;
 const MAX_PARTY_MEMBERS = 2; // player + 2 friends = a full 3v3 stack
+
+/** Ties a fresh org invite to one of this season's actual, region-locked real teams (see
+ *  data/tournaments.ts's generateTeamsForRegion) instead of a bare org name with independently-picked
+ *  teammates — the mismatch that used to let an invite say "Org X" while the tryout/contract named
+ *  completely different players than Org X's real roster. Buckets the region's real teams into thirds by
+ *  power to land roughly in the right tier (top/mid/bubble), picks one team from that bucket, and takes 2
+ *  of its 3 real players as the teammates — the 3rd slot is the one the player is trying out to fill.
+ *  Returns null only when the region has no real teams yet at all (too early in a fresh save for enough
+ *  pros to have debuted), same "try again later" case pickTryoutTeammates used to guard against. */
+function pickRealOrgTeam(
+  proRegion: ProRegion,
+  tier: OrgTier,
+  currentYear: number,
+  era: RankEra,
+  currentDate: SimDate,
+  resetSeed: number
+): { orgName: string; teammates: [string, string] } | null {
+  const { seasonNumber, seasonStartDate } = rlcsSeasonForDate(currentDate);
+  const teams = generateTeamsForRegion(proRegion, currentYear, seasonNumber, resetSeed, "orginvite", era, currentDate, seasonStartDate);
+  if (teams.length === 0) return null;
+  const sorted = [...teams].sort((a, b) => b.power - a.power);
+  const bucketSize = Math.max(1, Math.ceil(sorted.length / 3));
+  const bucket =
+    tier === "top" ? sorted.slice(0, bucketSize)
+    : tier === "mid" ? sorted.slice(bucketSize, bucketSize * 2)
+    : sorted.slice(bucketSize * 2);
+  const pool = bucket.length > 0 ? bucket : sorted;
+  const team = pool[Math.floor(Math.random() * pool.length)];
+  const excludedIdx = Math.floor(Math.random() * team.players.length);
+  const teammates = team.players.filter((_, i) => i !== excludedIdx);
+  if (teammates.length < 2) return null;
+  return { orgName: team.name, teammates: [teammates[0], teammates[1]] };
+}
 
 function fatiguePenalty(fatigue: number): number {
   return Math.max(0.5, 1 - fatigue / 200);
@@ -243,10 +276,10 @@ interface SaveStoreState extends SaveData {
    *  a fresh one. Tier is still computed from the player's actual talent, same as a real invite. */
   forceOrgInvite: (currentDate: SimDate, era: RankEra, currentYear: number) => void;
   declineOrgInvite: () => void;
-  /** Accepts the pending invite and starts the tryout: `teammates` are picked by the caller (needs live
-   *  pro-leaderboard MMR lookups, which live outside this store, see OrgScreen.tsx) since they have to be
-   *  real pros in roughly the player's own 2v2 skill range, not a random pair. */
-  acceptOrgInvite: (teammates: [string, string], currentDate: SimDate) => void;
+  /** Accepts the pending invite and starts the tryout, using the exact teammates already carried on the
+   *  invite (see OrgInvite's doc comment) — always 2 of the 3 real players on that org's actual current
+   *  roster, so the tryout/contract never names anyone other than who the invite itself said. */
+  acceptOrgInvite: (currentDate: SimDate) => void;
   /** Records one scrim's result during an active tryout. Once every planned scrim has been played, the
    *  overall win rate decides the outcome (signed as a starter, kept on as a sub, or cut back to free
    *  agency) via `resolveTryoutOutcome`, posting the result to Org News either way. `rlcsSeasonNumber` is
@@ -812,12 +845,16 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
 
     const tier = orgTierForTalent(talent.overallScore);
     const proRegion = saveRegionToProRegion(state.region);
-    const orgNames = ORG_NAMES[proRegion] ?? Object.values(ORG_NAMES).flat();
-    const orgName = orgNames[Math.floor(Math.random() * orgNames.length)];
+    const picked = pickRealOrgTeam(proRegion, tier, currentYear, era, currentDate, state.rlcsTeamsResetSeed);
+    if (!picked) {
+      set({ lastOrgScoutCheckDate: currentDate });
+      return;
+    }
     const invite: OrgInvite = {
-      id: `org_${orgName.replace(/\s+/g, "_")}_${currentDate.year}${currentDate.month}${currentDate.day}`,
-      orgName,
+      id: `org_${picked.orgName.replace(/\s+/g, "_")}_${currentDate.year}${currentDate.month}${currentDate.day}`,
+      orgName: picked.orgName,
       tier,
+      teammates: picked.teammates,
       offeredDate: currentDate,
       expiresDate: addDays(currentDate, ORG_INVITE_EXPIRY_DAYS),
     };
@@ -829,12 +866,13 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const talent = orgTalentDetail(era, currentYear, state.foundationStats, state.player.mechanicalConsistency["2v2"], state.player.gameSense["2v2"]);
     const tier = orgTierForTalent(talent.overallScore);
     const proRegion = saveRegionToProRegion(state.region);
-    const orgNames = ORG_NAMES[proRegion] ?? Object.values(ORG_NAMES).flat();
-    const orgName = orgNames[Math.floor(Math.random() * orgNames.length)];
+    const picked = pickRealOrgTeam(proRegion, tier, currentYear, era, currentDate, state.rlcsTeamsResetSeed);
+    if (!picked) return; // no real team in this region yet (too early in a fresh save), nothing to force
     const invite: OrgInvite = {
-      id: `org_${orgName.replace(/\s+/g, "_")}_${currentDate.year}${currentDate.month}${currentDate.day}`,
-      orgName,
+      id: `org_${picked.orgName.replace(/\s+/g, "_")}_${currentDate.year}${currentDate.month}${currentDate.day}`,
+      orgName: picked.orgName,
       tier,
+      teammates: picked.teammates,
       offeredDate: currentDate,
       expiresDate: addDays(currentDate, ORG_INVITE_EXPIRY_DAYS),
     };
@@ -843,14 +881,14 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
 
   declineOrgInvite: () => set({ pendingOrgInvite: null }),
 
-  acceptOrgInvite: (teammates, currentDate) => {
+  acceptOrgInvite: (currentDate) => {
     const state = get();
     const invite = state.pendingOrgInvite;
     if (!invite) return;
     const tryout: OrgTryout = {
       orgName: invite.orgName,
       tier: invite.tier,
-      teammates,
+      teammates: invite.teammates,
       scrimsPlanned: ORG_TRYOUT_SCRIMS_PLANNED,
       scrimsPlayed: 0,
       scrimWins: 0,
@@ -860,7 +898,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const news: OrgNewsEntry = {
       id: `orgnews_${currentDate.year}${currentDate.month}${currentDate.day}_tryout`,
       date: currentDate,
-      text: `${invite.orgName} invited you to tryouts, partnered with ${teammates[0]} and ${teammates[1]}.`,
+      text: `${invite.orgName} invited you to tryouts, partnered with ${invite.teammates[0]} and ${invite.teammates[1]}.`,
     };
     set({ pendingOrgInvite: null, pendingOrgTryout: tryout, orgNews: [news, ...state.orgNews].slice(0, ORG_NEWS_LIMIT) });
   },

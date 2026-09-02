@@ -63,11 +63,6 @@ function pickOrgPros(
   return shuffled.slice(0, count).map((p) => p.name);
 }
 
-function pickTryoutTeammates(playerMmr: number, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate, proRegion: string): [string, string] | null {
-  const picked = pickOrgPros(2, playerMmr, era, currentYear, currentDate, seasonStartDate, proRegion, []);
-  return picked.length === 2 ? [picked[0], picked[1]] : null;
-}
-
 function randomScrimOpponents(used: Set<string>): string[] {
   const names: string[] = [];
   while (names.length < 3) {
@@ -153,9 +148,7 @@ export function OrgScreen() {
   }, [rlcsSeasonNumber, s.orgContract?.signedSeason, s.orgContract?.lengthSeasons]);
 
   function handleAcceptInvite() {
-    const teammates = pickTryoutTeammates(playerMmr, era, currentYear, s.currentDate, s.seasonStartDate, proRegion);
-    if (!teammates) return; // no plausible teammates yet (very early era, too few pros debuted), try again later
-    acceptOrgInvite(teammates, s.currentDate);
+    acceptOrgInvite(s.currentDate);
   }
 
   function handlePlayOrgScrim() {

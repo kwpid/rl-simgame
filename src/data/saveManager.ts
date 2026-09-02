@@ -74,6 +74,10 @@ function migrateSaveData(raw: any): SaveData {
   // anywhere — drop it in favor of the real invite/tryout/contract/news shape.
   delete data.orgStatus;
   if (data.pendingOrgInvite === undefined) data.pendingOrgInvite = null;
+  // Invites used to pick teammates separately at accept-time; they now carry the real team's roster
+  // up front (see OrgInvite's doc comment). A save mid-invite from before that change is missing it —
+  // just drop the stale invite rather than guess teammates, a fresh one rolls again on its own.
+  if (data.pendingOrgInvite && data.pendingOrgInvite.teammates === undefined) data.pendingOrgInvite = null;
   if (data.pendingOrgTryout === undefined) data.pendingOrgTryout = null;
   if (data.orgContract === undefined) data.orgContract = null;
   if (data.orgNews === undefined) data.orgNews = [];
