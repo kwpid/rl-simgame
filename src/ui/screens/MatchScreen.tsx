@@ -13,6 +13,7 @@ import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 import { regionalGrinderRoster } from "@/data/regionalGrinders";
 import { computeMmrDelta, computeOverallRating } from "@/data/matchSim";
 import { OrgTag } from "@/ui/components/OrgTag";
+import { ARENA_MAPS, mapImagePath } from "@/data/maps";
 import { livePingMs } from "@/data/pingModel";
 
 const ALL_MATCHMAKING_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
@@ -138,6 +139,9 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
   const continueSeries = useMatchStore((m) => m.continueSeries);
   const queueDurationMs = useMatchStore((m) => m.queueDurationMs);
   const autoQueueModes = useMatchStore((m) => m.autoQueueModes);
+  const mapId = useMatchStore((m) => m.mapId);
+  const map = ARENA_MAPS.find((m) => m.id === mapId) ?? null;
+  const mapImage = mapImagePath(map);
   const isSeriesMatch = seriesFormat > 1;
   const seriesDecided = isSeriesMatch && (seriesWinsSelf >= Math.ceil(seriesFormat / 2) || seriesWinsOpp >= Math.ceil(seriesFormat / 2));
   const recordMatchResult = useSaveStore((s) => s.recordMatchResult);
@@ -259,6 +263,8 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
 
   return (
     <div className="live-match fade-in">
+      {mapImage && <div className="match-bg" style={{ backgroundImage: `url(${mapImage})` }} />}
+      {map && <div className="match-map-label">{map.name}</div>}
       {phase === "post_match" && isSeriesMatch && (
         <div className={"result-banner" + (resultWin ? " result-win" : " result-loss")}>
           <span>
@@ -433,11 +439,31 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
 
       <style>{`
         .live-match {
+          position: relative;
           max-width: 720px;
           margin: 0 auto;
           padding: var(--space-5) var(--space-4);
           min-height: 100vh;
           box-sizing: border-box;
+        }
+        .match-bg {
+          position: absolute;
+          inset: 0;
+          background-size: cover;
+          background-position: center;
+          background-repeat: no-repeat;
+          opacity: 0.22;
+          pointer-events: none;
+        }
+        .match-map-label {
+          position: relative;
+          text-align: center;
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.6px;
+          text-transform: uppercase;
+          color: var(--text-tertiary);
+          margin-bottom: var(--space-2);
         }
         .result-banner {
           display: flex;

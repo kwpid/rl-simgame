@@ -7,6 +7,7 @@ import type { SimDate } from "@/data/dateUtils";
 import { LB_NAMES } from "@/data/mockSave";
 import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { rlcsSeasonForDate, orgTagForOrgName, saveRegionToProRegion, generateTeamsForRegion } from "@/data/tournaments";
+import { randomMapForDate, mapsForSeries } from "@/data/maps";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
@@ -732,6 +733,16 @@ interface MatchStoreState {
   duelNextAttacker: "blue" | "orange" | null;
   duelIsCounter: boolean;
 
+  /** Which real arena is the background for the CURRENT game (see data/maps.ts), or null before a match
+   *  has ever started. Ranked rolls a fresh random unlocked map every time it pops (finalizeFoundMatch);
+   *  a tournament series picks its whole `seriesMapIds` order up front (startTournamentSeries) and this
+   *  just tracks which one of those is showing right now, advanced by continueSeries each game. */
+  mapId: string | null;
+  /** The full per-game map order for the current best-of-N series (data/maps.ts's mapsForSeries), indexed
+   *  by `seriesGameNumber - 1`. Empty outside a tournament series — ranked doesn't need an order, it just
+   *  rerolls `mapId` directly each match. */
+  seriesMapIds: string[];
+
   /** Best-of-N series support (tournament matches): ranked play always stays at seriesFormat 1, decided
    *  after its one game, so none of this changes ranked behavior. A tournament match sets seriesFormat
    *  to 3/5/7 via `startTournamentSeries`, `continueSeries` (the post-game "Continue" for a series match)
@@ -969,6 +980,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   fieldY: 50,
   duelNextAttacker: null,
   duelIsCounter: false,
+  mapId: null,
+  seriesMapIds: [],
 
   startQueue: (requests, hourOfDay, era, seasonNumber, currentYear, currentDate, seasonStartDate, partyMemberNames, partyFriendStats, rlcsTeamsResetSeed = 0) => {
     clearAllTimers();
@@ -1030,6 +1043,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         resultWin: null,
         selfGoals: 0,
         selfSaves: 0,
+        mapId: randomMapForDate(currentDate).id,
+        seriesMapIds: [],
       });
       foundTimer = setTimeout(() => {
         get().acknowledgeFound();
@@ -1156,6 +1171,9 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         teamChemistry: queue === "3v3" ? aiTeamChemistryForDate(currentDate, seasonStartDate) : undefined,
       })),
     ];
+    // A fixed map per game, picked without repeats up front (same real RLCS series map rotation) rather
+    // than a fresh random roll each game like ranked gets.
+    const seriesMapIds = mapsForSeries(currentDate, seriesFormat).map((m) => m.id);
     set({
       phase: "found",
       queue,
@@ -1179,6 +1197,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       fieldY: 50,
       duelNextAttacker: null,
       duelIsCounter: false,
+      seriesMapIds,
+      mapId: seriesMapIds[0] ?? null,
     });
     foundTimer = setTimeout(() => {
       get().acknowledgeFound();
@@ -1236,6 +1256,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       fieldY: 50,
       duelNextAttacker: null,
       duelIsCounter: false,
+      mapId: state.seriesMapIds[state.seriesGameNumber] ?? state.mapId,
     });
     startTicking(set, get);
   },
