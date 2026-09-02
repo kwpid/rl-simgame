@@ -11,6 +11,7 @@ import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
 import { activeProPlayers } from "@/data/proPlayers";
 import { flattenProgress } from "@/data/matchSim";
+import { orgTagForOrgName } from "@/data/tournaments";
 import { seasonEndDate, rewardTierSequence, REWARD_WINS_REQUIRED } from "@/data/seasons";
 import { daysBetween } from "@/data/dateUtils";
 
@@ -133,6 +134,7 @@ export function RankedScreen() {
           queueConceptMastery: flattenProgress(s.queueConceptProgress),
           playstyle: s.playstyleProfiles[q],
         },
+        orgTag: s.orgContract ? orgTagForOrgName(s.orgContract.orgName) : undefined,
       },
     };
   }

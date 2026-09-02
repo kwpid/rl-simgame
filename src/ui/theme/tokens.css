@@ -130,3 +130,11 @@ button {
 .train-btn-hour {
   padding: 8px 10px;
 }
+
+/* Org tag prefix, see OrgTag.tsx: shown before a name when signed to an org (player or AI). */
+.org-tag {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 0.9em;
+  margin-right: 3px;
+}

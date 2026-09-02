@@ -6,7 +6,7 @@ import type { TitleEntry } from "@/data/seasons";
 import type { SimDate } from "@/data/dateUtils";
 import { LB_NAMES } from "@/data/mockSave";
 import { activeProPlayers, PRO_PLAYERS } from "@/data/proPlayers";
-import { rlcsSeasonForDate } from "@/data/tournaments";
+import { rlcsSeasonForDate, orgTagForOrgName } from "@/data/tournaments";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
 import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
@@ -50,6 +50,9 @@ export interface SelfStats {
    *  duel engine so a named mechanic in the log is actually one they've trained, not a generic stand-in.
    *  Omitted entirely for non-1v1 matches (that engine doesn't use it yet). */
   duelMastery?: DuelMastery;
+  /** [TAG] shown before the player's own name, derived from their live orgContract (see mockSave.ts), or
+   *  undefined when between orgs/never signed. */
+  orgTag?: string;
 }
 
 /** One queue to search as part of a (possibly multi-queue) search — each queue needs its own rank tier/
@@ -278,6 +281,7 @@ function generateRoster(
       points: 0,
       partyId: selfPartyId,
       duelMastery: self.duelMastery,
+      orgTag: self.orgTag,
     },
   ];
 
@@ -405,6 +409,7 @@ function buildAutoQueueRequest(save: ReturnType<typeof useSaveStore.getState>, e
         queueConceptMastery: flattenProgress(save.queueConceptProgress),
         playstyle: save.playstyleProfiles[q],
       },
+      orgTag: save.orgContract ? orgTagForOrgName(save.orgContract.orgName) : undefined,
     },
   };
 }
@@ -762,12 +767,16 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         mmr: 0,
         points: 0,
         duelMastery: self.duelMastery,
+        orgTag: self.orgTag,
       },
       // Real named teammates (org scrims/tryouts) fill out the rest of the blue side at the same flat
-      // elite/competitive strength as the opponents below, rather than the player standing in alone.
+      // elite/competitive strength as the opponents below, rather than the player standing in alone. They're
+      // signed to the exact same org as the player, so they always carry the player's own tag rather than
+      // whatever generateOpponentStats would have randomly assigned.
       ...teammateNames.map((name) => ({
         ...generateOpponentStats(name, "blue" as const, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, undefined, stageProgress),
         points: 0,
+        orgTag: self.orgTag,
       })),
       // Tournament opponents are evaluated at flat elite/competitive strength, not their casual ranked
       // ladder MMR, a pro's neglected ranked 3s number would badly understate an actual tournament team.

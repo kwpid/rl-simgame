@@ -10,6 +10,7 @@ import { PRO_PLAYERS } from "@/data/proPlayers";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
 import { computeMmrDelta, computeOverallRating } from "@/data/matchSim";
+import { OrgTag } from "@/ui/components/OrgTag";
 
 const MATCHUP_STATS: { key: FoundationCategory | "gameSense" | "mechanicalConsistency"; label: string }[] = [
   { key: "gameSense", label: "Game Sense" },
@@ -289,7 +290,8 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
               <div className="roster-identity">
                 <span>
                   {p.partyId && <PartyIcon />}
-                  {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} {p.name}
+                  {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} <OrgTag tag={p.orgTag} />
+                  {p.name}
                 </span>
                 {p.title && (
                   <span
@@ -316,7 +318,8 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
               <div className="roster-identity">
                 <span>
                   {p.partyId && <PartyIcon />}
-                  {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} {p.name}
+                  {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} <OrgTag tag={p.orgTag} />
+                  {p.name}
                 </span>
                 {p.title && (
                   <span
@@ -368,6 +371,7 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
                   {[...blueTeam, ...orangeTeam].map((p) => (
                     <th key={p.name} className={"matchup-player-header" + (p.isSelf ? " matchup-col-self" : "")}>
                       {p.partyId && <PartyIcon />}
+                      <OrgTag tag={p.orgTag} />
                       {p.name}
                     </th>
                   ))}

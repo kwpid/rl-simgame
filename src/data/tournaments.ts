@@ -64,6 +64,50 @@ export const ORG_NAMES: Record<ProRegion, string[]> = {
   SSA: ["Nashi Esports"],
 };
 
+/** Real orgs go by a short tag in-game, not their full name (see the [TAG] shown next to a signed player's
+ *  name in ranked/matches, OrgTag.tsx). 2-4 characters each, matching the real-world brand where there is
+ *  one. Every entry in ORG_NAMES has one; anything not listed here (shouldn't happen, but stay safe) falls
+ *  back to a truncated slice of the name itself, see orgTagForOrgName below. */
+export const ORG_ABBREVIATIONS: Record<string, string> = {
+  NRG: "NRG",
+  "G2 Esports": "G2",
+  Complexity: "COL",
+  "Spacestation Gaming": "SSG",
+  Version1: "V1",
+  "The Aquarium": "AQUA",
+  "Shopify Rebellion": "SR",
+  "FaZe Clan": "FAZE",
+  "Karmine Corp": "KC",
+  "Team Vitality": "VIT",
+  BDS: "BDS",
+  "Moist Esports": "MST",
+  Solary: "SOLA",
+  "Team Queso": "TQ",
+  "Ninjas in Pyjamas": "NIP",
+  "Team Falcons EU": "FLCN",
+  FURIA: "FUR",
+  "paiN Gaming": "PAIN",
+  Isurus: "ISU",
+  "Six Karma": "SIX",
+  "Case Esports": "CASE",
+  Mindfreak: "MF",
+  Rooster: "ROOS",
+  "Fugitives Gaming": "FUGI",
+  "Ground Zero Gaming": "GZG",
+  "Team Falcons": "FLCN",
+  Quadrant: "QUAD",
+  "5Levels": "5LVL",
+  "Anubis Gaming": "ANU",
+  "Talon Esports": "TLN",
+  "Bleed Esports": "BLD",
+  ORDER: "ORD",
+  "Nashi Esports": "NSH",
+};
+
+export function orgTagForOrgName(orgName: string): string {
+  return ORG_ABBREVIATIONS[orgName] ?? orgName.replace(/\s+/g, "").slice(0, 4).toUpperCase();
+}
+
 /** Deterministic-ish filler org name pool for teams that couldn't be filled with real pros (mostly early
  *  years before enough pros have debuted, or amateur open-bracket teams). */
 const FILLER_ORG_SUFFIXES = ["Esports", "Gaming", "Academy", ".gg", "Athletics", "Collective"];

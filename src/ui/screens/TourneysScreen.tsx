@@ -22,7 +22,7 @@ import type { TitleEntry } from "@/data/seasons";
 import { eraForDate } from "@/data/rankSystem";
 import { daysBetween } from "@/data/dateUtils";
 import { flattenProgress } from "@/data/matchSim";
-import type { TournamentKind } from "@/data/tournaments";
+import { orgTagForOrgName, type TournamentKind } from "@/data/tournaments";
 
 type Mode = "3v3" | "1v1";
 
@@ -171,6 +171,7 @@ export function TourneysScreen() {
         queueConceptMastery: flattenProgress(s.queueConceptProgress),
         playstyle: s.playstyleProfiles[pendingDiscipline],
       },
+      orgTag: s.orgContract ? orgTagForOrgName(s.orgContract.orgName) : undefined,
     };
     const instanceLabel = instances[pendingInstanceId]?.label ?? "the tournament";
     const pendingInstance = instances[pendingInstanceId];

@@ -8,6 +8,7 @@ import { deriveRankFromMmr, tierMinMmr, type RankEra, type RankQueue, type RankT
 import { pickAiTitle, type TitleEntry } from "./seasons";
 import { PRO_PLAYERS, isGenerationalTalent, experienceGrowth, hashString } from "./proPlayers";
 import type { PlaystyleProfile } from "./mockSave";
+import { ORG_NAMES, orgTagForOrgName } from "./tournaments";
 
 /** The human player's real per-mechanic/per-concept training and playstyle tendency, only ever present
  *  for `isSelf` — an AI opponent has no individual trained-mechanic breakdown, the 1v1 duel engine falls
@@ -36,6 +37,27 @@ export interface MatchParticipantStats {
    *  jitter around the human player's own MMR for a generic AI (matchmaking pairs you near your rank). */
   mmr: number;
   duelMastery?: DuelMastery;
+  /** 2-4 character org tag shown as [TAG] before this player's name (see OrgTag.tsx), or undefined if
+   *  they're not signed to anything. For the human player this comes from their own orgContract; for an AI
+   *  opponent see orgTagForOpponent below. */
+  orgTag?: string;
+}
+
+const ALL_ORG_NAMES = Object.values(ORG_NAMES).flat();
+
+/** Whether a given AI opponent is currently signed to an org, and which one, deterministic per name so the
+ *  same opponent always reads as tagged (or not) and with the same org match to match, rather than a fresh
+ *  coinflip every game. Gated by rank tier since only GC/SSL-caliber play is realistically org-scouted (see
+ *  data/orgs.ts's own MMR gate for the player's identical career track), and a real named pro is far more
+ *  likely to already be signed than a generic filler regular at the same rank. */
+function orgTagForOpponent(name: string, effectiveTier: RankTierId, isPro: boolean): string | undefined {
+  const eligible = effectiveTier === "grand_champion" || effectiveTier === "ssl";
+  if (!eligible) return undefined;
+  const seed = hashString(name + "#org");
+  const chance = isPro ? 0.75 : 0.18;
+  if (((seed >>> 0) % 1000) / 1000 >= chance) return undefined;
+  const orgName = ALL_ORG_NAMES[Math.abs(seed >> 3) % ALL_ORG_NAMES.length];
+  return orgTagForOrgName(orgName);
 }
 
 /** The real trained profile when present (the human player, via duelMastery), else a believable proxy
@@ -279,6 +301,7 @@ export function generateOpponentStats(
     foundationStats,
     title,
     mmr,
+    orgTag: orgTagForOpponent(name, effectiveTier, !!pro),
   };
 }
 

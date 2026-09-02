@@ -5,7 +5,7 @@ import { useSaveStore } from "@/store/useSaveStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { activeProPlayers } from "@/data/proPlayers";
-import { saveRegionToProRegion, rlcsSeasonForDate, ORG_NAMES } from "@/data/tournaments";
+import { saveRegionToProRegion, rlcsSeasonForDate, ORG_NAMES, orgTagForOrgName } from "@/data/tournaments";
 import {
   ORG_TIER_LABELS,
   meetsOrgRankRequirement,
@@ -141,6 +141,7 @@ export function OrgScreen() {
         queueConceptMastery: flattenProgress(s.queueConceptProgress),
         playstyle: s.playstyleProfiles["3v3"],
       },
+      orgTag: orgTagForOrgName(contract.orgName),
     };
     const used = new Set([s.displayName, ...contract.teammates]);
     const opponents = randomScrimOpponents(used);
