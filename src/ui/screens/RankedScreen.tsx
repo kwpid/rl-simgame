@@ -5,7 +5,7 @@ import { DivisionProgress } from "@/ui/components/DivisionProgress";
 import type { QueueMode } from "@/data/mockSave";
 import { eraForDate, tierColor, divisionLabel, divisionCount, deriveRankFromMmr, tierMinMmr, TIER_LABELS } from "@/data/rankSystem";
 import { QUEUES, QUEUE_LABELS, QUEUE_ICONS } from "@/data/queues";
-import { useMatchStore, isTopmostTierForEra } from "@/store/useMatchStore";
+import { useMatchStore } from "@/store/useMatchStore";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
@@ -118,7 +118,6 @@ export function RankedScreen() {
   const [autoQueueChecked, setAutoQueueChecked] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const isTopTierQueue = profile.rankTier === "grand_champion" || profile.rankTier === "ssl";
-  const isTopmostQueue = isTopmostTierForEra(profile.rankTier, era);
 
   useEffect(() => {
     if (matchPhase !== "searching" || searchStartedAt === null) return;
@@ -365,16 +364,12 @@ export function RankedScreen() {
                 <button className="search-btn search-btn-active" onClick={cancelQueue}>
                   Searching{queuedModes.length > 1 ? ` (${queuedModes.map((q) => QUEUE_LABELS[q]).join(", ")})` : ""}
                   <span className="dots" />
-                  <div className="queue-timer">
-                    {isTopmostQueue ? (
-                      elapsedMs < 20000
-                        ? `elapsed ${formatMmSs(elapsedMs)} — looking for someone online in your region(s)`
-                        : elapsedMs < 60000
-                          ? `elapsed ${formatMmSs(elapsedMs)} — widening MMR search range`
-                          : `elapsed ${formatMmSs(elapsedMs)} — no one else appears to be online right now, still searching`
-                    ) : (
-                      <>~{formatMmSs(estimatedQueueDurationsMs[queue] ?? 0)} est. &middot; elapsed {formatMmSs(elapsedMs)}</>
-                    )}
+                  <div
+                    className="queue-timer"
+                    title="Est. Time isn't exact — it's a rough calculation based on how populated this playlist is in your selected region(s) right now."
+                  >
+                    <span>Time Elapsed: {formatMmSs(elapsedMs)}</span>
+                    <span>Est. Time: {formatMmSs(estimatedQueueDurationsMs[queue] ?? 0)}</span>
                   </div>
                 </button>
               )}
@@ -710,6 +705,8 @@ export function RankedScreen() {
           border: 1px solid var(--border-strong);
         }
         .queue-timer {
+          display: flex;
+          gap: 10px;
           font-size: 11px;
           font-weight: 500;
           color: var(--text-tertiary);
