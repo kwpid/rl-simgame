@@ -49,12 +49,19 @@ const ALL_ORG_NAMES = Object.values(ORG_NAMES).flat();
  *  same opponent always reads as tagged (or not) and with the same org match to match, rather than a fresh
  *  coinflip every game. Gated by rank tier since only GC/SSL-caliber play is realistically org-scouted (see
  *  data/orgs.ts's own MMR gate for the player's identical career track), and a real named pro is far more
- *  likely to already be signed than a generic filler regular at the same rank. */
-function orgTagForOpponent(name: string, effectiveTier: RankTierId, isPro: boolean): string | undefined {
+ *  likely to already be signed than a generic filler regular at the same rank. Barely cracking GC isn't
+ *  signed-pro territory yet though, so this also scales down hard for anyone still shallow in the tier (a
+ *  fresh GC lobby full of org tags reads wrong), and the pre-2020 pro scene was much smaller/less saturated,
+ *  so a legacy-era opponent is tagged far less often than an otherwise-identical modern one. */
+function orgTagForOpponent(name: string, effectiveTier: RankTierId, isPro: boolean, era: RankEra, mmr: number, queue: RankQueue): string | undefined {
   const eligible = effectiveTier === "grand_champion" || effectiveTier === "ssl";
   if (!eligible) return undefined;
+  const tierFloor = tierMinMmr(effectiveTier, era, queue);
+  const depth = Math.max(0, Math.min(1, (mmr - tierFloor) / 300));
+  const eraFactor = era === "modern" ? 1 : 0.5;
   const seed = hashString(name + "#org");
-  const chance = isPro ? 0.75 : 0.18;
+  const baseChance = isPro ? 0.4 : 0.05;
+  const chance = baseChance * (0.15 + 0.85 * depth) * eraFactor;
   if (((seed >>> 0) % 1000) / 1000 >= chance) return undefined;
   const orgName = ALL_ORG_NAMES[Math.abs(seed >> 3) % ALL_ORG_NAMES.length];
   return orgTagForOrgName(orgName);
@@ -301,7 +308,7 @@ export function generateOpponentStats(
     foundationStats,
     title,
     mmr,
-    orgTag: orgTagForOpponent(name, effectiveTier, !!pro),
+    orgTag: orgTagForOpponent(name, effectiveTier, !!pro, era, mmr, proQueueOverride?.queue ?? queue),
   };
 }
 

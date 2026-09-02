@@ -406,6 +406,18 @@ export function rlcsSeasonForDate(date: SimDate): { seasonNumber: number; season
   return { seasonNumber: date.year, seasonStartDate: { year: date.year, month: 1, day: 1 } };
 }
 
+export type RlcsSeasonPhase = "in_season" | "off_season";
+
+/** Regionals kick off in January and Worlds typically wraps up by around August (staggered regionals +
+ *  reactive major/Worlds delays, see useTournamentStore.ts, land somewhere in that window in practice) —
+ *  September through December reads as the RLCS off-season, when rosters shuffle and orgs go shopping for
+ *  new talent (see orgs.ts's scouting chance) rather than mid-split roster moves being the norm. Deliberately
+ *  a simple fixed calendar split rather than tied to actual instance completion, this only needs to be
+ *  "typically" right, not track the exact live bracket state. */
+export function rlcsSeasonPhase(date: SimDate): RlcsSeasonPhase {
+  return date.month >= 1 && date.month <= 8 ? "in_season" : "off_season";
+}
+
 /** Fallback for a real named pro's RLCS title history when a fresh save starts mid-timeline (e.g. season
  *  12) and so has zero actually-completed tournament instances to scan for real past placements. A
  *  veteran pro with an early enough debut year would realistically already have competed in, and plausibly

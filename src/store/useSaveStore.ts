@@ -32,7 +32,7 @@ import {
   BOOTCAMP_SCRIM_COUNT,
   ORG_TIER_LABELS,
 } from "@/data/orgs";
-import { ORG_NAMES, saveRegionToProRegion } from "@/data/tournaments";
+import { ORG_NAMES, saveRegionToProRegion, rlcsSeasonPhase } from "@/data/tournaments";
 import { QUEUES } from "@/data/queues";
 
 // The save is now a live, mutable Zustand store instead of a frozen constant. `mockSave` in data/mockSave.ts
@@ -753,7 +753,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     }
 
     const talent = orgTalentDetail(era, currentYear, state.foundationStats, state.player.mechanicalConsistency["2v2"], state.player.gameSense["2v2"]);
-    if (Math.random() > orgScoutingChance(talent.overallScore)) {
+    if (Math.random() > orgScoutingChance(talent.overallScore, rlcsSeasonPhase(currentDate))) {
       set({ lastOrgScoutCheckDate: currentDate });
       return;
     }

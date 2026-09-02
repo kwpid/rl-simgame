@@ -548,6 +548,10 @@ interface TournamentStoreState {
   /** Switches this store over to a different save's tournament progress, called from AppRoot right
    *  alongside `useSaveStore`'s `initFromSave` whenever a save is loaded or switched to. */
   loadForSave: (saveId: string) => void;
+  /** Dev-only: wipes every tracked instance for the current save so the next `ensureProgress` call
+   *  regenerates a completely fresh RLCS season from scratch (a brand-new regional field, no player
+   *  registration carried over), see SettingsScreen's Developer Tools. */
+  resetAllInstances: () => void;
 }
 
 export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
@@ -716,6 +720,11 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
   loadForSave: (saveId) => {
     activeSaveId = saveId;
     set({ instances: loadStored() });
+  },
+
+  resetAllInstances: () => {
+    set({ instances: {} });
+    persist({});
   },
 }));
 

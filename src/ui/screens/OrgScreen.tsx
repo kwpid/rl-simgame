@@ -1,11 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/ui/components/Card";
 import { SectionShell } from "@/ui/components/LockedSection";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { activeProPlayers } from "@/data/proPlayers";
-import { saveRegionToProRegion, rlcsSeasonForDate, ORG_NAMES, orgTagForOrgName } from "@/data/tournaments";
+import {
+  saveRegionToProRegion,
+  rlcsSeasonForDate,
+  ORG_NAMES,
+  orgTagForOrgName,
+  generateTeamsForRegion,
+  generateGlobalTeams,
+  REGION_LABELS,
+  rlcsSeasonPhase,
+} from "@/data/tournaments";
 import {
   ORG_TIER_LABELS,
   meetsOrgRankRequirement,
@@ -83,12 +92,24 @@ export function OrgScreen() {
   const matchPhase = useMatchStore((m) => m.phase);
   const [coachingResult, setCoachingResult] = useState<{ gameSense: Record<QueueMode, number>; mechanicalConsistency: Record<QueueMode, number> } | null>(null);
   const [bootcampResult, setBootcampResult] = useState<{ scrimWins: number; scrimLosses: number; gameSense: Record<QueueMode, number>; mechanicalConsistency: Record<QueueMode, number> } | null>(null);
+  const [topTeamsScope, setTopTeamsScope] = useState<"region" | "world">("region");
 
   const era = eraForDate(s.currentDate);
   const currentYear = s.currentDate.year;
   const playerMmr = s.rankedProfiles["2v2"].mmr;
   const proRegion = saveRegionToProRegion(s.region);
   const { seasonNumber: rlcsSeasonNumber } = rlcsSeasonForDate(s.currentDate);
+
+  // Purely informational, not tied to any actual RLCS bracket state: a snapshot of who the top orgs are
+  // right now, regenerated only when the region/year actually changes so it doesn't reshuffle every render.
+  const topRegionTeams = useMemo(
+    () => generateTeamsForRegion(proRegion, currentYear, 8, `orgtop_region_${proRegion}_${currentYear}`).sort((a, b) => b.power - a.power),
+    [proRegion, currentYear]
+  );
+  const topWorldTeams = useMemo(
+    () => generateGlobalTeams(currentYear, 10, `orgtop_world_${currentYear}`).sort((a, b) => b.power - a.power),
+    [currentYear]
+  );
 
   useEffect(() => {
     ensureOrgScouting(s.currentDate, era, currentYear);
@@ -343,6 +364,13 @@ export function OrgScreen() {
                     : "Rank requirement met — from here it's about how your actual stats compare to top-player caliber, not the rank number itself. A tryout invite could come any day (checked every few days, not guaranteed)."}
               </div>
               {!inPlacements && meetsRank && (
+                <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 6 }}>
+                  {rlcsSeasonPhase(s.currentDate) === "off_season"
+                    ? "It's the RLCS off-season — rosters are actively shuffling, scouting is much more active right now."
+                    : "RLCS is in-season — most orgs' rosters are locked in for the split, scouting is rarer until the off-season."}
+                </div>
+              )}
+              {!inPlacements && meetsRank && (
                 <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
                     <span style={{ color: "var(--text-tertiary)" }}>Foundation stats (vs top-player)</span>
@@ -366,6 +394,38 @@ export function OrgScreen() {
           </SectionShell>
         )
       )}
+
+      <SectionShell title="Top Teams">
+        <div className="queue-tabbar" role="tablist" style={{ maxWidth: 280 }}>
+          <button
+            role="tab"
+            aria-selected={topTeamsScope === "region"}
+            className={"queue-tab" + (topTeamsScope === "region" ? " queue-tab-active" : "")}
+            onClick={() => setTopTeamsScope("region")}
+          >
+            {REGION_LABELS[proRegion]}
+          </button>
+          <button
+            role="tab"
+            aria-selected={topTeamsScope === "world"}
+            className={"queue-tab" + (topTeamsScope === "world" ? " queue-tab-active" : "")}
+            onClick={() => setTopTeamsScope("world")}
+          >
+            World
+          </button>
+        </div>
+        <Card>
+          {(topTeamsScope === "region" ? topRegionTeams : topWorldTeams).map((team, i) => (
+            <div key={team.id} className="org-team-row">
+              <span className="org-team-rank">#{i + 1}</span>
+              <div className="org-team-info">
+                <div className="org-team-name">{team.name}{topTeamsScope === "world" && ` (${team.region})`}</div>
+                <div className="org-team-roster">{team.players.join(", ")}</div>
+              </div>
+            </div>
+          ))}
+        </Card>
+      </SectionShell>
 
       <SectionShell title="Org News">
         <Card>
@@ -427,6 +487,60 @@ export function OrgScreen() {
         }
         .org-news-row:last-child {
           border-bottom: none;
+        }
+        .queue-tabbar {
+          display: flex;
+          gap: 4px;
+          background: var(--bg-surface);
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--radius-md);
+          padding: 4px;
+          margin-bottom: var(--space-3);
+        }
+        .queue-tab {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: none;
+          border: none;
+          border-radius: calc(var(--radius-md) - 2px);
+          color: var(--text-secondary);
+          font-size: 13px;
+          font-weight: 600;
+          padding: 8px 0;
+          cursor: pointer;
+          transition: background 150ms ease, color 150ms ease;
+        }
+        .queue-tab-active {
+          background: var(--accent-muted);
+          color: var(--accent);
+        }
+        .org-team-row {
+          display: flex;
+          align-items: baseline;
+          gap: 10px;
+          padding: 8px 0;
+          border-bottom: 1px solid var(--border-subtle);
+        }
+        .org-team-row:last-child {
+          border-bottom: none;
+        }
+        .org-team-rank {
+          flex-shrink: 0;
+          width: 24px;
+          font-size: 12px;
+          font-weight: 700;
+          color: var(--text-tertiary);
+        }
+        .org-team-name {
+          font-size: 13px;
+          font-weight: 650;
+          color: var(--text-primary);
+        }
+        .org-team-roster {
+          font-size: 12px;
+          color: var(--text-tertiary);
         }
       `}</style>
     </div>

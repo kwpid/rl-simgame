@@ -8,6 +8,7 @@
 import { tierMinMmr, type RankEra } from "./rankSystem";
 import { eliteGameSenseCeiling, eliteFoundationCeiling } from "./matchSim";
 import type { FoundationCategory } from "./mechanics";
+import type { RlcsSeasonPhase } from "./tournaments";
 
 export type OrgTier = "bubble" | "mid" | "top";
 
@@ -93,12 +94,19 @@ export function orgTierForTalent(overallScore: number): OrgTier {
   return "bubble";
 }
 
+// Real rosters overwhelmingly move in the off-season, an org going shopping mid-split (an injury/burnout
+// replacement, a struggling roster panic-swap) happens, but it's the exception, not the norm.
+const OFF_SEASON_SCOUTING_MULTIPLIER = 1;
+const IN_SEASON_SCOUTING_MULTIPLIER = 0.2;
+
 /** Real orgs (especially anything above bubble tier) don't scout every single rank-eligible player the
  *  moment they clear the floor, most never get picked up at all — this is the chance a rank-eligible,
  *  unsigned/untried player gets a fresh scouting invite on any given check, scaled by how their actual
- *  stats compare to top-player caliber rather than by rank alone. */
-export function orgScoutingChance(overallScore: number): number {
-  return Math.min(0.12, 0.02 + overallScore * 0.1);
+ *  stats compare to top-player caliber rather than by rank alone, and by whether it's currently the RLCS
+ *  off-season (see tournaments.ts's rlcsSeasonPhase) — that's when rosters typically actually shuffle. */
+export function orgScoutingChance(overallScore: number, phase: RlcsSeasonPhase): number {
+  const base = Math.min(0.12, 0.02 + overallScore * 0.1);
+  return base * (phase === "off_season" ? OFF_SEASON_SCOUTING_MULTIPLIER : IN_SEASON_SCOUTING_MULTIPLIER);
 }
 
 /** A tryout's scrim record decides the outcome once all planned scrims are played: a strong record earns

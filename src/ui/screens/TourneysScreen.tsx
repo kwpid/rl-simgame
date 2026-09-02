@@ -99,6 +99,25 @@ export function TourneysScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentDate.year, currentDate.month, currentDate.day]);
 
+  // The org handles its own tournament logistics: once signed, the player is entered into their region's
+  // 3v3 regional (and, in the early era, Rival Series) the moment the field opens, rather than waiting on a
+  // manual click — "signed up in advance", matching OrgContract's own doc comment in mockSave.ts. Re-fires
+  // harmlessly every date tick, isRegistrationOpen goes false the instant it actually registers.
+  useEffect(() => {
+    if (!s.orgContract) return;
+    const orgPower = Math.round(700 + (s.player.gameSense["3v3"] + s.player.mechanicalConsistency["3v3"]) / 15);
+    const orgSchedule = buildSeasonSchedule(rlcsSeasonNumber, rlcsSeasonStartDate).filter(
+      (sc) => sc.region === playerProRegion && (sc.kind === "rlcs_regional" || sc.kind === "rlrs_regional")
+    );
+    for (const item of orgSchedule) {
+      const instance = instances[item.id];
+      if (isRegistrationOpen(instance)) {
+        registerPlayer(item.id, s.displayName, playerProRegion, orgPower, s.orgContract.teammates);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentDate.year, currentDate.month, currentDate.day, s.orgContract?.orgName, instances]);
+
   const schedule = buildSeasonSchedule(rlcsSeasonNumber, rlcsSeasonStartDate);
   const rlcsStructureEraNow = rlcsStructureEra(rlcsSeasonNumber);
   const rlcsKind: TournamentKind = mode === "3v3" ? "rlcs_regional" : "rlcs_1v1_regional";

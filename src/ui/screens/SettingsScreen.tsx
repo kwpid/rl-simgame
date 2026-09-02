@@ -12,6 +12,7 @@ import { MECHANICS, FOUNDATION_LABELS, type FoundationCategory } from "@/data/me
 import { QUEUE_CONCEPTS } from "@/data/queueConcepts";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore } from "@/store/useLeaderboardFillerStore";
+import { useTournamentStore } from "@/store/useTournamentStore";
 
 const DEV_MODE_KEY = "rl-sim:dev-mode";
 const REWARD_TIER_OPTIONS: RankTierId[] = [
@@ -309,6 +310,7 @@ function DeveloperToolsSection() {
   const devSetRewardLevel = useSaveStore((store) => store.devSetRewardLevel);
   const resetProLeaderboard = useProLeaderboardStore((store) => store.resetAll);
   const resetFillerLeaderboard = useLeaderboardFillerStore((store) => store.resetAll);
+  const resetAllInstances = useTournamentStore((store) => store.resetAllInstances);
 
   const [mmrQueue, setMmrQueue] = useState<QueueMode>("2v2");
   const [mmrValue, setMmrValue] = useState(String(s.rankedProfiles["2v2"].mmr));
@@ -527,6 +529,20 @@ function DeveloperToolsSection() {
                 }}
               >
                 Refresh Leaderboard (pros + fillers)
+              </button>
+            </div>
+          </div>
+
+          <div className="dev-tools-group">
+            <span className="dev-tools-label">RLCS</span>
+            <div className="dev-tools-row">
+              <button
+                className="dev-btn"
+                onClick={() => {
+                  resetAllInstances();
+                }}
+              >
+                Restart RLCS Season (fresh regionals, re-signs org if under contract)
               </button>
             </div>
           </div>
