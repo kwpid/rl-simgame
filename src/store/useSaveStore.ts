@@ -11,6 +11,7 @@ import {
   type OrgTryout,
   type OrgNewsEntry,
   type OrgTier,
+  type PlaystyleProfile,
 } from "@/data/mockSave";
 import { TACTICAL_FOUNDATION_CATEGORIES, type FoundationCategory } from "@/data/mechanics";
 import { addDays, daysBetween, type SimDate } from "@/data/dateUtils";
@@ -101,6 +102,19 @@ function diminishingGain(currentValue: number, hours: number, efficiencyPct: num
   const efficiency = efficiencyPct / 100;
   const gain = BASE_TRAINING_GAIN_PER_HOUR * hours * diminishing * efficiency * fatiguePenalty(fatigue);
   return Math.max(3, Math.round(gain));
+}
+
+/** Playstyle traits are the odd one out: a deliberately capped 0-100 identity slider (see mockSave.ts's
+ *  PlaystyleProfile), not an uncapped skill ceiling, so they get their own bounded formula instead of
+ *  diminishingGain above. Reshaping who you are as a player costs a Skill Point per session same as any
+ *  other deliberate career decision, and gets harder to push the closer you get to either extreme. */
+const PLAYSTYLE_TRAIT_GAIN_PER_HOUR = 5;
+
+function playstyleShiftGain(currentValue: number, direction: 1 | -1, hours: number, fatigue: number): number {
+  const roomLeft = direction > 0 ? 100 - currentValue : currentValue;
+  const diminishing = Math.max(0.15, roomLeft / 100);
+  const gain = PLAYSTYLE_TRAIT_GAIN_PER_HOUR * hours * diminishing * fatiguePenalty(fatigue);
+  return Math.max(1, Math.round(gain));
 }
 
 export interface MatchResultInput {
@@ -223,6 +237,10 @@ interface SaveStoreState extends SaveData {
   /** Always costs 1 Skill Point, queue concepts are tactical/mental by definition, same 0-without-Skill-
    *  Points behavior as the Tactical foundation stats. */
   trainQueueConcept: (id: string, efficiencyPct: number, hours?: number) => number;
+  /** Nudges one playstyle trait for one queue toward (direction 1) or away from (direction -1) 100, costs
+   *  1 Skill Point per session same as a Tactical/Playlist session. Returns the magnitude actually gained
+   *  (always >= 0, direction decides which way it was applied), or 0 if out of Skill Points. */
+  trainPlaystyleTrait: (queue: QueueMode, trait: keyof PlaystyleProfile, direction: 1 | -1, hours?: number) => number;
 
   /** Dev-mode only testing shortcuts, gated behind the Developer Mode toggle in Settings. None of these
    *  cost time, fatigue, or Skill Points, they're for jumping straight to a game state to test against. */
@@ -941,6 +959,26 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       ...withDateAdvance(state, hours),
     });
     return gain;
+  },
+
+  trainPlaystyleTrait: (queue, trait, direction, hours = 1) => {
+    const state = get();
+    if (state.skillPoints < 1) return 0;
+
+    const current = state.playstyleProfiles[queue][trait];
+    const gain = playstyleShiftGain(current, direction, hours, state.player.fatigue);
+    const nextValue = Math.max(0, Math.min(100, current + direction * gain));
+    set({
+      playstyleProfiles: {
+        ...state.playstyleProfiles,
+        [queue]: { ...state.playstyleProfiles[queue], [trait]: nextValue },
+      },
+      player: { ...state.player, fatigue: Math.min(100, state.player.fatigue + FATIGUE_COST_PER_HOUR * hours) },
+      skillPoints: state.skillPoints - 1,
+      totalMinutesPlayed: state.totalMinutesPlayed + hours * 60,
+      ...withDateAdvance(state, hours),
+    });
+    return Math.abs(nextValue - current);
   },
 
   devAddGameSense: (queue, amount) => {

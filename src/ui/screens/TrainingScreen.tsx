@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Card } from "@/ui/components/Card";
 import { UncappedStat } from "@/ui/components/UncappedStat";
+import { StatBar } from "@/ui/components/StatBar";
 import { SectionShell, LockedSection } from "@/ui/components/LockedSection";
 import { Icon, type IconName } from "@/ui/components/Icon";
 import { TrainButton } from "@/ui/components/TrainButton";
@@ -19,14 +20,15 @@ import {
   type ConceptCategory,
 } from "@/data/queueConcepts";
 import { QUEUES, QUEUE_LABELS, QUEUE_ICONS } from "@/data/queues";
-import type { QueueMode } from "@/data/mockSave";
+import type { QueueMode, PlaystyleProfile } from "@/data/mockSave";
 
-type TrainingTab = "foundation" | "mechanics" | "playlist";
+type TrainingTab = "foundation" | "mechanics" | "playlist" | "playstyle";
 
 const TABS: { id: TrainingTab; label: string }[] = [
   { id: "foundation", label: "Foundation" },
   { id: "mechanics", label: "Mechanics" },
   { id: "playlist", label: "Playlist" },
+  { id: "playstyle", label: "Playstyle" },
 ];
 
 const FOUNDATION_META: Record<FoundationCategory, { icon: IconName; color: string }> = {
@@ -50,6 +52,41 @@ const BRANCH_META: Record<string, { icon: IconName; color: string }> = {
   Passing: { icon: "swap", color: "#4fb8a6" },
   "Boost Management": { icon: "bolt", color: "#e3c76f" },
 };
+
+type PlaystyleTrait = keyof PlaystyleProfile;
+
+const PLAYSTYLE_TRAIT_META: Record<PlaystyleTrait, { label: string; icon: IconName; color: string; high: string; low: string }> = {
+  aggression: {
+    label: "Aggression",
+    icon: "crosshair",
+    color: "var(--danger)",
+    high: "Takes the riskier challenge and the bolder look instead of the safe play.",
+    low: "Plays it patient, waits for the safer read before committing.",
+  },
+  rotationDiscipline: {
+    label: "Rotation Discipline",
+    icon: "shield",
+    color: "var(--team-blue)",
+    high: "Sticks to structure and holds the net even under pressure.",
+    low: "Ball-chases more, structure slips when the game gets scrappy.",
+  },
+  mechanicalFlair: {
+    label: "Mechanical Flair",
+    icon: "bolt",
+    color: "#d9b357",
+    high: "Shows off mastered mechanics with the flashier finish instead of the plain shot.",
+    low: "Keeps it simple, takes the straightforward option over the showy one.",
+  },
+  consistency: {
+    label: "Consistency",
+    icon: "cycle",
+    color: "var(--success)",
+    high: "Tighter day-to-day form, rarely has a truly off game.",
+    low: "Bigger boom-or-bust swings, can pop off or go cold either way.",
+  },
+};
+
+const PLAYSTYLE_TRAITS: PlaystyleTrait[] = ["aggression", "rotationDiscipline", "mechanicalFlair", "consistency"];
 
 const CONCEPT_CATEGORY_META: Record<ConceptCategory, { icon: IconName; color: string }> = {
   mindset: { icon: "brain", color: "#b56bd9" },
@@ -93,7 +130,7 @@ export function TrainingScreen() {
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
       <header style={{ marginBottom: "var(--space-4)" }}>
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 650 }}>Training</h1>
-        <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>Foundation stats, the mechanic fund, and playlist-specific skills</div>
+        <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>Foundation stats, the mechanic fund, playlist-specific skills, and how you actually play</div>
         <div
           className="skill-point-pill"
           style={{ marginTop: "var(--space-2)" }}
@@ -121,6 +158,7 @@ export function TrainingScreen() {
         {tab === "foundation" && <FoundationTab />}
         {tab === "mechanics" && <MechanicsTab />}
         {tab === "playlist" && <PlaylistTab />}
+        {tab === "playstyle" && <PlaystyleTab />}
       </div>
 
       <style>{`
@@ -777,6 +815,107 @@ function PlaylistTab() {
                   })}
               </div>
             </section>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/** Two-directional sibling to TrainButton: playstyle traits can be pushed toward 100 OR pulled back toward
+ *  0, each direction is its own SP-gated session rather than a single slider drag. */
+function PlaystyleShiftButtons({ onShift }: { onShift: (direction: 1 | -1, hours: number) => number }) {
+  const [state, setState] = useState<"idle" | "training" | "done">("idle");
+  const [gain, setGain] = useState(0);
+  const [dir, setDir] = useState<1 | -1>(1);
+
+  if (state === "training") {
+    return <button className="train-btn train-btn-training">Training…</button>;
+  }
+  if (state === "done") {
+    return (
+      <button className="train-btn train-btn-done" onClick={() => setState("idle")}>
+        {dir > 0 ? "+" : "-"}
+        {gain}
+      </button>
+    );
+  }
+
+  function start(direction: 1 | -1) {
+    setDir(direction);
+    setState("training");
+    setTimeout(() => {
+      setGain(onShift(direction, 1));
+      setState("done");
+      setTimeout(() => setState("idle"), 1300);
+    }, 550);
+  }
+
+  return (
+    <div className="train-btn-group">
+      <button className="train-btn train-btn-hour" onClick={() => start(-1)} title="Pull this trait down">
+        Lower
+      </button>
+      <button className="train-btn train-btn-hour" onClick={() => start(1)} title="Push this trait up">
+        Raise
+      </button>
+    </div>
+  );
+}
+
+function PlaystyleTab() {
+  const [queue, setQueue] = useState<QueueMode>("2v2");
+  const s = useSaveStore();
+  const trainPlaystyleTrait = useSaveStore((store) => store.trainPlaystyleTrait);
+  const profile = s.playstyleProfiles[queue];
+
+  return (
+    <>
+      <div className="queue-tabbar" role="tablist">
+        {QUEUES.map((q) => (
+          <button
+            key={q}
+            role="tab"
+            aria-selected={queue === q}
+            className={"queue-tab" + (queue === q ? " queue-tab-active" : "")}
+            onClick={() => setQueue(q)}
+            title={QUEUE_LABELS[q]}
+          >
+            <Icon name={QUEUE_ICONS[q]} size={16} />
+            {q}
+          </button>
+        ))}
+      </div>
+
+      <div key={queue} className="card-grid fade-in">
+        {PLAYSTYLE_TRAITS.map((trait) => {
+          const meta = PLAYSTYLE_TRAIT_META[trait];
+          const value = profile[trait];
+          return (
+            <Card key={trait}>
+              <div className="mechanic-card">
+                <div className="mechanic-top">
+                  <IconBadge icon={meta.icon} color={meta.color} />
+                  <div>
+                    <div className="mechanic-label">{meta.label}</div>
+                  </div>
+                </div>
+                <StatBar label={`${QUEUE_LABELS[queue]} ${meta.label}`} value={value} color={meta.color} />
+                <p className="mechanic-desc">
+                  High: {meta.high}
+                  <br />
+                  Low: {meta.low}
+                </p>
+                <div className="mechanic-footer" style={{ justifyContent: "space-between" }}>
+                  <span className="sp-cost-tag">1 SP / session</span>
+                  {s.skillPoints < 1 ? (
+                    <div className="sp-locked">Play ranked to earn a Skill Point</div>
+                  ) : (
+                    <PlaystyleShiftButtons onShift={(direction, hours) => trainPlaystyleTrait(queue, trait, direction, hours)} />
+                  )}
+                </div>
+              </div>
+            </Card>
           );
         })}
       </div>

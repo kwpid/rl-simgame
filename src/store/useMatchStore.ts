@@ -18,6 +18,7 @@ import {
   simulateDuelPossession,
   prefersCounterAttack,
   flattenProgress,
+  effectivePlaystyle,
   type MatchParticipantStats,
   type DuelMastery,
   type PossessionResult,
@@ -314,8 +315,12 @@ function generateRoster(
 const FORM_SPREAD = 0.18; // +/-18%
 const FORM_NOTE_THRESHOLD = 0.1; // only call it out in the log if the swing is actually noticeable
 
-function rollForm(): number {
-  return 1 + (Math.random() * 2 - 1) * FORM_SPREAD;
+/** A more consistent player (the trained playstyle trait, not the Mechanical Consistency stat which
+ *  already governs in-match whiff variance) has tighter day-to-day form swings, a wildly inconsistent one
+ *  swings harder both ways. */
+function rollForm(consistencyTrait: number): number {
+  const spread = Math.max(0.03, FORM_SPREAD * (1 - (consistencyTrait - 50) / 90));
+  return 1 + (Math.random() * 2 - 1) * spread;
 }
 
 function applyForm(player: MatchPlayer, form: number): MatchPlayer {
@@ -335,7 +340,7 @@ function applyForm(player: MatchPlayer, form: number): MatchPlayer {
 function applyMatchDayForm(players: MatchPlayer[]): { players: MatchPlayer[]; formNotes: string[] } {
   const formNotes: string[] = [];
   const adjusted = players.map((p) => {
-    const form = rollForm();
+    const form = rollForm(effectivePlaystyle(p).consistency);
     if (form - 1 >= FORM_NOTE_THRESHOLD) formNotes.push(`${p.name} looks like they're playing above their usual level today.`);
     else if (1 - form >= FORM_NOTE_THRESHOLD) formNotes.push(`${p.name} looks a little off their usual game today.`);
     return applyForm(p, form);

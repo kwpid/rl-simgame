@@ -38,6 +38,25 @@ export interface MatchParticipantStats {
   duelMastery?: DuelMastery;
 }
 
+/** The real trained profile when present (the human player, via duelMastery), else a believable proxy
+ *  derived deterministically from the actor's own stats and name — same "no authored per-opponent data,
+ *  so infer a consistent personality from what we do know" pattern moveMasteryValue/conceptMasteryValue
+ *  already use below for AI mechanic mastery. Same name always proxies to the same tendencies match to
+ *  match, it just isn't a REAL trained profile the way the player's own is. */
+export function effectivePlaystyle(actor: MatchParticipantStats): PlaystyleProfile {
+  if (actor.duelMastery) return actor.duelMastery.playstyle;
+  const seed = hashString(actor.name + "#style");
+  const jitter = (shift: number, spread = 20) => ((seed >> shift) % (spread + 1)) - spread / 2;
+  const offenseLean = actor.foundationStats.offense - actor.foundationStats.defense;
+  const clamp = (v: number) => Math.max(5, Math.min(95, Math.round(v)));
+  return {
+    aggression: clamp(50 + offenseLean / 40 + jitter(0)),
+    rotationDiscipline: clamp(40 + actor.foundationStats.defense / 200 + jitter(4)),
+    mechanicalFlair: clamp(40 + actor.mechanicalConsistency / 2000 + jitter(8)),
+    consistency: clamp(50 + jitter(12)),
+  };
+}
+
 // Game Sense and Mechanical Consistency dominate real skill separation at the high end (an SSL's raw
 // foundation stats are close together, decision-making/execution is what actually separates them), so they
 // carry more of the blend than any single foundation stat, but a well-rounded foundation still matters.
@@ -375,8 +394,10 @@ function pickDefender(defenders: MatchParticipantStats[]): MatchParticipantStats
 }
 
 function pickAttacker(attackers: MatchParticipantStats[]): MatchParticipantStats {
-  // Weight toward players with higher combined offense + gameSense, better players get the ball more.
-  const weights = attackers.map((a) => a.foundationStats.offense + a.gameSense * 0.4 + 200);
+  // Weight toward players with higher combined offense + gameSense, better players get the ball more —
+  // plus a real playstyle lean: a more aggressive player pushes up for the ball more often, a passive one
+  // hangs back and lets it come to them.
+  const weights = attackers.map((a) => a.foundationStats.offense + a.gameSense * 0.4 + 200 + (effectivePlaystyle(a).aggression - 50) * 2);
   const total = weights.reduce((sum, w) => sum + w, 0);
   let roll = Math.random() * total;
   for (let i = 0; i < attackers.length; i++) {
@@ -394,8 +415,9 @@ type ChainKind = "aerial" | "ground_flick" | "wall_read" | "fifty_fifty";
 
 function pickChainKind(attacker: MatchParticipantStats): ChainKind {
   const roll = Math.random();
-  // Better aerial control makes an aerial play more likely to be attempted at all.
-  const aerialWeight = 0.2 + Math.min(0.35, attacker.foundationStats.aerialControl / 9000);
+  // Better aerial control makes an aerial play more likely to be attempted at all, a more aggressive
+  // playstyle pushes that further still (going for the flashier, higher-risk read more often).
+  const aerialWeight = 0.2 + Math.min(0.35, attacker.foundationStats.aerialControl / 9000) + (effectivePlaystyle(attacker).aggression - 50) / 400;
   if (roll < aerialWeight) return "aerial";
   if (roll < aerialWeight + 0.25) return "wall_read";
   if (roll < aerialWeight + 0.45) return "ground_flick";
@@ -553,9 +575,12 @@ export function simulateTeamPossession(
   let supportBonus = 0;
   if (teammate) {
     const rotationPower = teammate.foundationStats.defense * 0.5 + teammate.gameSense * 0.5;
+    // A disciplined rotator earns real relief here on top of raw stats — Rotation Discipline is exactly
+    // the trained tendency that keeps someone from ball-chasing into a bad spot in the first place.
+    const disciplineRelief = (effectivePlaystyle(teammate).rotationDiscipline - 50) / 300;
     const mistakeChance = Math.max(
       TEAM_ROTATION_MISTAKE_MIN,
-      Math.min(TEAM_ROTATION_MISTAKE_MAX, TEAM_ROTATION_MISTAKE_BASE - rotationPower / TEAM_ROTATION_MISTAKE_SCALE)
+      Math.min(TEAM_ROTATION_MISTAKE_MAX, TEAM_ROTATION_MISTAKE_BASE - rotationPower / TEAM_ROTATION_MISTAKE_SCALE - disciplineRelief)
     );
     isLastMan = Math.random() < mistakeChance;
     if (isLastMan) {
@@ -728,6 +753,7 @@ export function simulateDuelPossession(
 
   const attackDirection = attacker.team === "blue" ? 1 : -1;
   const retreatY = () => (attackDirection > 0 ? Math.max(0, currentFieldY - 15) : Math.min(100, currentFieldY + 15));
+  const attackerStyle = effectivePlaystyle(attacker);
 
   // Beat 1: possession and situation (side of the field, boost level).
   const lowBoost = Math.random() < (isCounterAttack ? 0.15 : 0.28);
@@ -756,7 +782,9 @@ export function simulateDuelPossession(
   }
 
   // Beat 3: signature setup move, low boost restricts the pool to what's realistic without a full tank.
-  const pool = lowBoost ? GROUND_ATTACK_MOVE_IDS : Math.random() < 0.6 ? AERIAL_ATTACK_MOVE_IDS : GROUND_ATTACK_MOVE_IDS;
+  // A more aggressive/flairy player reaches for the aerial (flashier, higher-risk) pool more often.
+  const aerialPoolChance = 0.6 + (attackerStyle.aggression + attackerStyle.mechanicalFlair - 100) / 300;
+  const pool = lowBoost ? GROUND_ATTACK_MOVE_IDS : Math.random() < aerialPoolChance ? AERIAL_ATTACK_MOVE_IDS : GROUND_ATTACK_MOVE_IDS;
   const setupMove = pickWeightedMove(pool, attacker);
   const setupMastery = moveMasteryValue(setupMove.id, attacker);
   const isAerialSetup = AERIAL_ATTACK_MOVE_IDS.includes(setupMove.id);
@@ -780,7 +808,9 @@ export function simulateDuelPossession(
 
   const flourish = pickWeightedMove(FINISH_FLOURISH_MOVE_IDS, attacker);
   const flourishMastery = moveMasteryValue(flourish.id, attacker);
-  const useFlourish = flourishMastery > 1200 && Math.random() < 0.5;
+  // Mechanical Flair is exactly the trained tendency to show off with a mastered mechanic instead of
+  // taking the plain shot, Aggression pushes the same way (a bolder player takes the riskier look).
+  const useFlourish = flourishMastery > 1200 && Math.random() < 0.35 + (attackerStyle.mechanicalFlair + attackerStyle.aggression - 100) / 300;
 
   const shotSelectionMastery = conceptMasteryValue("1v1_shot_selection", attacker, attacker.gameSense);
   const finishWhiffBase = isAerialSetup ? 0.3 : 0.2;
