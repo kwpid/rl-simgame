@@ -2,22 +2,32 @@ import { useEffect, useState } from "react";
 import { RankBadge } from "@/ui/components/RankBadge";
 import { Icon } from "@/ui/components/Icon";
 import { DivisionProgress } from "@/ui/components/DivisionProgress";
-import { REGION_LABELS, type QueueMode } from "@/data/mockSave";
+import type { QueueMode } from "@/data/mockSave";
 import { eraForDate, tierColor, divisionLabel, divisionCount, deriveRankFromMmr, tierMinMmr, TIER_LABELS } from "@/data/rankSystem";
 import { QUEUES, QUEUE_LABELS, QUEUE_ICONS } from "@/data/queues";
 import { useMatchStore } from "@/store/useMatchStore";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
-import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
-import { activeProPlayers } from "@/data/proPlayers";
+import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
+import { regionalGrinderRoster } from "@/data/regionalGrinders";
+import { activeProPlayers, type ProRegion } from "@/data/proPlayers";
 import { flattenProgress } from "@/data/matchSim";
-import { orgTagForOrgName } from "@/data/tournaments";
+import { orgTagForOrgName, saveRegionToProRegion, REGION_LABELS as PRO_REGION_LABELS } from "@/data/tournaments";
 import { seasonEndDate, rewardTierSequence, REWARD_WINS_REQUIRED } from "@/data/seasons";
 import { daysBetween } from "@/data/dateUtils";
 
 const LEADERBOARD_SIZE = 50;
 
 const TEAM_SIZE: Record<QueueMode, number> = { "1v1": 1, "2v2": 2, "3v3": 3 };
+
+const ALL_MATCHMAKING_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
+
+function formatMmSs(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(totalSeconds / 60);
+  const sec = totalSeconds % 60;
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
 
 export function RankedScreen() {
   const [queue, setQueue] = useState<QueueMode>("2v2");
@@ -38,14 +48,14 @@ export function RankedScreen() {
   // no seeding side effect, that happens once in the effect below instead of mid-render.
   const proMmrTable = useProLeaderboardStore((store) => store.mmr);
   const ensureProsSeeded = useProLeaderboardStore((store) => store.ensureSeeded);
-  const fillerMmrTable = useLeaderboardFillerStore((store) => store.mmr);
-  const ensureFillersSeeded = useLeaderboardFillerStore((store) => store.ensureSeeded);
+  const regionalRosterMmrTable = useRegionalRosterStore((store) => store.mmr);
+  const ensureRegionalRosterSeeded = useRegionalRosterStore((store) => store.ensureSeeded);
   const currentYear = s.currentDate.year;
   const activePros = activeProPlayers(currentYear);
 
   useEffect(() => {
     ensureProsSeeded(activePros.map((p) => p.name), queue, era, currentYear, s.currentDate, s.seasonStartDate);
-    ensureFillersSeeded(fillerLeaderboardNames(), queue, era, currentYear, s.currentDate, s.seasonStartDate);
+    ALL_MATCHMAKING_REGIONS.forEach((region) => ensureRegionalRosterSeeded(region, queue, era, currentYear, s.currentDate, s.seasonStartDate));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, era, currentYear, s.currentDate.year, s.currentDate.month, s.currentDate.day, s.seasonStartDate.year, s.seasonStartDate.month, s.seasonStartDate.day]);
 
@@ -71,32 +81,26 @@ export function RankedScreen() {
       return { rank: 0, name: pro.name, mmr, rankTier: derived.tier, division: derived.division, region: pro.region, isPlayer: false };
     })
     .filter((row) => row.mmr >= topTierFloor);
-  // Filler names carry a real, persistent MMR (see useLeaderboardFillerStore) instead of a fresh random
-  // roll every render, so the board is stable and a match opponent sharing one of these names is provably
-  // the same person with the same MMR the board is showing, not an unrelated random encounter.
-  const fillerRows = fillerLeaderboardNames()
-    .map((name, i) => {
-      const entry = fillerMmrTable[name]?.[queue];
+  // Grinder identities carry a real, persistent, region-tagged MMR (see useRegionalRosterStore) instead of
+  // a fresh random roll every render, so the board is stable and a match opponent sharing one of these
+  // names is provably the same person with the same MMR the board is showing — a global "see how every
+  // region's grinders/pros are doing" view, not scoped to whichever region(s) the player has selected for
+  // their own search.
+  const grinderRows = ALL_MATCHMAKING_REGIONS.flatMap((region) =>
+    regionalGrinderRoster(region, currentYear).map((grinder) => {
+      const entry = regionalRosterMmrTable[region]?.[grinder.name]?.[queue];
       const mmr = entry?.mmr ?? 0;
       const derived = deriveRankFromMmr(mmr, era, queue);
-      return {
-        rank: 0,
-        name,
-        mmr,
-        rankTier: derived.tier,
-        division: derived.division,
-        region: ["NA", "EU", "OCE", "SAM", "MENA", "APAC"][i % 6],
-        isPlayer: false,
-      };
+      return { rank: 0, name: grinder.name, mmr, rankTier: derived.tier, division: derived.division, region, isPlayer: false };
     })
-    .filter((row) => row.mmr >= topTierFloor);
+  ).filter((row) => row.mmr >= topTierFloor);
   const leaderboard =
     profile.placementMatchesRemaining > 0
-      ? [...proRows, ...fillerRows].sort((a, b) => b.mmr - a.mmr).slice(0, LEADERBOARD_SIZE).map((row, i) => ({ ...row, rank: i + 1 }))
+      ? [...proRows, ...grinderRows].sort((a, b) => b.mmr - a.mmr).slice(0, LEADERBOARD_SIZE).map((row, i) => ({ ...row, rank: i + 1 }))
       : [
           ...proRows,
-          ...fillerRows,
-          { rank: 0, name: s.displayName, mmr: profile.mmr, rankTier: profile.rankTier, division: profile.division, region: REGION_LABELS[s.region], isPlayer: true },
+          ...grinderRows,
+          { rank: 0, name: s.displayName, mmr: profile.mmr, rankTier: profile.rankTier, division: profile.division, region: saveRegionToProRegion(s.region), isPlayer: true },
         ]
           .sort((a, b) => b.mmr - a.mmr)
           .slice(0, LEADERBOARD_SIZE)
@@ -108,7 +112,26 @@ export function RankedScreen() {
   const startQueue = useMatchStore((m) => m.startQueue);
   const cancelQueue = useMatchStore((m) => m.cancelQueue);
   const setAutoQueueModes = useMatchStore((m) => m.setAutoQueueModes);
+  const estimatedQueueDurationsMs = useMatchStore((m) => m.estimatedQueueDurationsMs);
+  const searchStartedAt = useMatchStore((m) => m.searchStartedAt);
+  const setSelectedMatchmakingRegions = useSaveStore((st) => st.setSelectedMatchmakingRegions);
   const [autoQueueChecked, setAutoQueueChecked] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const isTopTierQueue = profile.rankTier === "grand_champion" || profile.rankTier === "ssl";
+
+  useEffect(() => {
+    if (matchPhase !== "searching" || searchStartedAt === null) return;
+    const tick = () => setElapsedMs(Date.now() - searchStartedAt);
+    tick();
+    const interval = setInterval(tick, 300);
+    return () => clearInterval(interval);
+  }, [matchPhase, searchStartedAt]);
+
+  function toggleRegion(region: ProRegion) {
+    const current = s.selectedMatchmakingRegions;
+    const next = current.includes(region) ? current.filter((r) => r !== region) : [...current, region];
+    setSelectedMatchmakingRegions(next);
+  }
 
   const endDate = seasonEndDate(s.seasonStartDate);
   const totalHoursRemaining = Math.max(0, daysBetween(s.currentDate, endDate) * 24 - s.clockHour);
@@ -123,6 +146,7 @@ export function RankedScreen() {
       queue: q,
       rankTier: qMatchmakingTier,
       playerMmr: p.mmr,
+      regions: s.selectedMatchmakingRegions,
       self: {
         name: s.displayName,
         gameSense: s.player.gameSense[q],
@@ -281,6 +305,21 @@ export function RankedScreen() {
             </div>
 
             <div className="play-panel-action">
+              {matchPhase === "idle" && isTopTierQueue && (
+                <div className="multi-queue-row">
+                  <span className="multi-queue-label">Regions:</span>
+                  {ALL_MATCHMAKING_REGIONS.map((region) => (
+                    <button
+                      key={region}
+                      className={"multi-queue-chip" + (s.selectedMatchmakingRegions.includes(region) ? " multi-queue-chip-active" : "")}
+                      onClick={() => toggleRegion(region)}
+                      title="More regions pop faster but pull from a wider, less locally-flavored pool"
+                    >
+                      {region}
+                    </button>
+                  ))}
+                </div>
+              )}
               {matchPhase === "idle" && (
                 <div className="multi-queue-row">
                   <span className="multi-queue-label">Also search:</span>
@@ -324,6 +363,9 @@ export function RankedScreen() {
                 <button className="search-btn search-btn-active" onClick={cancelQueue}>
                   Searching{queuedModes.length > 1 ? ` (${queuedModes.map((q) => QUEUE_LABELS[q]).join(", ")})` : ""}
                   <span className="dots" />
+                  <div className="queue-timer">
+                    ~{formatMmSs(estimatedQueueDurationsMs[queue] ?? 0)} est. &middot; elapsed {formatMmSs(elapsedMs)}
+                  </div>
                 </button>
               )}
               {matchPhase === "searching" && !queuedModes.includes(queue) && (
@@ -349,6 +391,7 @@ export function RankedScreen() {
                 <tr>
                   <th>#</th>
                   <th>Player</th>
+                  <th>Region</th>
                   <th style={{ textAlign: "right" }}>MMR</th>
                 </tr>
               </thead>
@@ -357,6 +400,7 @@ export function RankedScreen() {
                   <tr key={row.isPlayer ? "self" : row.rank} className={row.isPlayer ? "leaderboard-row-self" : undefined}>
                     <td>{row.rank}</td>
                     <td>{row.name}</td>
+                    <td style={{ color: "var(--text-tertiary)" }}>{PRO_REGION_LABELS[row.region]}</td>
                     <td style={{ textAlign: "right", fontWeight: 600 }}>{row.mmr}</td>
                   </tr>
                 ))}
@@ -654,6 +698,13 @@ export function RankedScreen() {
           background: var(--bg-surface-raised);
           color: var(--text-primary);
           border: 1px solid var(--border-strong);
+        }
+        .queue-timer {
+          font-size: 11px;
+          font-weight: 500;
+          color: var(--text-tertiary);
+          font-variant-numeric: tabular-nums;
+          margin-top: 2px;
         }
         .dots::after {
           content: "";

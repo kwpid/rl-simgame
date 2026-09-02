@@ -5,10 +5,14 @@ import type { FoundationCategory } from "@/data/mechanics";
 import type { TitleEntry } from "@/data/seasons";
 import type { SimDate } from "@/data/dateUtils";
 import { LB_NAMES } from "@/data/mockSave";
-import { activeProPlayers, PRO_PLAYERS } from "@/data/proPlayers";
-import { rlcsSeasonForDate, orgTagForOrgName } from "@/data/tournaments";
+import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
+import { rlcsSeasonForDate, orgTagForOrgName, saveRegionToProRegion } from "@/data/tournaments";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
+import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
+import { regionalGrinderRoster, type RosterBand } from "@/data/regionalGrinders";
+import { gatherEligibleOpponents, type EligibleCandidate } from "@/data/matchmakingPool";
+import { isOnlineNow, REGION_HOUR_OFFSET } from "@/data/aiActivity";
 import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
 import { useSaveStore } from "@/store/useSaveStore";
 import {
@@ -62,6 +66,9 @@ export interface QueueSearchRequest {
   rankTier: RankTierId;
   self: SelfStats;
   playerMmr: number;
+  /** Only meaningful at GC+/SSL — which regions to draw real named opponents from (see
+   *  data/matchmakingPool.ts). Ignored below that tier, where matchmaking never region-filters. */
+  regions?: ProRegion[];
 }
 
 /** A "plain" friend's own persisted per-queue MMR/stats (see useSaveStore.ts's FriendRecord), used to
@@ -113,12 +120,41 @@ function timeOfDayMultiplier(hour: number): number {
   return 0.8; // 17:00-24:00, evening peak
 }
 
-function computeQueueDurationMs(queue: QueueMode, rankTier: RankTierId, hourOfDay: number): number {
+// Below GC+/SSL, queue time stays exactly the old formula — this constant marks the boundary the scarcity
+// model below never touches, keeping every rank below it provably unaffected by this whole system.
+const EXPECTED_POOL_SIZE = 12;
+
+function computeQueueDurationMs(
+  queue: QueueMode,
+  rankTier: RankTierId,
+  hourOfDay: number,
+  era: RankEra,
+  regions: ProRegion[],
+  playerMmr: number,
+  currentYear: number,
+  currentDate: SimDate,
+  seasonStartDate: SimDate
+): number {
   const base = RANK_QUEUE_BASE_SECONDS[rankTier] ?? 8;
   const rankSensitivity = base / 8; // low ranks barely notice the hour, SSL notices a lot
   const rawTimeMult = timeOfDayMultiplier(hourOfDay);
   const timeMult = rawTimeMult >= 1 ? 1 + (rawTimeMult - 1) * rankSensitivity : rawTimeMult;
-  const seconds = base * QUEUE_POPULATION_MULTIPLIER[queue] * timeMult * (0.7 + Math.random() * 0.6);
+
+  const isEligible = rankTier === "grand_champion" || rankTier === "ssl";
+  if (!isEligible || regions.length === 0) {
+    const seconds = base * QUEUE_POPULATION_MULTIPLIER[queue] * timeMult * (0.7 + Math.random() * 0.6);
+    return Math.round(seconds * 1000);
+  }
+
+  // GC+/SSL: how many real, currently-online candidates are actually out there right now, across every
+  // selected region — the fewer there are, the worse the multiplier on top of the plain time-of-day effect,
+  // and selecting more regions directly counteracts it (mirrors the "cross-region queue" tradeoff the spec
+  // describes: faster pop, less regionally-flavored opponent variety).
+  const availableCount = gatherEligibleOpponents(regions, queue, playerMmr, era, currentYear, currentDate, seasonStartDate, hourOfDay, new Set()).length;
+  const scarcity = Math.max(0, Math.min(1, 1 - availableCount / EXPECTED_POOL_SIZE));
+  const scarcityMult = 1 + scarcity * 2.2 * rankSensitivity;
+  const regionCountDiscount = 1 / (1 + 0.35 * (regions.length - 1));
+  const seconds = base * QUEUE_POPULATION_MULTIPLIER[queue] * timeMult * scarcityMult * regionCountDiscount * (0.7 + Math.random() * 0.6);
   return Math.round(seconds * 1000);
 }
 
@@ -133,20 +169,40 @@ const LEADERBOARD_NAME_CHANCE_MAX = 0.85;
 // never run into an actual pro, only deep into GC/SSL does a pro genuinely become the more likely pick.
 const PRO_SHARE_MIN = 0.02;
 const PRO_SHARE_MAX = 0.75;
-// How far above/below the player's own MMR a leaderboard regular's live MMR (in THIS queue) can be and
-// still be a believable opponent. This is a band around real, persisted values (not a fabricated one), so
-// if the player is genuinely #1 on the board, nobody's real MMR clears the "above" side of this anyway —
-// there's simply nobody left with a higher number to match into. 1v1 gets a wider "below" band: most pros
-// treat it as a secondary queue rather than their main grind, so their duel MMR sits further below their
-// primary-queue level than a dedicated 1v1 player's would — without the wider band, a high-1v1 player would
-// rarely see any pro at all, even though pros do still play (and show up in) duel plenty in real RL.
-const LEADERBOARD_MATCH_BAND_BELOW: Record<QueueMode, number> = { "1v1": 550, "2v2": 300, "3v3": 300 };
-const LEADERBOARD_MATCH_BAND_ABOVE = 500;
-// Not everyone on the board is actually playing right now, same as real ranked, a good chunk of any given
-// pool is offline or between sessions at any moment. Rolled fresh per queue pop rather than tracked per
-// real hour, so "who's around" genuinely varies match to match instead of always resolving to whoever's
-// nearest your MMR.
-const ONLINE_CHANCE = 0.55;
+// Only the single highest tier reachable in the current era (legacy Grand Champion, modern SSL) gets the
+// 4-band pro-density split — modern GC (below SSL) still gets the real regional roster/online system, just
+// without band weighting, same "not every top-of-ladder rank is the SAME crowd" idea the old bracketDepth
+// math already captured, just now resolved into actual named identities instead of a flat MMR-band filter.
+function isTopmostTierForEra(rankTier: RankTierId, era: RankEra): boolean {
+  return (era === "modern" && rankTier === "ssl") || (era === "legacy" && rankTier === "grand_champion");
+}
+
+// Lerp'd by bracketDepth (0 = just cracked the topmost tier, 1 = at/past the top of its uncapped range):
+// shallow depth reads mostly Low/Mid grinders, deep depth reads mostly High/Super High pros, with enough
+// overlap that "sometimes a high lobby pulls in a pro" (or vice versa) is a real, if rarer, possibility.
+const BAND_WEIGHTS_BY_DEPTH: Record<RosterBand, [number, number]> = {
+  low: [0.55, 0.05],
+  mid: [0.3, 0.2],
+  high: [0.13, 0.4],
+  super_high: [0.02, 0.35],
+};
+
+function weightForBand(band: RosterBand, bracketDepth: number): number {
+  const [atZero, atOne] = BAND_WEIGHTS_BY_DEPTH[band];
+  return atZero + (atOne - atZero) * bracketDepth;
+}
+
+function pickWeightedCandidate(pool: EligibleCandidate[], bracketDepth: number): EligibleCandidate {
+  const weights = pool.map((c) => weightForBand(c.band, bracketDepth));
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  if (total <= 0) return pool[Math.floor(Math.random() * pool.length)];
+  let roll = Math.random() * total;
+  for (let i = 0; i < pool.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) return pool[i];
+  }
+  return pool[pool.length - 1];
+}
 
 /** Picks a name for one roster slot, plus the real leaderboard MMR to force the opponent to use when one
  *  was picked, so who you face — and the number shown for them in-match — is always exactly the person
@@ -160,8 +216,10 @@ function pickName(
   playerMmr: number,
   era: RankEra,
   currentDate: SimDate,
-  seasonStartDate: SimDate
-): { name: string; leaderboardMmr?: number } {
+  seasonStartDate: SimDate,
+  regions: ProRegion[],
+  hourOfDay: number
+): { name: string; leaderboardMmr?: number; region?: ProRegion; band?: RosterBand } {
   const eligibleForLeaderboard = rankTier === "grand_champion" || rankTier === "ssl";
   // How deep into GC/SSL the player's own MMR sits, 0 at the very bottom of GC, 1 at (or past) the very
   // top of the ladder's uncapped range, scales the chance of running into a real leaderboard/pro opponent
@@ -171,29 +229,25 @@ function pickName(
   const topFloor = era === "modern" ? tierMinMmr("ssl", era, queue) : gcFloor + Math.max(100, gcFloor - champFloor);
   const bracketDepth = Math.max(0, Math.min(1, (playerMmr - gcFloor) / Math.max(100, topFloor - gcFloor)));
   const leaderboardChance = LEADERBOARD_NAME_CHANCE_MIN + bracketDepth * (LEADERBOARD_NAME_CHANCE_MAX - LEADERBOARD_NAME_CHANCE_MIN);
-  if (eligibleForLeaderboard && Math.random() < leaderboardChance) {
-    const inBandAndOnline = (c: { mmr: number }) =>
-      c.mmr >= playerMmr - LEADERBOARD_MATCH_BAND_BELOW[queue] && c.mmr <= playerMmr + LEADERBOARD_MATCH_BAND_ABOVE && Math.random() < ONLINE_CHANCE;
-    const proCandidates = activeProPlayers(currentYear)
-      .filter((p) => !used.has(p.name))
-      .map((p) => ({ name: p.name, mmr: useProLeaderboardStore.getState().getMmr(p.name, queue, era, currentYear, currentDate, seasonStartDate) }))
-      .filter(inBandAndOnline);
-    const fillerCandidates = fillerLeaderboardNames()
-      .filter((n) => !used.has(n))
-      .map((n) => ({ name: n, mmr: useLeaderboardFillerStore.getState().getMmr(n, queue, era, currentYear, currentDate, seasonStartDate) }))
-      .filter(inBandAndOnline);
-
-    // A real pro specifically should be much rarer than a filler regular at the bottom of the bracket,
-    // not just equally likely to whoever else happens to be in the combined pool (see PRO_SHARE_MIN/MAX).
-    const proShare = PRO_SHARE_MIN + bracketDepth * (PRO_SHARE_MAX - PRO_SHARE_MIN);
-    const preferPro = Math.random() < proShare;
-    let pool = preferPro ? proCandidates : fillerCandidates;
-    if (pool.length === 0) pool = preferPro ? fillerCandidates : proCandidates;
+  if (eligibleForLeaderboard && regions.length > 0 && Math.random() < leaderboardChance) {
+    const pool = gatherEligibleOpponents(regions, queue, playerMmr, era, currentYear, currentDate, seasonStartDate, hourOfDay, used);
 
     if (pool.length > 0) {
-      const chosen = pool[Math.floor(Math.random() * pool.length)];
+      let chosen: EligibleCandidate;
+      if (isTopmostTierForEra(rankTier, era)) {
+        chosen = pickWeightedCandidate(pool, bracketDepth);
+      } else {
+        // Modern GC (below SSL): no band weighting, just the old plain pro-vs-grinder share by bracket depth.
+        const proShare = PRO_SHARE_MIN + bracketDepth * (PRO_SHARE_MAX - PRO_SHARE_MIN);
+        const preferPro = Math.random() < proShare;
+        const proCandidates = pool.filter((c) => c.isPro);
+        const grinderCandidates = pool.filter((c) => !c.isPro);
+        let sharePool = preferPro ? proCandidates : grinderCandidates;
+        if (sharePool.length === 0) sharePool = preferPro ? grinderCandidates : proCandidates;
+        chosen = sharePool[Math.floor(Math.random() * sharePool.length)];
+      }
       used.add(chosen.name);
-      return { name: chosen.name, leaderboardMmr: chosen.mmr };
+      return { name: chosen.name, leaderboardMmr: chosen.mmr, region: chosen.region, band: chosen.band };
     }
   }
 
@@ -222,14 +276,18 @@ function buildOpponent(
   /** A "plain" friend's own persisted stats (see useSaveStore.ts's FriendRecord), used verbatim instead
    *  of the pro/filler leaderboard lookups above — takes priority when present, since a friend nobody
    *  else in the sim separately tracks would otherwise fall through to a fresh jittered roll every match. */
-  friendOverride?: { mmr: number; gameSense: number; mechanicalConsistency: number }
+  friendOverride?: { mmr: number; gameSense: number; mechanicalConsistency: number },
+  /** Which region this name's grinder identity belongs to (see pickName's return), needed to look its
+   *  persistent stats up in useRegionalRosterStore. Irrelevant for a real pro (region is looked up straight
+   *  off PRO_PLAYERS) or a plain filler/friend name. */
+  grinderRegion?: ProRegion
 ): MatchPlayer {
   const effectiveMmr = friendOverride?.mmr ?? leaderboardMmr;
   const proQueueOverride = effectiveMmr !== undefined ? { mmr: effectiveMmr, queue } : undefined;
   const realRlcsTitles = findRealRlcsTitlesForPlayer(name, rlcsSeasonForDate(currentDate).seasonNumber);
-  // A tracked leaderboard name (pro or filler regular), or a plain friend, carries its own persistent,
-  // gradually-simulated Game Sense/Mechanical Consistency, the same person shows up match to match instead
-  // of a fresh jittered roll every time.
+  // A tracked leaderboard name (pro, regional grinder, or filler regular), or a plain friend, carries its
+  // own persistent, gradually-simulated Game Sense/Mechanical Consistency, the same person shows up match
+  // to match instead of a fresh jittered roll every time.
   const pro = PRO_PLAYERS.find((p) => p.name === name);
   const persistentStats = friendOverride
     ? { gameSense: friendOverride.gameSense, mechanicalConsistency: friendOverride.mechanicalConsistency }
@@ -237,7 +295,9 @@ function buildOpponent(
       ? undefined
       : pro
         ? useProLeaderboardStore.getState().getStats(pro.name, queue, era, currentYear, currentDate, seasonStartDate)
-        : useLeaderboardFillerStore.getState().getStats(name, queue, era, currentYear, currentDate, seasonStartDate);
+        : grinderRegion
+          ? useRegionalRosterStore.getState().getStats(name, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate)
+          : useLeaderboardFillerStore.getState().getStats(name, queue, era, currentYear, currentDate, seasonStartDate);
   return {
     ...generateOpponentStats(name, team, rankTier, era, seasonNumber, currentYear, playerMmr, queue, proQueueOverride, false, realRlcsTitles, persistentStats),
     points: 0,
@@ -258,7 +318,12 @@ function generateRoster(
   /** A party member's own persisted stats (see useSaveStore.ts's FriendRecord) for whichever queue is
    *  being played right now, keyed by name — only ever consulted for a party member who isn't a real pro
    *  or filler-leaderboard regular (those already carry their own persistence). */
-  friendStatsForQueue: Record<string, { mmr: number; gameSense: number; mechanicalConsistency: number }> = {}
+  friendStatsForQueue: Record<string, { mmr: number; gameSense: number; mechanicalConsistency: number }> = {},
+  /** GC+/SSL only: which regions the player selected to search, and the region-local hour to check each
+   *  candidate's online/offline schedule against. Ignored (empty) below GC — pickName's own tier gate keeps
+   *  those matches on the plain generic-filler path regardless. */
+  regions: ProRegion[] = [],
+  hourOfDay = 0
 ): MatchPlayer[] {
   const perTeam = queue === "1v1" ? 1 : queue === "2v2" ? 2 : 3;
   const used = new Set<string>([self.name]);
@@ -289,25 +354,124 @@ function generateRoster(
   for (const partyName of partyNames) {
     used.add(partyName);
     const pro = PRO_PLAYERS.find((p) => p.name === partyName);
-    const isFiller = fillerLeaderboardNames().includes(partyName);
+    const grinderRegion = pro ? undefined : findGrinderRegion(partyName, currentYear);
+    const isFiller = !pro && !grinderRegion && fillerLeaderboardNames().includes(partyName);
     const leaderboardMmr = pro
       ? useProLeaderboardStore.getState().getMmr(pro.name, queue, era, currentYear, currentDate, seasonStartDate)
-      : isFiller
-        ? useLeaderboardFillerStore.getState().getMmr(partyName, queue, era, currentYear, currentDate, seasonStartDate)
-        : undefined;
-    const friendOverride = !pro && !isFiller ? friendStatsForQueue[partyName] : undefined;
-    const friendPlayer = buildOpponent(partyName, "blue", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, leaderboardMmr, friendOverride);
+      : grinderRegion
+        ? useRegionalRosterStore.getState().getMmr(partyName, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate)
+        : isFiller
+          ? useLeaderboardFillerStore.getState().getMmr(partyName, queue, era, currentYear, currentDate, seasonStartDate)
+          : undefined;
+    const friendOverride = !pro && !grinderRegion && !isFiller ? friendStatsForQueue[partyName] : undefined;
+    const friendPlayer = buildOpponent(partyName, "blue", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, leaderboardMmr, friendOverride, grinderRegion);
     players.push({ ...friendPlayer, partyId: selfPartyId });
     blueSlotsRemaining--;
   }
   for (let i = 0; i < blueSlotsRemaining; i++) {
-    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate);
-    players.push(buildOpponent(picked.name, "blue", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, picked.leaderboardMmr));
+    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate, regions, hourOfDay);
+    players.push(buildOpponent(picked.name, "blue", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, picked.leaderboardMmr, undefined, picked.region));
   }
   for (let i = 0; i < perTeam; i++) {
-    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate);
-    players.push(buildOpponent(picked.name, "orange", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, picked.leaderboardMmr));
+    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate, regions, hourOfDay);
+    players.push(buildOpponent(picked.name, "orange", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, picked.leaderboardMmr, undefined, picked.region));
   }
+  return applyPartyFlavor(players);
+}
+
+/** Scans every region's grinder roster for a name — only ever needed for the rare party member/friend whose
+ *  name happens to already be a generated grinder identity, generateRoster's other paths already know their
+ *  own region up front. Cheap (~50 names x 7 regions), fine to call per lookup. */
+function findGrinderRegion(name: string, currentYear: number): ProRegion | undefined {
+  const regions: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
+  for (const region of regions) {
+    if (regionalGrinderRoster(region, currentYear).some((g) => g.name === name)) return region;
+  }
+  return undefined;
+}
+
+// GC+/SSL only: a small session-scale memory of who you've recently faced, so a real ranked-feeling
+// "running into the same lobby a few games in a row" effect can happen — deliberately in-memory only (not
+// persisted), this is a same-session recency effect, not a permanent history (the persistent MMR/stats
+// stores are what make "you've met this AI before" durable across sessions).
+interface RecentLobby {
+  queue: QueueMode;
+  names: string[];
+  regions: ProRegion[];
+  ageInMatches: number;
+}
+let recentLobbies: RecentLobby[] = [];
+const RECENT_LOBBY_MEMORY = 6;
+const REMATCH_CHANCE = 0.18;
+const REMATCH_MAX_AGE_MATCHES = 5;
+
+function recordRecentLobby(queue: QueueMode, names: string[], regions: ProRegion[]) {
+  recentLobbies = recentLobbies
+    .map((l) => ({ ...l, ageInMatches: l.ageInMatches + 1 }))
+    .filter((l) => l.ageInMatches <= REMATCH_MAX_AGE_MATCHES);
+  recentLobbies.unshift({ queue, names, regions, ageInMatches: 0 });
+  recentLobbies = recentLobbies.slice(0, RECENT_LOBBY_MEMORY);
+}
+
+/** Resolves which region a real name (pro OR grinder) belongs to, for the online-schedule check below. */
+function regionOfName(name: string, currentYear: number): ProRegion | undefined {
+  return PRO_PLAYERS.find((p) => p.name === name)?.region ?? findGrinderRegion(name, currentYear);
+}
+
+/** Attempts to rebuild a GC+/SSL roster from a recent lobby instead of a fresh pickName roll — the "get
+ *  rematched or get the same lobby" mechanic. Reuses the old opponent names (fresh MMR/stats relookup, not
+ *  stale numbers), reshuffles team assignment for 2v2/3v3, and fills any now-offline slot with a normal
+ *  pickName roll. Returns null (caller falls back to a normal generateRoster call) if no eligible lobby
+ *  exists, or too few of its names are still online to be worth reusing. Skipped entirely when the player
+ *  brought a party — team assignment math for "self's team keeps its party" gets messy combined with a
+ *  reused lobby, and it's a rare enough overlap not to be worth it. */
+function tryRematchRoster(
+  queue: QueueMode,
+  self: SelfStats,
+  rankTier: RankTierId,
+  era: RankEra,
+  seasonNumber: number,
+  currentYear: number,
+  playerMmr: number,
+  currentDate: SimDate,
+  seasonStartDate: SimDate,
+  regions: ProRegion[],
+  hourOfDay: number
+): MatchPlayer[] | null {
+  const eligible = recentLobbies.filter((l) => l.queue === queue && l.regions.some((r) => regions.includes(r)));
+  if (eligible.length === 0) return null;
+  const lobby = eligible[Math.floor(Math.random() * eligible.length)];
+
+  const stillOnline = lobby.names.filter((name) => {
+    const region = regionOfName(name, currentYear);
+    if (!region) return false;
+    return isOnlineNow(name, region, currentDate, (hourOfDay + REGION_HOUR_OFFSET[region]) % 24);
+  });
+  if (stillOnline.length < Math.ceil(lobby.names.length / 2)) return null;
+
+  const perTeam = queue === "1v1" ? 1 : queue === "2v2" ? 2 : 3;
+  const used = new Set<string>([self.name, ...stillOnline]);
+  const shuffled = [...stillOnline].sort(() => Math.random() - 0.5);
+  const totalSlots = perTeam * 2 - 1;
+  while (shuffled.length < totalSlots) {
+    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate, regions, hourOfDay);
+    shuffled.push(picked.name);
+  }
+
+  const players: MatchPlayer[] = [
+    { name: self.name, team: "blue", isSelf: true, gameSense: self.gameSense, mechanicalConsistency: self.mechanicalConsistency, foundationStats: self.foundationStats, title: self.title, mmr: playerMmr, points: 0, duelMastery: self.duelMastery, orgTag: self.orgTag },
+  ];
+  shuffled.slice(0, totalSlots).forEach((name, i) => {
+    const team = i < perTeam - 1 ? "blue" : "orange";
+    const pro = PRO_PLAYERS.find((p) => p.name === name);
+    const grinderRegion = pro ? undefined : findGrinderRegion(name, currentYear);
+    const leaderboardMmr = pro
+      ? useProLeaderboardStore.getState().getMmr(pro.name, queue, era, currentYear, currentDate, seasonStartDate)
+      : grinderRegion
+        ? useRegionalRosterStore.getState().getMmr(name, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate)
+        : undefined;
+    players.push(buildOpponent(name, team, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, leaderboardMmr, undefined, grinderRegion));
+  });
   return applyPartyFlavor(players);
 }
 
@@ -398,6 +562,7 @@ function buildAutoQueueRequest(save: ReturnType<typeof useSaveStore.getState>, e
     queue: q,
     rankTier,
     playerMmr: p.mmr,
+    regions: save.selectedMatchmakingRegions,
     self: {
       name: save.displayName,
       gameSense: save.player.gameSense[q],
@@ -430,6 +595,13 @@ interface MatchStoreState {
    *  match ends (see MatchScreen's handleContinue) — 0 for a tournament series, which skips matchmaking
    *  entirely. */
   queueDurationMs: number;
+  /** Live estimate per queue (GC+/SSL's scarcity-aware computeQueueDurationMs result, or the plain formula
+   *  below that), set the moment each search's timer is scheduled — read by RankedScreen's live queue timer
+   *  UI instead of the number being trapped inside `startQueue`'s own closure. */
+  estimatedQueueDurationsMs: Partial<Record<QueueMode, number>>;
+  /** `Date.now()` when the current search began, or null while not searching — RankedScreen's live queue
+   *  timer computes elapsed time against this. */
+  searchStartedAt: number | null;
   clockSeconds: number;
   overtime: boolean;
   otSeconds: number;
@@ -656,6 +828,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   queuedModes: [],
   autoQueueModes: null,
   queueDurationMs: 0,
+  estimatedQueueDurationsMs: {},
+  searchStartedAt: null,
   clockSeconds: GAME_DURATION_SECONDS,
   overtime: false,
   otSeconds: 0,
@@ -678,6 +852,10 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
 
   startQueue: (requests, hourOfDay, era, seasonNumber, currentYear, currentDate, seasonStartDate, partyMemberNames, partyFriendStats) => {
     clearAllTimers();
+    const estimatedQueueDurationsMs: Partial<Record<QueueMode, number>> = {};
+    requests.forEach((req) => {
+      estimatedQueueDurationsMs[req.queue] = computeQueueDurationMs(req.queue, req.rankTier, hourOfDay, era, req.regions ?? [], req.playerMmr, currentYear, currentDate, seasonStartDate);
+    });
     set({
       phase: "searching",
       queue: null,
@@ -691,9 +869,11 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       fieldY: 50,
       duelNextAttacker: null,
       duelIsCounter: false,
+      estimatedQueueDurationsMs,
+      searchStartedAt: Date.now(),
     });
     requests.forEach((req) => {
-      const durationMs = computeQueueDurationMs(req.queue, req.rankTier, hourOfDay);
+      const durationMs = estimatedQueueDurationsMs[req.queue]!;
       queueTimers[req.queue] = setTimeout(() => {
         // This queue popped first, every other pending search is moot now, tear them down immediately.
         Object.values(queueTimers).forEach((t) => t && clearTimeout(t));
@@ -705,7 +885,19 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
             friendStatsForQueue[name] = { mmr: record.mmr[req.queue], gameSense: record.gameSense[req.queue], mechanicalConsistency: record.mechanicalConsistency[req.queue] };
           }
         }
-        let players = generateRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, partyMemberNames, friendStatsForQueue);
+        const regions = req.regions ?? [];
+        const isEligibleTier = req.rankTier === "grand_champion" || req.rankTier === "ssl";
+        const noParty = !partyMemberNames || partyMemberNames.length === 0;
+        const rematch =
+          isEligibleTier && noParty && regions.length > 0 && Math.random() < REMATCH_CHANCE
+            ? tryRematchRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, regions, hourOfDay)
+            : null;
+        let players =
+          rematch ??
+          generateRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, partyMemberNames, friendStatsForQueue, regions, hourOfDay);
+        if (isEligibleTier && regions.length > 0) {
+          recordRecentLobby(req.queue, players.filter((p) => !p.isSelf).map((p) => p.name), regions);
+        }
         logIdCounter = 0;
         const log: MatchLogLine[] = [{ id: logIdCounter++, clockLabel: clockLabel(GAME_DURATION_SECONDS), text: "Kickoff." }];
         if (req.queue === "1v1") {
@@ -718,6 +910,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
           queue: req.queue,
           queuedModes: [],
           queueDurationMs: durationMs,
+          searchStartedAt: null,
           players,
           clockSeconds: GAME_DURATION_SECONDS,
           overtime: false,
@@ -740,7 +933,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     clearAllTimers();
     // A manual cancel stops auto-queue too, otherwise the persistent banner would keep claiming it's
     // still on even though nothing will actually restart the search from here.
-    set({ phase: "idle", queue: null, queuedModes: [], autoQueueModes: null });
+    set({ phase: "idle", queue: null, queuedModes: [], autoQueueModes: null, searchStartedAt: null });
   },
 
   acknowledgeFound: () => {

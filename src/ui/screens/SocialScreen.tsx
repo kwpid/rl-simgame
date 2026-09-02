@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
-import { PRO_PLAYERS } from "@/data/proPlayers";
+import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
+import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
+import { regionalGrinderRoster } from "@/data/regionalGrinders";
 import { STREAMERS } from "@/data/showmatches";
 import { computeOverallRating } from "@/data/matchSim";
 import { flattenProgress } from "@/data/matchSim";
@@ -50,14 +52,19 @@ function approximateOverallRating(gameSense: number, mechanicalConsistency: numb
   return computeOverallRating(gameSense, mechanicalConsistency, uniformFoundation);
 }
 
+const ALL_MATCHMAKING_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
 const FILLER_REGIONS = ["NA", "EU", "OCE", "SAM", "MENA", "APAC"];
 
-/** Best-effort region + pro flag for a name encountered in a match: a real pro's own region, a filler
- *  leaderboard regular's assigned region (same deterministic formula the board itself uses), or unknown
- *  for a plain low-rank opponent name (never tracked anywhere, just flavor for that tier). */
-function lookupPlayerInfo(name: string): { region: string; isPro: boolean } {
+/** Best-effort region + pro flag for a name encountered in a match: a real pro's own region, a regional
+ *  grinder identity's real assigned region, a (pre-migration) filler leaderboard regular's fake round-robin
+ *  region kept only as a fallback for names recorded before this store existed, or unknown for a plain
+ *  low-rank opponent name (never tracked anywhere, just flavor for that tier). */
+function lookupPlayerInfo(name: string, currentYear: number): { region: string; isPro: boolean } {
   const pro = PRO_PLAYERS.find((p) => p.name === name);
   if (pro) return { region: pro.region, isPro: true };
+  for (const region of ALL_MATCHMAKING_REGIONS) {
+    if (regionalGrinderRoster(region, currentYear).some((g) => g.name === name)) return { region, isPro: false };
+  }
   const fillerIndex = fillerLeaderboardNames().indexOf(name);
   if (fillerIndex >= 0) return { region: FILLER_REGIONS[fillerIndex % FILLER_REGIONS.length], isPro: false };
   return { region: "Unknown", isPro: false };
@@ -316,6 +323,11 @@ function FriendsTab() {
       const { gameSense, mechanicalConsistency } = useProLeaderboardStore.getState().getStats(name, "2v2", era, s.currentDate.year, s.currentDate, s.seasonStartDate);
       return approximateOverallRating(gameSense, mechanicalConsistency);
     }
+    const grinderRegion = ALL_MATCHMAKING_REGIONS.find((region) => regionalGrinderRoster(region, s.currentDate.year).some((g) => g.name === name));
+    if (grinderRegion) {
+      const { gameSense, mechanicalConsistency } = useRegionalRosterStore.getState().getStats(name, grinderRegion, "2v2", era, s.currentDate.year, s.currentDate, s.seasonStartDate);
+      return approximateOverallRating(gameSense, mechanicalConsistency);
+    }
     if (fillerLeaderboardNames().includes(name)) {
       const { gameSense, mechanicalConsistency } = useLeaderboardFillerStore.getState().getStats(name, "2v2", era, s.currentDate.year, s.currentDate, s.seasonStartDate);
       return approximateOverallRating(gameSense, mechanicalConsistency);
@@ -394,7 +406,7 @@ function FriendsTab() {
           </div>
         )}
         {recentCandidates.map((name) => {
-          const info = lookupPlayerInfo(name);
+          const info = lookupPlayerInfo(name, s.currentDate.year);
           return (
             <div key={name} className="add-friend-row">
               <span>

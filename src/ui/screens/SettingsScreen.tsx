@@ -13,6 +13,7 @@ import { QUEUE_CONCEPTS } from "@/data/queueConcepts";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore } from "@/store/useLeaderboardFillerStore";
 import { useTournamentStore } from "@/store/useTournamentStore";
+import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 
 const DEV_MODE_KEY = "rl-sim:dev-mode";
 const REWARD_TIER_OPTIONS: RankTierId[] = [
@@ -310,6 +311,7 @@ function DeveloperToolsSection() {
   const devSetRewardLevel = useSaveStore((store) => store.devSetRewardLevel);
   const resetProLeaderboard = useProLeaderboardStore((store) => store.resetAll);
   const resetFillerLeaderboard = useLeaderboardFillerStore((store) => store.resetAll);
+  const resetRegionalRoster = useRegionalRosterStore((store) => store.resetAll);
   const resetAllInstances = useTournamentStore((store) => store.resetAllInstances);
 
   const [mmrQueue, setMmrQueue] = useState<QueueMode>("2v2");
@@ -526,9 +528,10 @@ function DeveloperToolsSection() {
                   const era = eraForDate(s.currentDate);
                   resetProLeaderboard(era, s.currentDate.year, s.seasonStartDate);
                   resetFillerLeaderboard(era, s.currentDate.year, s.seasonStartDate);
+                  resetRegionalRoster(era, s.currentDate.year, s.seasonStartDate);
                 }}
               >
-                Refresh Leaderboard (pros + fillers)
+                Refresh Leaderboard (pros + fillers + regional roster)
               </button>
             </div>
           </div>

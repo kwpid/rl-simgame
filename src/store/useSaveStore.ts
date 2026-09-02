@@ -34,6 +34,7 @@ import {
 } from "@/data/orgs";
 import { ORG_NAMES, saveRegionToProRegion, rlcsSeasonPhase } from "@/data/tournaments";
 import { QUEUES } from "@/data/queues";
+import type { ProRegion } from "@/data/proPlayers";
 
 // The save is now a live, mutable Zustand store instead of a frozen constant. `mockSave` in data/mockSave.ts
 // still supplies a placeholder shape at module load (before the real active save finishes loading from
@@ -170,6 +171,9 @@ interface SaveStoreState extends SaveData {
    *  unlike `username` (the fixed account id, letters/digits only) this can be anything and changed any
    *  time. A blank/whitespace-only value is ignored rather than leaving the player with an empty name. */
   setDisplayName: (name: string) => void;
+  /** Which regions GC+/SSL ranked matchmaking draws real named opponents from (see useMatchStore.ts's
+   *  pickName/gatherEligibleOpponents) — account-wide, not per-queue. Ignored below GC. */
+  setSelectedMatchmakingRegions: (regions: ProRegion[]) => void;
   setEquippedTitleId: (id: string | null) => void;
   /** Adds a title to the player's collection if they don't already have it (deduped by id). Used for
    *  tournament results, competitive titles are earned once and kept forever, same as season titles. */
@@ -580,6 +584,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     if (trimmed.length === 0) return;
     set({ displayName: trimmed.slice(0, 24) });
   },
+  setSelectedMatchmakingRegions: (regions) => set({ selectedMatchmakingRegions: regions.length > 0 ? regions : get().selectedMatchmakingRegions }),
   setEquippedTitleId: (id) => set({ equippedTitleId: id }),
   dismissSeasonAnnouncement: () => set({ pendingSeasonAnnouncement: null }),
   dismissPendingPlacementResult: () => set({ pendingPlacementResult: null }),

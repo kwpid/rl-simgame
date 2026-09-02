@@ -5,6 +5,7 @@ import type { RankTierId, RankEra } from "./rankSystem";
 import { MECHANICS, type FoundationCategory } from "./mechanics";
 import type { TitleEntry, SeasonAnnouncement } from "./seasons";
 import type { SimDate } from "./dateUtils";
+import type { ProRegion } from "./proPlayers";
 
 export type QueueMode = "1v1" | "2v2" | "3v3";
 export type { RankTierId as RankTier };
@@ -246,6 +247,10 @@ export const mockSave = {
   realName: "Jordan Reyes",
   age: 19,
   region: "north_america" as Region,
+  // GC+/SSL ranked matchmaking's region multi-select (see useMatchStore.ts's pickName/gatherEligibleOpponents),
+  // account-wide rather than per-queue since "which regions am I searching" is one decision, not per-playlist.
+  // Defaults to just the player's own region; NA here matches the demo save's own "north_america".
+  selectedMatchmakingRegions: ["NA"] as ProRegion[],
   startDate: { year: 2017 },
   currentDate: DEMO_CURRENT_DATE,
   clockHour: 9, // 24h internally, displayed 12h with AM/PM, see data/dateUtils.ts

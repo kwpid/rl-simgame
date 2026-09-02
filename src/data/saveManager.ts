@@ -10,6 +10,7 @@ import { QUEUE_CONCEPTS } from "./queueConcepts";
 import { eraForDate, divisionCount } from "./rankSystem";
 import { initialSeasonForDate } from "./seasons";
 import { clearTournamentDataForSave } from "@/store/useTournamentStore";
+import { saveRegionToProRegion } from "./tournaments";
 
 /**
  * Saves persisted from an older build can be missing fields the current schema expects, or have fields
@@ -53,6 +54,10 @@ function migrateSaveData(raw: any): SaveData {
   }
 
   if (data.totalMinutesPlayed === undefined) data.totalMinutesPlayed = 0;
+
+  // GC+/SSL ranked matchmaking's region multi-select didn't exist before, default to just the player's own
+  // region, same as a fresh save.
+  if (data.selectedMatchmakingRegions === undefined) data.selectedMatchmakingRegions = [saveRegionToProRegion(data.region)];
 
   // Display Name (the free-text, always-editable name shown everywhere) didn't exist before, the fixed
   // username used to double as the shown name. Old saves keep whatever they already had as their display
@@ -273,6 +278,7 @@ function createFreshSaveData(config: NewSaveConfig): SaveData {
     realName: config.realName,
     age: config.age,
     region: config.region,
+    selectedMatchmakingRegions: [saveRegionToProRegion(config.region)],
     startDate: { year: config.startYear },
     currentDate: startDate,
     clockHour: 9,

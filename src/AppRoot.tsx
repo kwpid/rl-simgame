@@ -4,6 +4,7 @@ import { SaveSelectScreen } from "@/ui/screens/SaveSelectScreen";
 import { SaveCreateScreen } from "@/ui/screens/SaveCreateScreen";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useTournamentStore } from "@/store/useTournamentStore";
+import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 import {
   listSaves,
   loadSave,
@@ -34,6 +35,7 @@ export default function AppRoot() {
         if (data) {
           useSaveStore.getState().initFromSave(data);
           useTournamentStore.getState().loadForSave(activeId);
+          useRegionalRosterStore.getState().loadForSave(activeId);
           setPhase("ready");
           return;
         }
@@ -52,6 +54,7 @@ export default function AppRoot() {
     if (!data) return;
     useSaveStore.getState().initFromSave(data);
     useTournamentStore.getState().loadForSave(id);
+    useRegionalRosterStore.getState().loadForSave(id);
     await setActiveSaveId(id);
     setPhase("ready");
   }

@@ -6,11 +6,24 @@ import { QUEUE_LABELS, QUEUE_ICONS } from "@/data/queues";
 import { FOUNDATION_LABELS, type FoundationCategory } from "@/data/mechanics";
 import { glowColor } from "@/data/seasons";
 import { eraForDate } from "@/data/rankSystem";
-import { PRO_PLAYERS } from "@/data/proPlayers";
+import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
+import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
+import { regionalGrinderRoster } from "@/data/regionalGrinders";
 import { computeMmrDelta, computeOverallRating } from "@/data/matchSim";
 import { OrgTag } from "@/ui/components/OrgTag";
+
+const ALL_MATCHMAKING_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
+
+/** Scans every region's grinder roster for a name — used to route a post-match result to the right
+ *  region's persistent MMR/stats (see useRegionalRosterStore.ts). */
+function findGrinderRegion(name: string, currentYear: number): ProRegion | undefined {
+  for (const region of ALL_MATCHMAKING_REGIONS) {
+    if (regionalGrinderRoster(region, currentYear).some((g) => g.name === name)) return region;
+  }
+  return undefined;
+}
 
 const MATCHUP_STATS: { key: FoundationCategory | "gameSense" | "mechanicalConsistency"; label: string }[] = [
   { key: "gameSense", label: "Game Sense" },
@@ -198,8 +211,11 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
           if (p.isSelf) return;
           const delta = p.team === "blue" ? blueDelta : orangeDelta;
           const pro = PRO_PLAYERS.find((pp) => pp.name === p.name);
+          const grinderRegion = pro ? undefined : findGrinderRegion(p.name, currentDate.year);
           if (pro) {
             useProLeaderboardStore.getState().applyResult(pro.name, queue, delta, era, currentDate.year, seasonStartDate);
+          } else if (grinderRegion) {
+            useRegionalRosterStore.getState().applyResult(p.name, grinderRegion, queue, delta, era, currentDate.year, seasonStartDate);
           } else if (fillerNames.has(p.name)) {
             useLeaderboardFillerStore.getState().applyResult(p.name, queue, delta, era, currentDate.year, seasonStartDate);
           } else if (friends[p.name]) {
