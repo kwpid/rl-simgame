@@ -115,6 +115,9 @@ export interface FriendRecord {
   mmr: Record<QueueMode, number>;
   gameSense: Record<QueueMode, number>;
   mechanicalConsistency: Record<QueueMode, number>;
+  /** Career-high MMR per queue, updated whenever mmr[queue] exceeds it — mirrors the same peakMmr
+   *  tracking on the player's own RankedProfile, used for the "View Stats" modal. */
+  peakMmr: Record<QueueMode, number>;
 }
 
 export interface ShowmatchInvite {

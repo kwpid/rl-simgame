@@ -633,6 +633,11 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
         "2v2": seedFor("2v2", state.player.mechanicalConsistency["2v2"]),
         "3v3": seedFor("3v3", state.player.mechanicalConsistency["3v3"]),
       },
+      peakMmr: {
+        "1v1": seedFor("1v1", state.rankedProfiles["1v1"].mmr),
+        "2v2": seedFor("2v2", state.rankedProfiles["2v2"].mmr),
+        "3v3": seedFor("3v3", state.rankedProfiles["3v3"].mmr),
+      },
     };
     set({ friends: { ...state.friends, [name]: record } });
   },
@@ -663,11 +668,13 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     if (!friend) return;
     const nextGameSense = friend.gameSense[queue] + diminishingGain(friend.gameSense[queue], PASSIVE_GAME_SENSE_HOURS_EQUIV, 100, 0);
     const nextMech = friend.mechanicalConsistency[queue] + diminishingGain(friend.mechanicalConsistency[queue], PASSIVE_GAME_SENSE_HOURS_EQUIV, 100, 0);
+    const nextMmr = Math.max(0, friend.mmr[queue] + mmrDelta);
     const next: FriendRecord = {
       ...friend,
-      mmr: { ...friend.mmr, [queue]: Math.max(0, friend.mmr[queue] + mmrDelta) },
+      mmr: { ...friend.mmr, [queue]: nextMmr },
       gameSense: { ...friend.gameSense, [queue]: nextGameSense },
       mechanicalConsistency: { ...friend.mechanicalConsistency, [queue]: nextMech },
+      peakMmr: { ...friend.peakMmr, [queue]: Math.max(friend.peakMmr?.[queue] ?? 0, nextMmr) },
     };
     set({ friends: { ...state.friends, [name]: next } });
   },

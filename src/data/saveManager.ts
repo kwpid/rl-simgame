@@ -99,6 +99,12 @@ function migrateSaveData(raw: any): SaveData {
     friend.gameSense = { ...data.player.gameSense };
     friend.mechanicalConsistency = { ...data.player.mechanicalConsistency };
   }
+  // peakMmr per queue on FriendRecord didn't exist before — backfill from each friend's current mmr,
+  // the same baseline addFriend now seeds for new friends.
+  for (const friend of Object.values(data.friends) as Record<string, any>[]) {
+    if (friend.peakMmr !== undefined) continue;
+    friend.peakMmr = { ...(friend.mmr ?? {}) };
+  }
   if (data.pendingShowmatchInvite === undefined) data.pendingShowmatchInvite = null;
   if (data.showmatchHistory === undefined) data.showmatchHistory = [];
   if (data.lastShowmatchInviteCheckDate === undefined) data.lastShowmatchInviteCheckDate = data.currentDate;
