@@ -12,6 +12,9 @@ import { LB_NAMES, type Region } from "./mockSave";
 import type { TitleEntry, TitleGlow } from "./seasons";
 import type { SimDate } from "./dateUtils";
 import { addDays } from "./dateUtils";
+import type { RankEra } from "./rankSystem";
+import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
+import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 
 export type TournamentKind = "rlcs_regional" | "ewc" | "eleague" | "rlcs_1v1_regional" | "rlcs_major" | "rlcs_worlds" | "rlrs_regional";
 
@@ -58,60 +61,10 @@ export function saveRegionToProRegion(region: Region): ProRegion {
   return map[region];
 }
 
-// Real, recognizable-flavor org names per region, used to name generated teams, purely cosmetic.
-export const ORG_NAMES: Record<ProRegion, string[]> = {
-  NA: ["NRG", "G2 Esports", "Complexity", "Spacestation Gaming", "Version1", "The Aquarium", "Shopify Rebellion", "FaZe Clan"],
-  EU: ["Karmine Corp", "Team Vitality", "BDS", "Moist Esports", "Solary", "Team Queso", "Ninjas in Pyjamas", "Team Falcons EU"],
-  SAM: ["FURIA", "paiN Gaming", "Isurus", "Six Karma", "Case Esports"],
-  OCE: ["Mindfreak", "Rooster", "Fugitives Gaming", "Ground Zero Gaming"],
-  MENA: ["Team Falcons", "Quadrant", "5Levels", "Anubis Gaming"],
-  APAC: ["Talon Esports", "Bleed Esports", "ORDER"],
-  SSA: ["Nashi Esports"],
-};
-
-/** Real orgs go by a short tag in-game, not their full name (see the [TAG] shown next to a signed player's
- *  name in ranked/matches, OrgTag.tsx). 2-4 characters each, matching the real-world brand where there is
- *  one. Every entry in ORG_NAMES has one; anything not listed here (shouldn't happen, but stay safe) falls
- *  back to a truncated slice of the name itself, see orgTagForOrgName below. */
-export const ORG_ABBREVIATIONS: Record<string, string> = {
-  NRG: "NRG",
-  "G2 Esports": "G2",
-  Complexity: "COL",
-  "Spacestation Gaming": "SSG",
-  Version1: "V1",
-  "The Aquarium": "AQUA",
-  "Shopify Rebellion": "SR",
-  "FaZe Clan": "FAZE",
-  "Karmine Corp": "KC",
-  "Team Vitality": "VIT",
-  BDS: "BDS",
-  "Moist Esports": "MST",
-  Solary: "SOLA",
-  "Team Queso": "TQ",
-  "Ninjas in Pyjamas": "NIP",
-  "Team Falcons EU": "FLCN",
-  FURIA: "FUR",
-  "paiN Gaming": "PAIN",
-  Isurus: "ISU",
-  "Six Karma": "SIX",
-  "Case Esports": "CASE",
-  Mindfreak: "MF",
-  Rooster: "ROOS",
-  "Fugitives Gaming": "FUGI",
-  "Ground Zero Gaming": "GZG",
-  "Team Falcons": "FLCN",
-  Quadrant: "QUAD",
-  "5Levels": "5LVL",
-  "Anubis Gaming": "ANU",
-  "Talon Esports": "TLN",
-  "Bleed Esports": "BLD",
-  ORDER: "ORD",
-  "Nashi Esports": "NSH",
-};
-
-export function orgTagForOrgName(orgName: string): string {
-  return ORG_ABBREVIATIONS[orgName] ?? orgName.replace(/\s+/g, "").slice(0, 4).toUpperCase();
-}
+// Org names/tags moved to their own file (orgNames.ts) to avoid a circular import — see that file's header
+// comment. Re-exported here so every existing consumer importing them from "@/data/tournaments" is unaffected.
+export { ORG_NAMES, ORG_ABBREVIATIONS, orgTagForOrgName } from "./orgNames";
+import { ORG_NAMES } from "./orgNames";
 
 /** Deterministic-ish filler org name pool for teams that couldn't be filled with real pros (mostly early
  *  years before enough pros have debuted, or amateur open-bracket teams). */
@@ -146,17 +99,17 @@ interface EligibleRealPlayer {
  *  plus that region's `mid`-band ranked grinders (never `low` band — those read as ranked-ladder regulars,
  *  not remotely pro-caliber) — never a generic filler name. This is the entire "no filler teams" fix: a
  *  thin region (APAC/SSA) just fields fewer, entirely real teams instead of padding the field out. */
-function eligibleRealPlayersForRegion(region: ProRegion, currentYear: number): EligibleRealPlayer[] {
+/** `power` here is each player's REAL, live 3v3 ranked MMR (the same number the Top-50 leaderboard shows,
+ *  RLCS's own real competitive queue) — not a synthetic formula, so sorting by it directly means an AI who
+ *  is consistently top of the ranked ladder is exactly who gets recruited onto the region's top team,
+ *  never someone the player wouldn't otherwise recognize from ranked. */
+function eligibleRealPlayersForRegion(region: ProRegion, currentYear: number, era: RankEra, currentDate: SimDate, seasonStartDate: SimDate): EligibleRealPlayer[] {
   const pros = activeProPlayers(currentYear)
     .filter((p) => p.region === region)
-    .map((p) => {
-      const experienceYears = Math.max(0, currentYear - p.debutYear);
-      const talentBonus = isGenerationalTalent(p.name) ? 120 : 0;
-      return { name: p.name, power: PRO_TEAM_POWER_BASE + experienceGrowth(experienceYears, 40, 5000) + talentBonus };
-    });
+    .map((p) => ({ name: p.name, power: useProLeaderboardStore.getState().getMmr(p.name, "3v3", era, currentYear, currentDate, seasonStartDate) }));
   const grinders = regionalGrinderRoster(region, currentYear)
     .filter((g) => g.band === "mid")
-    .map((g) => ({ name: g.name, power: PRO_TEAM_POWER_BASE * 0.85 }));
+    .map((g) => ({ name: g.name, power: useRegionalRosterStore.getState().getMmr(g.name, region, "3v3", era, currentYear, currentDate, seasonStartDate) }));
   return [...pros, ...grinders];
 }
 
@@ -198,8 +151,8 @@ const ALL_PRO_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", 
  *  `(region, seasonNumber, resetSeed)` (see `seededShuffle`) — call this again for the same three inputs
  *  any time this season and the SAME roster comes back, which is what "locked for the season" means at the
  *  data layer: nothing has to actively enforce the lock, there's just nothing that would change it. */
-export function generateTeamsForRegion(region: ProRegion, currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string): TournamentTeam[] {
-  const byPower = eligibleRealPlayersForRegion(region, currentYear).sort((a, b) => b.power - a.power);
+export function generateTeamsForRegion(region: ProRegion, currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string, era: RankEra, currentDate: SimDate, seasonStartDate: SimDate): TournamentTeam[] {
+  const byPower = eligibleRealPlayersForRegion(region, currentYear, era, currentDate, seasonStartDate).sort((a, b) => b.power - a.power);
   const eligible = jitterRankOrder(byPower, `${region}-${seasonNumber}-${resetSeed}`);
   // Org names are used in their listed order (not shuffled) — ORG_NAMES already lists each region's most
   // recognizable org first, so team 0 (which gets the top of the power-sorted roster) is consistently that
@@ -218,8 +171,8 @@ export function generateTeamsForRegion(region: ProRegion, currentYear: number, s
 /** Builds a globally-open real field (EWC, ELEAGUE): pulls eligible real players from every region rather
  *  than one, for events that aren't region-locked the way an RLCS qualifier is. Same locked-per-season
  *  determinism as `generateTeamsForRegion`. */
-export function generateGlobalTeams(currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string): TournamentTeam[] {
-  const byPower = ALL_PRO_REGIONS.flatMap((r) => eligibleRealPlayersForRegion(r, currentYear)).sort((a, b) => b.power - a.power);
+export function generateGlobalTeams(currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string, era: RankEra, currentDate: SimDate, seasonStartDate: SimDate): TournamentTeam[] {
+  const byPower = ALL_PRO_REGIONS.flatMap((r) => eligibleRealPlayersForRegion(r, currentYear, era, currentDate, seasonStartDate)).sort((a, b) => b.power - a.power);
   const eligible = jitterRankOrder(byPower, `GLOBAL-${seasonNumber}-${resetSeed}`);
   const orgNames = Object.values(ORG_NAMES).flat();
   const teamCount = Math.min(Math.floor(eligible.length / 3), orgNames.length);

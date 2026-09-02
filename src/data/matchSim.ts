@@ -8,7 +8,7 @@ import { deriveRankFromMmr, tierMinMmr, type RankEra, type RankQueue, type RankT
 import { pickAiTitle, type TitleEntry } from "./seasons";
 import { PRO_PLAYERS, isGenerationalTalent, experienceGrowth, hashString, type ProRegion } from "./proPlayers";
 import type { PlaystyleProfile } from "./mockSave";
-import { ORG_NAMES, orgTagForOrgName } from "./tournaments";
+import { ORG_NAMES, orgTagForOrgName } from "./orgNames";
 
 /** The human player's real per-mechanic/per-concept training and playstyle tendency, only ever present
  *  for `isSelf` — an AI opponent has no individual trained-mechanic breakdown, the 1v1 duel engine falls

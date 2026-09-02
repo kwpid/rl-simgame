@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Card } from "@/ui/components/Card";
 import { StatBar } from "@/ui/components/StatBar";
 import { SectionShell } from "@/ui/components/LockedSection";
@@ -102,15 +102,17 @@ export function OrgScreen() {
   const { seasonNumber: rlcsSeasonNumber } = rlcsSeasonForDate(s.currentDate);
 
   // The SAME real, season-locked rosters the actual RLCS brackets use (see data/tournaments.ts) — a real
-  // snapshot of who the top orgs are this season, not a separate one-off generation.
-  const topRegionTeams = useMemo(
-    () => generateTeamsForRegion(proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, `orgtop_region_${proRegion}`).sort((a, b) => b.power - a.power),
-    [proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed]
-  );
-  const topWorldTeams = useMemo(
-    () => generateGlobalTeams(currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, "orgtop_world").sort((a, b) => b.power - a.power),
-    [currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed]
-  );
+  // snapshot of who the top orgs are this season, not a separate one-off generation. Computed in an effect
+  // (not useMemo) because these read real MMR via the leaderboard stores' getMmr, which also warms
+  // (writes) that entry's catch-up state — a side effect that must not run during another component's
+  // render, same rule every screen reading these stores follows.
+  const [topRegionTeams, setTopRegionTeams] = useState<ReturnType<typeof generateTeamsForRegion>>([]);
+  const [topWorldTeams, setTopWorldTeams] = useState<ReturnType<typeof generateGlobalTeams>>([]);
+  useEffect(() => {
+    setTopRegionTeams(generateTeamsForRegion(proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, `orgtop_region_${proRegion}`, era, s.currentDate, s.seasonStartDate).sort((a, b) => b.power - a.power));
+    setTopWorldTeams(generateGlobalTeams(currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, "orgtop_world", era, s.currentDate, s.seasonStartDate).sort((a, b) => b.power - a.power));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, era, s.currentDate.year, s.currentDate.month, s.currentDate.day]);
 
   useEffect(() => {
     ensureOrgScouting(s.currentDate, era, currentYear);

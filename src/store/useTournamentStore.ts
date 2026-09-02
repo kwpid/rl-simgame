@@ -8,6 +8,7 @@ import { create } from "zustand";
 import type { SimDate } from "@/data/dateUtils";
 import { daysBetween, addDays } from "@/data/dateUtils";
 import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
+import { eraForDate } from "@/data/rankSystem";
 import {
   buildSeasonSchedule,
   rlcsSeasonForDate,
@@ -222,15 +223,16 @@ function resolveStage(format: StageConfig["format"], teams: TournamentTeam[], ad
   return runSingleElimStage(teams);
 }
 
-function createInstance(scheduled: ScheduledTournament, currentYear: number, seasonNumber: number, teamsResetSeed: number): TournamentInstance {
+function createInstance(scheduled: ScheduledTournament, currentYear: number, seasonNumber: number, teamsResetSeed: number, currentDate: SimDate, seasonStartDate: SimDate): TournamentInstance {
+  const era = eraForDate(currentDate);
   const teams =
     scheduled.region === null
-      ? generateGlobalTeams(currentYear, seasonNumber, teamsResetSeed, scheduled.id)
+      ? generateGlobalTeams(currentYear, seasonNumber, teamsResetSeed, scheduled.id, era, currentDate, seasonStartDate)
       : scheduled.kind === "rlcs_1v1_regional"
         ? generateSoloEntrantsForRegion(scheduled.region, currentYear, scheduled.fieldSize, scheduled.id)
         : scheduled.kind === "rlrs_regional"
           ? generateRivalSeriesTeamsForRegion(scheduled.region, scheduled.fieldSize, scheduled.id)
-          : generateTeamsForRegion(scheduled.region, currentYear, seasonNumber, teamsResetSeed, scheduled.id);
+          : generateTeamsForRegion(scheduled.region, currentYear, seasonNumber, teamsResetSeed, scheduled.id, era, currentDate, seasonStartDate);
   return {
     id: scheduled.id,
     kind: scheduled.kind,
@@ -586,7 +588,7 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
       if (daysBetween(item.startDate, currentDate) < -REGISTRATION_WINDOW_DAYS) continue;
       if (isFirstSeason && daysBetween(firstSeasonGateDate, currentDate) < 0) continue;
       if (!next[item.id]) {
-        next[item.id] = createInstance(item, currentYear, seasonNumber, teamsResetSeed);
+        next[item.id] = createInstance(item, currentYear, seasonNumber, teamsResetSeed, currentDate, seasonStartDate);
         changed = true;
         continue;
       }
