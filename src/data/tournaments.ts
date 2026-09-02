@@ -148,12 +148,24 @@ function eligibleRealPlayersForRegion(region: ProRegion, currentYear: number, er
 
 /** Nudges a power-sorted list without fully scrambling it: each adjacent pair has a deterministic chance to
  *  swap, so the overall best-to-worst order mostly holds (the actual top players typically end up on the
- *  actual top team) without every season producing a razor-exact ranking. */
+ *  actual top team) without every season producing a razor-exact ranking. A second, longer-range pass gives
+ *  a real (but minority) chance that one of the region's actual top 3 gets pulled further down the order
+ *  entirely — the "already under contract elsewhere" case — rather than the top 3 clustering onto one team
+ *  every single season. */
 function jitterRankOrder<T>(sortedDesc: T[], seedKey: string): T[] {
   const arr = [...sortedDesc];
   for (let i = 0; i < arr.length - 1; i++) {
     const roll = hashString(`${seedKey}#jitter#${i}`) % 100;
     if (roll < 30) [arr[i], arr[i + 1]] = [arr[i + 1], arr[i]];
+  }
+  const topSwapRange = Math.min(4, arr.length - 1);
+  for (let i = 0; i < 3 && i < arr.length - 1; i++) {
+    const roll = hashString(`${seedKey}#topjitter#${i}`) % 100;
+    if (roll < 18) {
+      const offset = 2 + (hashString(`${seedKey}#topjitter_dist#${i}`) % (topSwapRange - 1 || 1));
+      const j = Math.min(i + offset, arr.length - 1);
+      if (j > i) [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
   }
   return arr;
 }
@@ -201,7 +213,11 @@ export function generateTeamsForRegion(region: ProRegion, currentYear: number, s
   return teams;
 }
 
-/** Builds a globally-open real field (EWC, ELEAGUE): every region's own ALREADY-real, season-locked teams
+/** WORK IN PROGRESS, currently unreachable — EWC/ELEAGUE aren't scheduled at all right now (see
+ *  buildSeasonSchedule's doc comment), so nothing calls this. Kept for when they're rebuilt around their
+ *  real structure (a per-region squad, not club orgs) rather than deleted outright; whatever replaces it
+ *  should NOT reuse this "org-vs-org global bracket" shape at all.
+ *  Builds a globally-open real field (EWC, ELEAGUE): every region's own ALREADY-real, season-locked teams
  *  (the exact same team objects that region's regional bracket uses, see `generateTeamsForRegion`) enter
  *  as themselves — never reshuffled into a fresh cross-region "best XI", real orgs bring their own existing
  *  roster to a global event, they don't dissolve into a brand-new dream team. Interleaved one rank at a
@@ -405,7 +421,9 @@ export const RLCS_OPEN_STAGES: StageConfig[] = [
 ];
 export const RLCS_OPEN_FIELD_SIZE = 128;
 
-/** Smaller, lower-stakes events than RLCS: one compact bracket, no multi-day Swiss/groups grind. */
+/** WORK IN PROGRESS, currently unused — see buildSeasonSchedule's doc comment. Kept in place for when
+ *  EWC/ELEAGUE get their real data model (a per-region squad + a qualifier bracket for a spot on it,
+ *  rather than club orgs playing each other) instead of being deleted outright. */
 export const EWC_STAGES: StageConfig[] = [{ format: "single_elim", label: "Bracket", entrants: 32, advanceCount: 1, days: 3 }];
 export const EWC_FIELD_SIZE = 32;
 export const ELEAGUE_STAGES: StageConfig[] = [{ format: "single_elim", label: "Bracket", entrants: 16, advanceCount: 1, days: 2 }];
@@ -522,27 +540,15 @@ export function buildSeasonSchedule(seasonNumber: number, seasonStartDate: SimDa
     });
   }
 
-  // EWC and ELEAGUE run once a year at a fixed point in the calendar, independent of the RLCS season
-  // cadence, one instance per year is enough to check for overlap with this season's date window.
-  const year = seasonStartDate.year;
-  schedule.push({
-    id: `ewc_${year}`,
-    kind: "ewc",
-    label: `Rocket League EWC ${year}`,
-    region: null,
-    startDate: { year, month: 7, day: 1 },
-    stages: EWC_STAGES,
-    fieldSize: EWC_FIELD_SIZE,
-  });
-  schedule.push({
-    id: `eleague_${year}`,
-    kind: "eleague",
-    label: `ELEAGUE Cup ${year}`,
-    region: null,
-    startDate: { year, month: 11, day: 1 },
-    stages: ELEAGUE_STAGES,
-    fieldSize: ELEAGUE_FIELD_SIZE,
-  });
+  // *** WORK IN PROGRESS — EWC and ELEAGUE are deliberately NOT scheduled as real tournaments yet. ***
+  // Both were originally modeled as ordinary org-vs-org brackets (generateGlobalTeams), which is wrong:
+  // EWC (the real Esports World Cup) isn't club orgs competing at all — it's each REGION fielding a single
+  // representative squad, and the real competition is a qualifier for a spot ON that region's 3-player
+  // team, not a tournament between orgs. ELEAGUE's real intended structure hasn't been designed yet either.
+  // Both need a genuinely different data model (a per-region squad + an individual qualifier bracket to
+  // earn a roster spot on it) before they should actually run — until that's built, neither is added to the
+  // schedule at all, so no instance for either kind is ever created. `EWC_STAGES`/`ELEAGUE_STAGES` and the
+  // "ewc"/"eleague" TournamentKind values are left in place for that future work, just unused for now.
 
   return schedule;
 }

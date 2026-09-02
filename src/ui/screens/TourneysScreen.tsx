@@ -455,33 +455,37 @@ export function TourneysScreen() {
         </>
       )}
 
-      <div className="tourney-section-label" style={{ marginTop: "var(--space-5)" }}>
-        Other Events
-      </div>
-      <div className="tourney-grid">
-        {otherSchedule.map((item) => {
-          const instance = instances[item.id];
-          const daysUntilStart = daysBetween(currentDate, item.startDate);
-          return (
-            <button
-              key={item.id}
-              className={"tourney-tile" + (selectedId === item.id ? " tourney-tile-active" : "")}
-              onClick={() => instance && setSelectedId(item.id)}
-            >
-              <div className="tourney-tile-region">{item.label}</div>
-              <div className="tourney-tile-status">
-                {!instance
-                  ? daysUntilStart > 0
-                    ? `Starts in ${daysUntilStart}d`
-                    : "Starting..."
-                  : instance.completed
-                    ? `Champion: ${instance.championName}`
-                    : `${instance.stages[instance.stageIndex].label} · ${instance.currentTeams.length} left`}
-              </div>
-            </button>
-          );
-        })}
-      </div>
+      {otherSchedule.length > 0 && (
+        <>
+          <div className="tourney-section-label" style={{ marginTop: "var(--space-5)" }}>
+            Other Events
+          </div>
+          <div className="tourney-grid">
+            {otherSchedule.map((item) => {
+              const instance = instances[item.id];
+              const daysUntilStart = daysBetween(currentDate, item.startDate);
+              return (
+                <button
+                  key={item.id}
+                  className={"tourney-tile" + (selectedId === item.id ? " tourney-tile-active" : "")}
+                  onClick={() => instance && setSelectedId(item.id)}
+                >
+                  <div className="tourney-tile-region">{item.label}</div>
+                  <div className="tourney-tile-status">
+                    {!instance
+                      ? daysUntilStart > 0
+                        ? `Starts in ${daysUntilStart}d`
+                        : "Starting..."
+                      : instance.completed
+                        ? `Champion: ${instance.championName}`
+                        : `${instance.stages[instance.stageIndex].label} · ${instance.currentTeams.length} left`}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {selected && <StandingsCard instance={selected} currentDate={currentDate} />}
 
