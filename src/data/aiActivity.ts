@@ -4,6 +4,7 @@
 
 import { hashString, type ProRegion } from "./proPlayers";
 import type { SimDate } from "./dateUtils";
+import type { QueueMode } from "./mockSave";
 
 /** A rough per-region "when does this scene's crowd actually play" offset, applied to the player's own
  *  clock hour before checking an identity's activity window — not real timezone math, just enough flavor
@@ -38,10 +39,26 @@ export function activityProfileFor(name: string, region: ProRegion): ActivityPro
   return { dayActiveRate, peakHour, sessionSpreadHours };
 }
 
+const QUEUE_FOCUS_BLOCK_HOURS = 3;
+const ALL_QUEUES: QueueMode[] = ["1v1", "2v2", "3v3"];
+
+/** Real ranked grinders don't queue all three playlists at once, they settle into one for a stretch (a
+ *  few hours of Doubles, then maybe switch to Duel) before moving on — this picks which queue a given
+ *  identity is "currently" grinding, changing every few in-game hours. */
+function focusQueueFor(name: string, region: ProRegion, currentDate: SimDate, hourOfDay: number): QueueMode {
+  const block = Math.floor(hourOfDay / QUEUE_FOCUS_BLOCK_HOURS);
+  const seed = hashString(`${name}${region}${currentDate.year}-${currentDate.month}-${currentDate.day}-${block}#focus`);
+  return ALL_QUEUES[seed % ALL_QUEUES.length];
+}
+
 /** `hourOfDay` should already be region-shifted by the caller (see REGION_HOUR_OFFSET) before being passed
  *  in here. `currentDate` only decides whether this identity is active TODAY at all (stable within one day,
- *  varies day to day) — the actual online/offline check within an active day is purely hour-of-day based. */
-export function isOnlineNow(name: string, region: ProRegion, currentDate: SimDate, hourOfDay: number): boolean {
+ *  varies day to day) — the actual online/offline check within an active day is purely hour-of-day based.
+ *  Deterministic (no live randomness) so the same call always agrees with itself within one search — the
+ *  matchmaking pool and the queue-availability check must never disagree about who's actually online right
+ *  now. Passing `queue` additionally checks whether this is the identity's CURRENT focus queue (see
+ *  focusQueueFor) — still possible but notably less likely if they're grinding a different mode right now. */
+export function isOnlineNow(name: string, region: ProRegion, currentDate: SimDate, hourOfDay: number, queue?: QueueMode): boolean {
   const profile = activityProfileFor(name, region);
   const dayKey = hashString(`${name}${region}${currentDate.year}-${currentDate.month}-${currentDate.day}`) % 100;
   if (dayKey >= profile.dayActiveRate * 100) return false;
@@ -50,6 +67,14 @@ export function isOnlineNow(name: string, region: ProRegion, currentDate: SimDat
   const hourDelta = Math.min(rawDelta, 24 - rawDelta);
   if (hourDelta > profile.sessionSpreadHours) return false;
 
-  // Even inside their usual window, not a hard on/off toggle right at the edge.
-  return Math.random() < 0.9;
+  // Even inside their usual window, not a hard on/off toggle right at the edge — but deterministic, not a
+  // live coinflip, so this always agrees with itself for the same (name, region, date, hour).
+  const edgeRoll = hashString(`${name}${region}${currentDate.year}-${currentDate.month}-${currentDate.day}-${hourOfDay}#online`) % 100;
+  if (edgeRoll >= 90) return false;
+
+  if (queue && focusQueueFor(name, region, currentDate, hourOfDay) !== queue) {
+    const altRoll = hashString(`${name}${region}${currentDate.year}-${currentDate.month}-${currentDate.day}-${hourOfDay}#altqueue`) % 100;
+    return altRoll < 35;
+  }
+  return true;
 }

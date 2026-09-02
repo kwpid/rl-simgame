@@ -38,11 +38,15 @@ export function gatherEligibleOpponents(
   currentDate: SimDate,
   seasonStartDate: SimDate,
   hourOfDay: number,
-  used: Set<string>
+  used: Set<string>,
+  /** >1 widens the MMR band (a real queue widens its search net the longer it waits for a match) — 1 is the
+   *  normal/starting band, see useMatchStore.ts's top-tier search loop. */
+  bandMultiplier = 1
 ): EligibleCandidate[] {
   const rankQueue = queue as RankQueue;
-  const inBand = (mmr: number) => mmr >= playerMmr - LEADERBOARD_MATCH_BAND_BELOW[queue] && mmr <= playerMmr + LEADERBOARD_MATCH_BAND_ABOVE;
-  const online = (name: string, region: ProRegion) => isOnlineNow(name, region, currentDate, (hourOfDay + REGION_HOUR_OFFSET[region]) % 24);
+  const inBand = (mmr: number) =>
+    mmr >= playerMmr - LEADERBOARD_MATCH_BAND_BELOW[queue] * bandMultiplier && mmr <= playerMmr + LEADERBOARD_MATCH_BAND_ABOVE * bandMultiplier;
+  const online = (name: string, region: ProRegion) => isOnlineNow(name, region, currentDate, (hourOfDay + REGION_HOUR_OFFSET[region]) % 24, queue);
 
   const candidates: EligibleCandidate[] = [];
 

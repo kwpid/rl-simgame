@@ -176,7 +176,7 @@ const PRO_SHARE_MAX = 0.75;
 // 4-band pro-density split — modern GC (below SSL) still gets the real regional roster/online system, just
 // without band weighting, same "not every top-of-ladder rank is the SAME crowd" idea the old bracketDepth
 // math already captured, just now resolved into actual named identities instead of a flat MMR-band filter.
-function isTopmostTierForEra(rankTier: RankTierId, era: RankEra): boolean {
+export function isTopmostTierForEra(rankTier: RankTierId, era: RankEra): boolean {
   return (era === "modern" && rankTier === "ssl") || (era === "legacy" && rankTier === "grand_champion");
 }
 
@@ -221,9 +221,14 @@ function pickName(
   currentDate: SimDate,
   seasonStartDate: SimDate,
   regions: ProRegion[],
-  hourOfDay: number
+  hourOfDay: number,
+  /** >1 widens the MMR band — only ever passed at the topmost tier (see startTopmostSearch), which by this
+   *  point has already confirmed enough real candidates exist at this exact band, so this call is
+   *  guaranteed to succeed in practice (the LB_NAMES fallback below is an unreachable safety net there). */
+  bandMultiplier = 1
 ): { name: string; leaderboardMmr?: number; region?: ProRegion; band?: RosterBand } {
   const eligibleForLeaderboard = rankTier === "grand_champion" || rankTier === "ssl";
+  const isTopmost = isTopmostTierForEra(rankTier, era);
   // How deep into GC/SSL the player's own MMR sits, 0 at the very bottom of GC, 1 at (or past) the very
   // top of the ladder's uncapped range, scales the chance of running into a real leaderboard/pro opponent
   // at all: barely-GC and deep-SSL are both "eligible" but nowhere near the same crowd.
@@ -232,12 +237,15 @@ function pickName(
   const topFloor = era === "modern" ? tierMinMmr("ssl", era, queue) : gcFloor + Math.max(100, gcFloor - champFloor);
   const bracketDepth = Math.max(0, Math.min(1, (playerMmr - gcFloor) / Math.max(100, topFloor - gcFloor)));
   const leaderboardChance = LEADERBOARD_NAME_CHANCE_MIN + bracketDepth * (LEADERBOARD_NAME_CHANCE_MAX - LEADERBOARD_NAME_CHANCE_MIN);
-  if (eligibleForLeaderboard && regions.length > 0 && Math.random() < leaderboardChance) {
-    const pool = gatherEligibleOpponents(regions, queue, playerMmr, era, currentYear, currentDate, seasonStartDate, hourOfDay, used);
+  // The topmost tier (legacy GC / modern SSL) never settles for a generic filler name — every opponent is a
+  // real, currently-online tracked identity, or the search simply doesn't pop (see startTopmostSearch). Any
+  // OTHER tier below that keeps the old "sometimes just a generic name" roll.
+  if (eligibleForLeaderboard && regions.length > 0 && (isTopmost || Math.random() < leaderboardChance)) {
+    const pool = gatherEligibleOpponents(regions, queue, playerMmr, era, currentYear, currentDate, seasonStartDate, hourOfDay, used, bandMultiplier);
 
     if (pool.length > 0) {
       let chosen: EligibleCandidate;
-      if (isTopmostTierForEra(rankTier, era)) {
+      if (isTopmost) {
         chosen = pickWeightedCandidate(pool, bracketDepth);
       } else {
         // Modern GC (below SSL): no band weighting, just the old plain pro-vs-grinder share by bracket depth.
@@ -327,7 +335,8 @@ function generateRoster(
    *  candidate's online/offline schedule against. Ignored (empty) below GC — pickName's own tier gate keeps
    *  those matches on the plain generic-filler path regardless. */
   regions: ProRegion[] = [],
-  hourOfDay = 0
+  hourOfDay = 0,
+  bandMultiplier = 1
 ): MatchPlayer[] {
   const perTeam = queue === "1v1" ? 1 : queue === "2v2" ? 2 : 3;
   const used = new Set<string>([self.name]);
@@ -374,11 +383,11 @@ function generateRoster(
     blueSlotsRemaining--;
   }
   for (let i = 0; i < blueSlotsRemaining; i++) {
-    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate, regions, hourOfDay);
+    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier);
     players.push(buildOpponent(picked.name, "blue", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, picked.leaderboardMmr, undefined, picked.region));
   }
   for (let i = 0; i < perTeam; i++) {
-    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate, regions, hourOfDay);
+    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier);
     players.push(buildOpponent(picked.name, "orange", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, picked.leaderboardMmr, undefined, picked.region));
   }
   return applyPartyFlavor(players);
@@ -409,6 +418,16 @@ let recentLobbies: RecentLobby[] = [];
 const RECENT_LOBBY_MEMORY = 6;
 const REMATCH_CHANCE = 0.18;
 const REMATCH_MAX_AGE_MATCHES = 5;
+
+// The topmost tier (legacy GC / modern SSL) doesn't use a single precomputed queue duration at all — it
+// repeatedly rechecks who's actually online, widening its MMR net the longer nobody suitable is found (same
+// "widen the search" behavior real matchmaking uses), and simply never pops if truly nobody is out there.
+// This is what makes "I found nobody, ever" a real possible outcome instead of always eventually settling
+// for a generic name.
+const TOP_TIER_SEARCH_TICK_MS = 4000;
+const TOP_TIER_WIDEN_INTERVAL_MS = 20000;
+const TOP_TIER_WIDEN_STEP = 0.5;
+const TOP_TIER_MAX_WIDEN_STEPS = 4;
 
 function recordRecentLobby(queue: QueueMode, names: string[], regions: ProRegion[]) {
   recentLobbies = recentLobbies
@@ -878,59 +897,101 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       estimatedQueueDurationsMs,
       searchStartedAt: Date.now(),
     });
-    requests.forEach((req) => {
-      const durationMs = estimatedQueueDurationsMs[req.queue]!;
-      queueTimers[req.queue] = setTimeout(() => {
-        // This queue popped first, every other pending search is moot now, tear them down immediately.
-        Object.values(queueTimers).forEach((t) => t && clearTimeout(t));
-        queueTimers = {};
+    function friendStatsForQueue(req: QueueSearchRequest) {
+      const out: Record<string, { mmr: number; gameSense: number; mechanicalConsistency: number }> = {};
+      if (partyFriendStats) {
+        for (const [name, record] of Object.entries(partyFriendStats)) {
+          out[name] = { mmr: record.mmr[req.queue], gameSense: record.gameSense[req.queue], mechanicalConsistency: record.mechanicalConsistency[req.queue] };
+        }
+      }
+      return out;
+    }
 
-        const friendStatsForQueue: Record<string, { mmr: number; gameSense: number; mechanicalConsistency: number }> = {};
-        if (partyFriendStats) {
-          for (const [name, record] of Object.entries(partyFriendStats)) {
-            friendStatsForQueue[name] = { mmr: record.mmr[req.queue], gameSense: record.gameSense[req.queue], mechanicalConsistency: record.mechanicalConsistency[req.queue] };
+    function finalizeFoundMatch(req: QueueSearchRequest, players: MatchPlayer[], durationMs: number) {
+      // This queue popped first, every other pending search is moot now, tear them down immediately.
+      Object.values(queueTimers).forEach((t) => t && clearTimeout(t));
+      queueTimers = {};
+
+      logIdCounter = 0;
+      const log: MatchLogLine[] = [{ id: logIdCounter++, clockLabel: clockLabel(GAME_DURATION_SECONDS), text: "Kickoff." }];
+      if (req.queue === "1v1") {
+        const formResult = applyMatchDayForm(players);
+        players = formResult.players;
+        formResult.formNotes.forEach((text) => log.push({ id: logIdCounter++, clockLabel: clockLabel(GAME_DURATION_SECONDS), text }));
+      }
+      set({
+        phase: "found",
+        queue: req.queue,
+        queuedModes: [],
+        queueDurationMs: durationMs,
+        searchStartedAt: null,
+        players,
+        clockSeconds: GAME_DURATION_SECONDS,
+        overtime: false,
+        otSeconds: 0,
+        scoreBlue: 0,
+        scoreOrange: 0,
+        log,
+        resultWin: null,
+        selfGoals: 0,
+        selfSaves: 0,
+      });
+      foundTimer = setTimeout(() => {
+        get().acknowledgeFound();
+      }, 2000);
+    }
+
+    /** The topmost tier's own search loop: rechecks the real online/regional pool on a short tick instead
+     *  of trusting one precomputed duration, widening the MMR band the longer it waits, and simply
+     *  continuing to tick (never popping) if truly nobody eligible is out there — no scripted rematch, no
+     *  generic-name fallback, every opponent is whoever's actually online right now. */
+    function startTopmostSearch(req: QueueSearchRequest, searchStart: number) {
+      const regions = req.regions ?? [];
+      const perTeam = req.queue === "1v1" ? 1 : req.queue === "2v2" ? 2 : 3;
+      const partyCount = partyMemberNames?.length ?? 0;
+      const neededOpponents = Math.max(0, perTeam * 2 - 1 - partyCount);
+
+      function tick() {
+        const elapsed = Date.now() - searchStart;
+        const widenSteps = Math.min(TOP_TIER_MAX_WIDEN_STEPS, Math.floor(elapsed / TOP_TIER_WIDEN_INTERVAL_MS));
+        const bandMultiplier = 1 + widenSteps * TOP_TIER_WIDEN_STEP;
+        const pool = gatherEligibleOpponents(regions, req.queue, req.playerMmr, era, currentYear, currentDate, seasonStartDate, hourOfDay, new Set([req.self.name, ...(partyMemberNames ?? [])]), bandMultiplier);
+
+        if (pool.length >= neededOpponents) {
+          const popChance = Math.max(0.1, Math.min(0.85, 0.15 + (pool.length - neededOpponents) * 0.08));
+          if (Math.random() < popChance) {
+            const players = generateRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, partyMemberNames, friendStatsForQueue(req), regions, hourOfDay, bandMultiplier);
+            finalizeFoundMatch(req, players, elapsed);
+            return;
           }
         }
-        const regions = req.regions ?? [];
+        queueTimers[req.queue] = setTimeout(tick, TOP_TIER_SEARCH_TICK_MS);
+      }
+      tick();
+    }
+
+    requests.forEach((req) => {
+      const regions = req.regions ?? [];
+      if (isTopmostTierForEra(req.rankTier, era) && regions.length > 0) {
+        startTopmostSearch(req, Date.now());
+        return;
+      }
+
+      const durationMs = estimatedQueueDurationsMs[req.queue]!;
+      queueTimers[req.queue] = setTimeout(() => {
         const isEligibleTier = req.rankTier === "grand_champion" || req.rankTier === "ssl";
         const noParty = !partyMemberNames || partyMemberNames.length === 0;
         const rematch =
           isEligibleTier && noParty && regions.length > 0 && Math.random() < REMATCH_CHANCE
             ? tryRematchRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, regions, hourOfDay)
             : null;
-        let players =
+        const players =
           rematch ??
-          generateRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, partyMemberNames, friendStatsForQueue, regions, hourOfDay);
+          generateRoster(req.queue, req.self, req.rankTier, era, seasonNumber, currentYear, req.playerMmr, currentDate, seasonStartDate, partyMemberNames, friendStatsForQueue(req), regions, hourOfDay);
         if (isEligibleTier && regions.length > 0) {
           recordRecentLobby(req.queue, players.filter((p) => !p.isSelf).map((p) => p.name), regions);
         }
-        logIdCounter = 0;
-        const log: MatchLogLine[] = [{ id: logIdCounter++, clockLabel: clockLabel(GAME_DURATION_SECONDS), text: "Kickoff." }];
-        if (req.queue === "1v1") {
-          const formResult = applyMatchDayForm(players);
-          players = formResult.players;
-          formResult.formNotes.forEach((text) => log.push({ id: logIdCounter++, clockLabel: clockLabel(GAME_DURATION_SECONDS), text }));
-        }
-        set({
-          phase: "found",
-          queue: req.queue,
-          queuedModes: [],
-          queueDurationMs: durationMs,
-          searchStartedAt: null,
-          players,
-          clockSeconds: GAME_DURATION_SECONDS,
-          overtime: false,
-          otSeconds: 0,
-          scoreBlue: 0,
-          scoreOrange: 0,
-          log,
-          resultWin: null,
-          selfGoals: 0,
-          selfSaves: 0,
-        });
-        foundTimer = setTimeout(() => {
-          get().acknowledgeFound();
-        }, 2000);
+        finalizeFoundMatch(req, players, durationMs);
       }, durationMs);
     });
   },
