@@ -15,6 +15,9 @@ import { addDays } from "./dateUtils";
 import type { RankEra } from "./rankSystem";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
+import { estimateGameSenseForMmr, computeOverallRating } from "./matchSim";
+import { meetsOrgRankRequirement } from "./orgs";
+import { FOUNDATION_LABELS, type FoundationCategory } from "./mechanics";
 
 export type TournamentKind = "rlcs_regional" | "ewc" | "eleague" | "rlcs_1v1_regional" | "rlcs_major" | "rlcs_worlds" | "rlrs_regional";
 
@@ -95,22 +98,52 @@ interface EligibleRealPlayer {
   power: number;
 }
 
+// Orgs scout off the SAME queue the player's own org track uses: 2v2, real esports orgs treat it as the
+// baseline read on a prospect, 3v3 team results follow from individual quality more than the reverse (see
+// data/orgs.ts's own doc comment — "the org track only ever cares about 2v2"). A player's real, persisted
+// stats (Game Sense/Mechanical Consistency, blended into one Overall Rating the same way the Stats screen
+// does) are the main scouting signal, with their current 2v2 MMR folded in as a smaller supporting factor —
+// mirrors the player's own two-stage org-eligibility system (a hard MMR floor gate, then a stats-driven
+// score) closely enough that the exact same floor (`meetsOrgRankRequirement`) applies here too: an AI who
+// wouldn't themselves qualify for org scouting doesn't qualify for a real RLCS roster spot either.
+const RLCS_ELIGIBILITY_RATING_WEIGHT = 0.7;
+const RLCS_ELIGIBILITY_MMR_WEIGHT = 0.3;
+
+function rlcsPowerFromStats(mmr2v2: number, gameSense2v2: number, mechanicalConsistency2v2: number, era: RankEra, currentYear: number): number {
+  const uniformFoundation = Object.fromEntries(
+    (Object.keys(FOUNDATION_LABELS) as FoundationCategory[]).map((cat) => [cat, gameSense2v2])
+  ) as Record<FoundationCategory, number>;
+  const overallRating = computeOverallRating(gameSense2v2, mechanicalConsistency2v2, uniformFoundation);
+  // Expresses MMR on the SAME rating scale as Game Sense/Mechanical Consistency (the exact curve the
+  // leaderboard stores themselves use to derive target stats from MMR), so blending the two actually
+  // means something instead of one term drowning out the other.
+  const mmrAsRating = estimateGameSenseForMmr(mmr2v2, era, "2v2", currentYear);
+  return overallRating * RLCS_ELIGIBILITY_RATING_WEIGHT + mmrAsRating * RLCS_ELIGIBILITY_MMR_WEIGHT;
+}
+
 /** Every player legitimately good enough to be on a real RLCS team this year: active pros from the region,
  *  plus that region's `mid`-band ranked grinders (never `low` band — those read as ranked-ladder regulars,
- *  not remotely pro-caliber) — never a generic filler name. This is the entire "no filler teams" fix: a
- *  thin region (APAC/SSA) just fields fewer, entirely real teams instead of padding the field out. */
-/** `power` here is each player's REAL, live 3v3 ranked MMR (the same number the Top-50 leaderboard shows,
- *  RLCS's own real competitive queue) — not a synthetic formula, so sorting by it directly means an AI who
- *  is consistently top of the ranked ladder is exactly who gets recruited onto the region's top team,
- *  never someone the player wouldn't otherwise recognize from ranked. */
+ *  not remotely pro-caliber) — never a generic filler name, and gated by the same 2v2 MMR floor the
+ *  player's own org track requires. This is the entire "no filler teams" fix: a thin region (APAC/SSA) just
+ *  fields fewer, entirely real teams instead of padding the field out. */
 function eligibleRealPlayersForRegion(region: ProRegion, currentYear: number, era: RankEra, currentDate: SimDate, seasonStartDate: SimDate): EligibleRealPlayer[] {
-  const pros = activeProPlayers(currentYear)
-    .filter((p) => p.region === region)
-    .map((p) => ({ name: p.name, power: useProLeaderboardStore.getState().getMmr(p.name, "3v3", era, currentYear, currentDate, seasonStartDate) }));
-  const grinders = regionalGrinderRoster(region, currentYear)
-    .filter((g) => g.band === "mid")
-    .map((g) => ({ name: g.name, power: useRegionalRosterStore.getState().getMmr(g.name, region, "3v3", era, currentYear, currentDate, seasonStartDate) }));
-  return [...pros, ...grinders];
+  const candidates = [
+    ...activeProPlayers(currentYear).filter((p) => p.region === region).map((p) => p.name),
+    ...regionalGrinderRoster(region, currentYear).filter((g) => g.band === "mid").map((g) => g.name),
+  ];
+  const eligible: EligibleRealPlayer[] = [];
+  for (const name of candidates) {
+    const pro = activeProPlayers(currentYear).find((p) => p.name === name);
+    const mmr2v2 = pro
+      ? useProLeaderboardStore.getState().getMmr(name, "2v2", era, currentYear, currentDate, seasonStartDate)
+      : useRegionalRosterStore.getState().getMmr(name, region, "2v2", era, currentYear, currentDate, seasonStartDate);
+    if (!meetsOrgRankRequirement(era, mmr2v2)) continue;
+    const stats = pro
+      ? useProLeaderboardStore.getState().getStats(name, "2v2", era, currentYear, currentDate, seasonStartDate)
+      : useRegionalRosterStore.getState().getStats(name, region, "2v2", era, currentYear, currentDate, seasonStartDate);
+    eligible.push({ name, power: rlcsPowerFromStats(mmr2v2, stats.gameSense, stats.mechanicalConsistency, era, currentYear) });
+  }
+  return eligible;
 }
 
 /** Nudges a power-sorted list without fully scrambling it: each adjacent pair has a deterministic chance to
