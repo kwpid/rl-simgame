@@ -604,7 +604,16 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   setSelectedMatchmakingRegions: (regions) => set({ selectedMatchmakingRegions: regions.length > 0 ? regions : get().selectedMatchmakingRegions }),
   resetRlcsTeams: () => {
     const state = get();
-    set({ rlcsTeamsResetSeed: state.rlcsTeamsResetSeed + 1 });
+    // The player's own org career (contract/tryout/invite) was picked independently of the generated team
+    // rosters (see OrgScreen.tsx's pickOrgPros) — reset it too, otherwise "Reset Teams" would regenerate
+    // every AI team while the player stayed parked on whatever org/teammates they'd already signed with
+    // before this system existed, which isn't a real fresh-team test run at all.
+    set({
+      rlcsTeamsResetSeed: state.rlcsTeamsResetSeed + 1,
+      pendingOrgInvite: null,
+      pendingOrgTryout: null,
+      orgContract: null,
+    });
     useTournamentStore.getState().resetAllInstances();
   },
   setEquippedTitleId: (id) => set({ equippedTitleId: id }),

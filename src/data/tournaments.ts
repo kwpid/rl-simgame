@@ -160,13 +160,14 @@ function eligibleRealPlayersForRegion(region: ProRegion, currentYear: number): E
   return [...pros, ...grinders];
 }
 
-/** Deterministic per `seedKey` (not `Math.random`) — this is what lets a region's RLCS roster stay
- *  identical (locked) for the whole season: same season number + reset seed always shuffles the same way. */
-function seededShuffle<T>(items: T[], seedKey: string): T[] {
-  const arr = [...items];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = hashString(`${seedKey}#${i}`) % (i + 1);
-    [arr[i], arr[j]] = [arr[j], arr[i]];
+/** Nudges a power-sorted list without fully scrambling it: each adjacent pair has a deterministic chance to
+ *  swap, so the overall best-to-worst order mostly holds (the actual top players typically end up on the
+ *  actual top team) without every season producing a razor-exact ranking. */
+function jitterRankOrder<T>(sortedDesc: T[], seedKey: string): T[] {
+  const arr = [...sortedDesc];
+  for (let i = 0; i < arr.length - 1; i++) {
+    const roll = hashString(`${seedKey}#jitter#${i}`) % 100;
+    if (roll < 30) [arr[i], arr[i + 1]] = [arr[i + 1], arr[i]];
   }
   return arr;
 }
@@ -198,8 +199,12 @@ const ALL_PRO_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", 
  *  any time this season and the SAME roster comes back, which is what "locked for the season" means at the
  *  data layer: nothing has to actively enforce the lock, there's just nothing that would change it. */
 export function generateTeamsForRegion(region: ProRegion, currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string): TournamentTeam[] {
-  const eligible = seededShuffle(eligibleRealPlayersForRegion(region, currentYear), `${region}-${seasonNumber}-${resetSeed}`);
-  const orgNames = seededShuffle([...(ORG_NAMES[region] ?? [])], `${region}-${seasonNumber}-${resetSeed}-names`);
+  const byPower = eligibleRealPlayersForRegion(region, currentYear).sort((a, b) => b.power - a.power);
+  const eligible = jitterRankOrder(byPower, `${region}-${seasonNumber}-${resetSeed}`);
+  // Org names are used in their listed order (not shuffled) — ORG_NAMES already lists each region's most
+  // recognizable org first, so team 0 (which gets the top of the power-sorted roster) is consistently that
+  // region's real premier org, exactly the "top AI typically land on the top team" realism this is for.
+  const orgNames = ORG_NAMES[region] ?? [];
   const teamCount = Math.min(Math.floor(eligible.length / 3), orgNames.length);
   const teams: TournamentTeam[] = [];
   for (let i = 0; i < teamCount; i++) {
@@ -214,8 +219,9 @@ export function generateTeamsForRegion(region: ProRegion, currentYear: number, s
  *  than one, for events that aren't region-locked the way an RLCS qualifier is. Same locked-per-season
  *  determinism as `generateTeamsForRegion`. */
 export function generateGlobalTeams(currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string): TournamentTeam[] {
-  const eligible = seededShuffle(ALL_PRO_REGIONS.flatMap((r) => eligibleRealPlayersForRegion(r, currentYear)), `GLOBAL-${seasonNumber}-${resetSeed}`);
-  const orgNames = seededShuffle(Object.values(ORG_NAMES).flat(), `GLOBAL-${seasonNumber}-${resetSeed}-names`);
+  const byPower = ALL_PRO_REGIONS.flatMap((r) => eligibleRealPlayersForRegion(r, currentYear)).sort((a, b) => b.power - a.power);
+  const eligible = jitterRankOrder(byPower, `GLOBAL-${seasonNumber}-${resetSeed}`);
+  const orgNames = Object.values(ORG_NAMES).flat();
   const teamCount = Math.min(Math.floor(eligible.length / 3), orgNames.length);
   const teams: TournamentTeam[] = [];
   for (let i = 0; i < teamCount; i++) {
