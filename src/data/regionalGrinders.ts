@@ -1,12 +1,12 @@
 // The "ranked grinder" identity pool: real named GC+/SSL opponents who AREN'T signed pros (see
 // proPlayers.ts), filling out the Low/Mid density bands of each region's roster (see useRegionalRosterStore.ts
 // for their persistent MMR/stats, aiActivity.ts for their online/offline schedule). Names are wholly
-// fictional but styled per-region to read like real ranked tags from that scene (NA leans clean/meme with
-// dots and numbers, EU stylish with creative zero-spellings, SAM aggressive Portuguese-flavored x/z endings,
-// MENA short and numeric with Arabic-transliterated roots, OCE casual Aussie/Kiwi energy, APAC an English/
-// East-Asian mix, SSA simple and still-emerging) — deliberately disjoint from every real name in
-// proPlayers.ts and from LB_NAMES (the old generic ranked-filler pool) so nothing here ever collides with
-// an already-tracked identity.
+// fictional but styled per-region to read like real ranked tags from that scene, and deliberately avoid two
+// failure modes: looking like the same handful of names/templates repeated (a big, genuinely varied word
+// pool per region, not one template stamped out with an incrementing suffix) and looking machine-generated
+// (no id-like trailing numbers as the default pattern — real gamertags overwhelmingly don't end in a
+// number, so this pool follows that same rule, with only a rare hand-placed exception here and there).
+// Every name here is also checked against proPlayers.ts to guarantee it never collides with a real pro.
 
 import { hashString, activeProPlayers, type ProRegion } from "./proPlayers";
 
@@ -19,92 +19,89 @@ export interface GrinderIdentity {
   band: RosterBand;
 }
 
-interface RegionNameStyle {
-  words: string[];
-  /** Must return a distinct string for every distinct `variant` applied to the same `word` — this is what
-   *  guarantees every generated name in a region is unique without needing a runtime collision check. */
-  decorate: (word: string, variant: number) => string;
+// NA/EU compound their tag from two word-fragments (a very common real convention, e.g. "Frostbyte",
+// "Nightfall") — combined with a standalone list so the pool doesn't read as one template repeated.
+const NA_PART1 = ["Night", "Iron", "Dust", "Rogue", "Wild", "Lone", "Ghost", "Silver", "Steel", "Storm", "Rusty", "Hollow", "North", "Backroad", "Diesel", "Coyote", "Copper", "Dead", "Bone", "Ash"];
+const NA_PART2 = ["fall", "wolf", "runner", "hawk", "rider", "smoke", "trail", "creek", "yard", "town", "wood", "field", "line", "stone", "road", "light", "fire", "howl", "drift", "reach"];
+const NA_STANDALONE = [
+  "Voltaic", "Nitro", "Blazeon", "Rampage", "Kodiak", "Maverick", "Jetstream", "Ignite", "Ranger",
+  "Wolfpack", "Highnoon", "Lonestar", "Roughneck", "Ironclad", "Redline", "Overdrive", "Suncoast",
+  "Cascade", "Renegade", "Palomino", "Driftwood", "Tumbleweed", "Backfire", "Grindhouse", "Highkey7",
+];
+
+const EU_PART1 = ["Frost", "Winter", "Iron", "Silver", "Grey", "Pale", "North", "Storm", "Moon", "Star", "Blue", "Dark", "White", "Ash", "Wolf", "Snow", "Steel", "Black"];
+const EU_PART2 = ["wave", "light", "bane", "fang", "shade", "frost", "born", "heart", "wing", "ridge", "vale", "spire", "reach", "crest", "mere", "holt", "drift", "fell"];
+const EU_STANDALONE = [
+  "Vantage", "Nebula", "Solace", "Cinder", "Halcyon", "Quartz", "Obscur", "Lumire", "Zephyra", "Rivale",
+  "Auren", "Skyline", "Nocturne", "Velvex", "Ashfall", "Duskrunner", "Emberlyn", "Fenwick", "Corvid",
+  "Thistledown", "Wrenfield", "Marrow",
+];
+
+const SAM_WORDS = [
+  "Furacao", "Malandro", "Trovao", "Correnteza", "Tuffz", "Estrela", "Vulcanzz", "Relampz", "Xoque",
+  "Carioca", "Fervo", "Braziux", "Sambaxx", "Nortezz", "Ferozz", "Trombaxx", "Marotoo", "Cangaco",
+  "Bravatx", "Selvagemz", "Trapaceiro", "Ligeirinho", "Aventureiro", "Destemido", "Zoeirinho",
+  "Guerreirox", "Pistoleiro", "Ousadia", "Ferozx", "Trovejante", "Encrenca", "Malvadeza", "Alucinado",
+  "Sertanejo", "Molecada", "Zangado", "Retinto", "Bicudo", "Sapeca", "Cabuloso", "Danado", "Sinistroo",
+  "Levado", "Arretado", "Cascudo", "Fominha", "Trombudo",
+];
+
+const MENA_WORDS = [
+  "Zaeem", "Malik", "Sahaba", "Qasim", "Faris", "Tariq", "Bilal", "Hamzah", "Anwar", "Rashed", "Khalidi",
+  "Jaser", "Mansour", "Adnan", "Zayed", "Omarii", "Rayyan", "Sultani", "Nabeel", "Waleed", "Fahim",
+  "Ghaith", "Yazan7", "Suhail", "Naser", "Karim", "Amjad", "Firas", "Nidal", "Shadi", "Marwani", "Louai",
+  "Hatim", "Zuhair", "Rakan", "Bandari", "Fadel", "Idris", "Osamah", "Wisam", "Thamer", "Majed", "Saif",
+  "Hazim", "Yasser", "Munir",
+];
+
+const OCE_WORDS = [
+  "Dingo", "Bushfire", "Larrikin", "Stoked", "Wombat", "Outback", "Rowdy", "Coastal", "Barra", "Reckless",
+  "Sunburnt", "Cobber", "Rugged", "Scrappy", "Husky", "Bogan", "Yeeter", "Ridgey", "Choppa", "Snapper",
+  "Rippa", "Yakka", "Grommet", "Sparko", "Muso", "Straya", "Bindi", "Drover", "Bluetongue", "Redback",
+  "Saltbush", "Tussock", "Brolga", "Kelpie", "Stubby", "Galah", "Boofhead", "Chinwag", "Esky",
+];
+
+const APAC_WORDS = [
+  "Kamiyo", "Ronin", "Tenrai", "Zenpo", "Sundial", "Kirin", "Yomei", "Aurorae", "Ondori", "Tsukimi",
+  "Skyfarer", "Kagerou", "Yozora", "Hibiki", "Tenko", "Ginkai", "Rindo", "Kurogane", "Shirogane",
+  "Hanabira", "Suzumushi", "Kotori", "Amanora", "Yoake", "Ryusei", "Hotaru", "Akatsuki", "Fubuki",
+  "Sakuya", "Enkou", "Mizuki", "Toranosuke", "Ginrei",
+];
+
+const SSA_WORDS = [
+  "Baraka", "Simba", "Jengo", "Nairobi", "Zolan", "Tundu", "Amara", "Kwame", "Zawadi", "Bomani",
+  "Jabari", "Kito", "Sefu", "Tafari", "Zuberi", "Adisa", "Chike", "Femi", "Obie", "Sekani", "Kagiso",
+  "Tendai", "Themba", "Sipho", "Lindiwe", "Katlego", "Onyeka", "Ayanda", "Mandla", "Bongani",
+];
+
+function seededShuffle<T>(items: T[], seedKey: string): T[] {
+  const arr = [...items];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = hashString(`${seedKey}#${i}`) % (i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }
 
-const NA_NUMBERS = [1, 2, 7, 9, 97, 21, 44, 88, 11, 23, 3, 12];
-const MENA_NUMBERS = [9, 7, 511, 21, 44, 90, 17, 13];
+function comboPool(part1: string[], part2: string[], seedKey: string): string[] {
+  const combos: string[] = [];
+  for (const a of part1) for (const b of part2) combos.push(a + b);
+  return seededShuffle(combos, seedKey);
+}
 
-const REGION_NAME_STYLES: Record<ProRegion, RegionNameStyle> = {
-  NA: {
-    words: [
-      "Voltaic", "Nitro", "Blazeon", "Rampage", "Kodiak", "Maverick", "Jetstream", "Ignite", "Ranger",
-      "Wolfpack", "Highnoon", "Lonestar", "Roughneck", "Ironclad", "Redline", "Overdrive", "Suncoast", "Highkey",
-    ],
-    decorate: (word, variant) => {
-      if (variant === 0) return word;
-      if (variant === 1) return `${word}.`;
-      return `${word}${NA_NUMBERS[(variant - 2) % NA_NUMBERS.length]}`;
-    },
-  },
-  EU: {
-    words: [
-      "Vantage", "Nebula", "Frostbyte", "Solace", "Cinder", "Halcyon", "Quartz", "Obscur", "Lumire",
-      "Zephyra", "Rivale", "Auren", "Skyline", "Nocturne", "Velvex", "Ashfall",
-    ],
-    decorate: (word, variant) => {
-      if (variant === 0) return word;
-      if (variant === 1) return word.replace(/o/gi, "0");
-      if (variant === 2) return `${word}.`;
-      return `${word}_${variant}`;
-    },
-  },
-  SAM: {
-    words: [
-      "Furacao", "Malandro", "Trovao", "Fenix", "Samba", "Correnteza", "Tuff", "Estrela", "Vulcan",
-      "Relamp", "Xoque", "Carioca", "Fervo", "Braziux",
-    ],
-    decorate: (word, variant) => {
-      if (variant === 0) return `${word}x`;
-      if (variant === 1) return `${word}z`;
-      if (variant === 2) return `${word}zz`;
-      return `${word}${variant}`;
-    },
-  },
-  MENA: {
-    words: [
-      "Zaeem", "Malik", "Amiro", "Sahaba", "Qasim", "Faris", "Tariq", "Bilal", "Hamzah", "Anwar",
-      "Rashed", "Khalidi", "Jaser", "Mansour",
-    ],
-    decorate: (word, variant) => {
-      if (variant === 0) return word;
-      if (variant === 1) return `${word}.`;
-      return `${word}${MENA_NUMBERS[(variant - 2) % MENA_NUMBERS.length]}`;
-    },
-  },
-  OCE: {
-    words: [
-      "Dingo", "Bushfire", "Larrikin", "Stoked", "Wombat", "Outback", "Rowdy", "Coastal", "Barra",
-      "Reckless", "Sunburnt", "Cobber",
-    ],
-    decorate: (word, variant) => (variant === 0 ? word : `${word}${variant}`),
-  },
-  APAC: {
-    words: [
-      "Kamiyo", "Ronin", "Tenrai", "Sable", "Zenpo", "Sundial", "Kirin", "Yomei", "Aurorae", "Ondori", "Tsukimi", "Skyfarer",
-    ],
-    decorate: (word, variant) => {
-      if (variant === 0) return word;
-      if (variant === 1) return `${word}.`;
-      return `${word}${variant}`;
-    },
-  },
-  SSA: {
-    words: ["Baraka", "Simba", "Jengo", "Nairobi", "Zolan", "Tundu", "Amara", "Kwame", "Zawadi"],
-    decorate: (word, variant) => (variant === 0 ? word : `${word}${variant}`),
-  },
+/** Per-region name pool: a hand-authored standalone list up front (guarantees the "clean single word" tags
+ *  every region should have some of), followed by a large deterministically-shuffled combo pool for NA/EU
+ *  (which round out easily via natural word compounding) — never randomized again after this module loads,
+ *  same list every time. */
+const NAME_POOL: Record<ProRegion, string[]> = {
+  NA: [...NA_STANDALONE, ...comboPool(NA_PART1, NA_PART2, "NA_combo")],
+  EU: [...EU_STANDALONE, ...comboPool(EU_PART1, EU_PART2, "EU_combo")],
+  SAM: SAM_WORDS,
+  MENA: MENA_WORDS,
+  OCE: OCE_WORDS,
+  APAC: APAC_WORDS,
+  SSA: SSA_WORDS,
 };
-
-function grinderNameForRegion(region: ProRegion, index: number): string {
-  const style = REGION_NAME_STYLES[region];
-  const wordIndex = index % style.words.length;
-  const variant = Math.floor(index / style.words.length);
-  return style.decorate(style.words[wordIndex], variant);
-}
 
 const MIN_GRINDERS_PER_REGION = 20;
 const MAX_GRINDERS_PER_REGION = 65;
@@ -114,10 +111,13 @@ const TARGET_ROSTER_SIZE = 65;
 const LOW_BAND_SHARE = 0.65; // rest rolls "mid" — this pool never rolls high/super_high directly.
 
 /** How many synthetic grinder identities a region needs this year to round its roster out to roughly
- *  TARGET_ROSTER_SIZE once real pros (which vary a lot in count by region) are added on top. */
+ *  TARGET_ROSTER_SIZE once real pros (which vary a lot in count by region) are added on top. Never exceeds
+ *  the region's actual name pool size, so a smaller hand-authored pool just yields a somewhat smaller
+ *  roster rather than ever repeating a name. */
 function grinderCountForRegion(region: ProRegion, currentYear: number): number {
   const proCount = activeProPlayers(currentYear).filter((p) => p.region === region).length;
-  return Math.max(MIN_GRINDERS_PER_REGION, Math.min(MAX_GRINDERS_PER_REGION, TARGET_ROSTER_SIZE - proCount));
+  const target = Math.max(MIN_GRINDERS_PER_REGION, Math.min(MAX_GRINDERS_PER_REGION, TARGET_ROSTER_SIZE - proCount));
+  return Math.min(target, NAME_POOL[region].length);
 }
 
 /** Deterministic, module-pure: same region always returns the same roster (same names, same bands), never
@@ -125,12 +125,12 @@ function grinderCountForRegion(region: ProRegion, currentYear: number): number {
  *  per the current year so a region's grinder count adapts as its real pro scene grows over the save. */
 export function regionalGrinderRoster(region: ProRegion, currentYear: number): GrinderIdentity[] {
   const count = grinderCountForRegion(region, currentYear);
+  const pool = NAME_POOL[region];
   const roster: GrinderIdentity[] = [];
   for (let i = 0; i < count; i++) {
     const seed = hashString(`${region}#grinder#${i}`);
-    const name = grinderNameForRegion(region, i);
     const band: RosterBand = (seed % 100) < LOW_BAND_SHARE * 100 ? "low" : "mid";
-    roster.push({ name, region, band });
+    roster.push({ name: pool[i], region, band });
   }
   return roster;
 }

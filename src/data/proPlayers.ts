@@ -127,6 +127,9 @@ export const PRO_PLAYERS: ProPlayer[] = [
   { name: "Kiileerrz", region: "MENA", debutYear: 2020 },
   { name: "Fahad", region: "MENA", debutYear: 2020 },
   { name: "Senzo", region: "MENA", debutYear: 2020 },
+  { name: "Venom", region: "MENA", debutYear: 2022 },
+  { name: "Sigms", region: "MENA", debutYear: 2022 },
+  { name: "Furlashh", region: "MENA", debutYear: 2022 },
 
   // 2021 - global expansion generation
   { name: "Daniel", region: "NA", debutYear: 2021 },
@@ -145,6 +148,7 @@ export const PRO_PLAYERS: ProPlayer[] = [
 
   { name: "Superlachie", region: "OCE", debutYear: 2021 },
   { name: "bananahead", region: "OCE", debutYear: 2021 },
+  { name: "Freakii", region: "OCE", debutYear: 2020 },
 
   { name: "Realize", region: "APAC", debutYear: 2021 },
   { name: "Misty", region: "APAC", debutYear: 2021 },
@@ -152,6 +156,10 @@ export const PRO_PLAYERS: ProPlayer[] = [
   { name: "LCT", region: "APAC", debutYear: 2021 },
   { name: "Mango", region: "APAC", debutYear: 2021 },
   { name: "Bambii", region: "APAC", debutYear: 2021 },
+  { name: "ballerrees", region: "APAC", debutYear: 2022 },
+  { name: "OLPiX", region: "APAC", debutYear: 2022 },
+  { name: "Burn", region: "APAC", debutYear: 2022 },
+  { name: "mikan", region: "APAC", debutYear: 2022 },
 
   { name: "2Die4", region: "SSA", debutYear: 2021 },
   { name: "Snowyy", region: "SSA", debutYear: 2021 },
@@ -159,6 +167,10 @@ export const PRO_PLAYERS: ProPlayer[] = [
   { name: "Rage", region: "SSA", debutYear: 2021 },
   { name: "Tox", region: "SSA", debutYear: 2021 },
   { name: "Lachlan", region: "SSA", debutYear: 2021 },
+  { name: "Beeyu", region: "SSA", debutYear: 2022 },
+  { name: "Nitrous", region: "SSA", debutYear: 2022 },
+  { name: "Skillz", region: "SSA", debutYear: 2022 },
+  { name: "Darth", region: "SSA", debutYear: 2023 },
 
   // 2022 - new superstar era
   { name: "Acronik", region: "EU", debutYear: 2022 },
@@ -181,12 +193,17 @@ export const PRO_PLAYERS: ProPlayer[] = [
   { name: "Tehqoz", region: "EU", debutYear: 2024 },
   { name: "Zach", region: "NA", debutYear: 2024 },
   { name: "Diaz", region: "SAM", debutYear: 2024 },
+  { name: "Laucha", region: "SAM", debutYear: 2023 },
   { name: "Kaka", region: "OCE", debutYear: 2024 },
+  { name: "gus", region: "OCE", debutYear: 2024 },
+  { name: "Fiberr", region: "OCE", debutYear: 2023 },
 
   // 2025+
   { name: "Abdullah", region: "MENA", debutYear: 2025 },
   { name: "Ghaazi", region: "MENA", debutYear: 2025 },
   { name: "Twiz", region: "MENA", debutYear: 2026 },
+  { name: "Faisal", region: "MENA", debutYear: 2023 },
+  { name: "oVaMPiERz", region: "MENA", debutYear: 2023 },
 ];
 
 /** Every pro whose debut year has passed by `currentYear`, real careers only run forward. */
