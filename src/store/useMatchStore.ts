@@ -12,7 +12,8 @@ import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLe
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 import { regionalGrinderRoster, type RosterBand } from "@/data/regionalGrinders";
 import { gatherEligibleOpponents, type EligibleCandidate } from "@/data/matchmakingPool";
-import { isOnlineNow, REGION_HOUR_OFFSET } from "@/data/aiActivity";
+import { isOnlineNow, isActivelyQueueing, REGION_HOUR_OFFSET } from "@/data/aiActivity";
+import { regionCompatiblePeers, partyPartnerFor, isCurrentlyPartied } from "@/data/aiParties";
 import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
 import { useSaveStore } from "@/store/useSaveStore";
 import {
@@ -382,15 +383,58 @@ function generateRoster(
     players.push({ ...friendPlayer, partyId: selfPartyId });
     blueSlotsRemaining--;
   }
-  for (let i = 0; i < blueSlotsRemaining; i++) {
-    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier);
-    players.push(buildOpponent(picked.name, "blue", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, picked.leaderboardMmr, undefined, picked.region));
-  }
-  for (let i = 0; i < perTeam; i++) {
-    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier);
-    players.push(buildOpponent(picked.name, "orange", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, picked.leaderboardMmr, undefined, picked.region));
-  }
+  fillTeamSlots("blue", blueSlotsRemaining, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier);
+  fillTeamSlots("orange", perTeam, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier);
   return applyPartyFlavor(players);
+}
+
+/** Fills `slotCount` open roster spots on `team`, pushing onto `players` and reserving names in `used` as
+ *  it goes. In 2v2, a real tracked pick (a pro/grinder, `picked.region` set) who has a stable AI-AI duo
+ *  partner (see data/aiParties.ts) currently online and actively queueing gets that partner seated in the
+ *  very next open slot on the SAME team instead of an independent roll — this is what makes two AI show up
+ *  partied together rather than every teammate pairing being an unrelated coinflip. */
+function fillTeamSlots(
+  team: "blue" | "orange",
+  slotCount: number,
+  players: MatchPlayer[],
+  used: Set<string>,
+  queue: QueueMode,
+  rankTier: RankTierId,
+  era: RankEra,
+  seasonNumber: number,
+  currentYear: number,
+  playerMmr: number,
+  currentDate: SimDate,
+  seasonStartDate: SimDate,
+  regions: ProRegion[],
+  hourOfDay: number,
+  bandMultiplier: number
+) {
+  let remaining = slotCount;
+  while (remaining > 0) {
+    const picked = pickName(used, rankTier, currentYear, queue, playerMmr, era, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier);
+    players.push(buildOpponent(picked.name, team, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, picked.leaderboardMmr, undefined, picked.region));
+    remaining--;
+
+    if (queue !== "2v2" || remaining <= 0 || !picked.region) continue;
+    const peers = regionCompatiblePeers(picked.region, currentYear);
+    const partner = partyPartnerFor(picked.name, picked.region, peers);
+    if (!partner || used.has(partner.name) || !isCurrentlyPartied(picked.name, picked.region, currentDate, hourOfDay)) continue;
+    const partnerHour = (hourOfDay + REGION_HOUR_OFFSET[partner.region]) % 24;
+    if (!isOnlineNow(partner.name, partner.region, currentDate, partnerHour, queue) || !isActivelyQueueing(partner.name, partner.region)) continue;
+
+    const partnerPro = PRO_PLAYERS.find((p) => p.name === partner.name);
+    const partnerLeaderboardMmr = partnerPro
+      ? useProLeaderboardStore.getState().getMmr(partner.name, queue, era, currentYear, currentDate, seasonStartDate)
+      : useRegionalRosterStore.getState().getMmr(partner.name, partner.region, queue, era, currentYear, currentDate, seasonStartDate);
+    const partyId = `${picked.name}+${partner.name}`;
+    used.add(partner.name);
+    const partnerPlayer = buildOpponent(partner.name, team, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, partnerLeaderboardMmr, undefined, partner.region);
+    players.push({ ...partnerPlayer, partyId });
+    const pickedIdx = players.findIndex((p) => p.name === picked.name && p.team === team);
+    if (pickedIdx >= 0) players[pickedIdx] = { ...players[pickedIdx], partyId };
+    remaining--;
+  }
 }
 
 /** Scans every region's grinder roster for a name — only ever needed for the rare party member/friend whose
@@ -545,6 +589,9 @@ function applyMatchDayForm(players: MatchPlayer[]): { players: MatchPlayer[]; fo
 const PARTY_CHANCE = 0.35;
 
 function applyPartyFlavor(players: MatchPlayer[]): MatchPlayer[] {
+  // A real AI-AI duo (see fillTeamSlots) or the player's own party already carries a partyId, don't
+  // overwrite it with an unrelated cosmetic pairing.
+  if (players.some((p) => p.partyId)) return players;
   const enemyTeam = players.filter((p) => p.team === "orange");
   if (enemyTeam.length < 2 || Math.random() >= PARTY_CHANCE) return players;
   const shuffled = [...enemyTeam].sort(() => Math.random() - 0.5);

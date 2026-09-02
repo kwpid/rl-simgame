@@ -6,8 +6,9 @@
 import { hashString, type ProRegion } from "./proPlayers";
 
 // Rough geographic/undersea-cable proximity, NOT a full distance matrix — just enough to have a believable
-// middle ping tier between "same region" and "genuine region gap".
-const REGION_NEARBY: Partial<Record<ProRegion, ProRegion[]>> = {
+// middle ping tier between "same region" and "genuine region gap". Also reused by aiParties.ts to decide
+// which regions' players could plausibly duo together.
+export const REGION_NEARBY: Partial<Record<ProRegion, ProRegion[]>> = {
   NA: ["SAM"],
   SAM: ["NA"],
   EU: ["MENA", "SSA"],
@@ -17,7 +18,7 @@ const REGION_NEARBY: Partial<Record<ProRegion, ProRegion[]>> = {
   APAC: ["OCE", "MENA"],
 };
 
-function isNearbyRegion(a: ProRegion, b: ProRegion): boolean {
+export function isNearbyRegion(a: ProRegion, b: ProRegion): boolean {
   return REGION_NEARBY[a]?.includes(b) ?? false;
 }
 
