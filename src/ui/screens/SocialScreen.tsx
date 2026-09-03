@@ -13,11 +13,13 @@ import { eraForDate, deriveRankFromMmr, divisionLabel, tierColor, type RankTierI
 import { daysBetween } from "@/data/dateUtils";
 import { FOUNDATION_LABELS, type FoundationCategory } from "@/data/mechanics";
 import type { FriendRecord, QueueMode } from "@/data/mockSave";
-import { orgTagForOrgName, saveRegionToProRegion } from "@/data/tournaments";
+import { orgTagForOrgName, saveRegionToProRegion, rlcsSeasonForDate, REGION_LABELS } from "@/data/tournaments";
+import { lftListings } from "@/data/lftBoard";
 import { isOnlineNow } from "@/data/aiActivity";
 import { RankBadge } from "@/ui/components/RankBadge";
 import { Icon } from "@/ui/components/Icon";
 import { Avatar } from "@/ui/components/Avatar";
+import { isPartnershipFamous, partnershipLabel } from "@/data/partnerships";
 
 // --- Accept chance logic ---
 // Similar-rank (same tier/MMR range) friends will almost always accept. A real pro or leaderboard regular
@@ -121,7 +123,8 @@ function StatusDot({ status }: { status: FriendStatus }) {
   );
 }
 
-type Tab = "friends" | "showmatches";
+type Tab = "friends" | "showmatches" | "lft";
+const TAB_LABELS: Record<Tab, string> = { friends: "Friends", showmatches: "Showmatches", lft: "LFT" };
 
 export function SocialScreen() {
   const [tab, setTab] = useState<Tab>("friends");
@@ -134,7 +137,7 @@ export function SocialScreen() {
       </header>
 
       <div className="social-tabbar" role="tablist">
-        {(["friends", "showmatches"] as Tab[]).map((t) => (
+        {(["friends", "showmatches", "lft"] as Tab[]).map((t) => (
           <button
             key={t}
             role="tab"
@@ -142,7 +145,7 @@ export function SocialScreen() {
             className={"social-tab" + (tab === t ? " social-tab-active" : "")}
             onClick={() => setTab(t)}
           >
-            {t === "friends" ? "Friends" : "Showmatches"}
+            {TAB_LABELS[t]}
           </button>
         ))}
       </div>
@@ -150,6 +153,7 @@ export function SocialScreen() {
       <div key={tab} className="fade-in">
         {tab === "friends" && <FriendsTab />}
         {tab === "showmatches" && <ShowmatchesTab />}
+        {tab === "lft" && <LftTab />}
       </div>
 
       <style>{`
@@ -209,6 +213,16 @@ export function SocialScreen() {
           letter-spacing: 0.4px;
           color: var(--accent);
           margin-left: 6px;
+        }
+        .friend-famous-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          font-size: 10px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.3px;
+          color: #f0d68a;
         }
         .friend-region {
           font-size: 12px;
@@ -304,6 +318,31 @@ export function SocialScreen() {
           font-size: 11px;
           color: var(--text-tertiary);
           margin-top: 6px;
+        }
+        .lft-post-card {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: var(--space-3);
+          background: var(--bg-surface);
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--radius-md);
+          padding: var(--space-3) var(--space-4);
+          margin-bottom: var(--space-4);
+        }
+        .lft-post-title {
+          font-weight: 700;
+          font-size: 14px;
+        }
+        .lft-post-sub {
+          font-size: 12px;
+          color: var(--text-tertiary);
+          margin-top: 2px;
+          max-width: 480px;
+        }
+        .lft-post-active {
+          border-color: var(--accent);
+          color: var(--accent);
         }
         .invite-banner {
           display: flex;
@@ -785,6 +824,12 @@ function FriendsTab() {
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <span className="friend-name">{f.name}</span>
                 {f.isPro && <span className="friend-pro-badge">PRO</span>}
+                {isPartnershipFamous(f) && (
+                  <span className="friend-famous-badge" title={partnershipLabel([s.displayName, f.name])}>
+                    <Icon name="fame" size={11} />
+                    Known Duo
+                  </span>
+                )}
                 <StatusDot status={status} />
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -925,6 +970,70 @@ function ShowmatchesTab() {
             <span style={{ color: h.win ? "var(--success)" : "var(--danger)" }}>
               {h.win ? "Won" : "Lost"} (+{h.fameGained} fame)
             </span>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function LftTab() {
+  const s = useSaveStore();
+  const setPostingLft = useSaveStore((st) => st.setPostingLft);
+  const addFriend = useSaveStore((st) => st.addFriend);
+  const era = eraForDate(s.currentDate);
+  const { seasonNumber } = rlcsSeasonForDate(s.currentDate);
+
+  const listings = lftListings(s.currentDate, s.currentDate.year, era, seasonNumber, s.rlcsTeamsResetSeed, s.seasonStartDate);
+
+  return (
+    <>
+      <div className="lft-post-card">
+        <div>
+          <div className="lft-post-title">Post your own LFT listing</div>
+          <div className="lft-post-sub">
+            {s.orgContract
+              ? `You're signed with ${s.orgContract.orgName} — not a free agent, no LFT listing while under contract.`
+              : "Signals you're looking for a partner or org — modestly raises your own chance of getting scouted while active."}
+          </div>
+        </div>
+        <button
+          className={"settings-name-btn" + (s.postingLft ? " lft-post-active" : "")}
+          disabled={!!s.orgContract}
+          onClick={() => setPostingLft(!s.postingLft)}
+        >
+          {s.postingLft ? "Posted — Take Down" : "Post LFT"}
+        </button>
+      </div>
+
+      <div className="section-label">Free Agents</div>
+      {listings.length === 0 && (
+        <div style={{ fontSize: 13, color: "var(--text-tertiary)" }}>No listings right now, check back later.</div>
+      )}
+      {listings.map((listing) => {
+        const isFriend = !!s.friends[listing.name];
+        return (
+          <div key={listing.name} className="friend-card friend-card-compact">
+            <Avatar name={listing.name} currentDate={s.currentDate} size={34} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span className="friend-name">{listing.name}</span>
+                <span className="friend-region">{REGION_LABELS[listing.region]}</span>
+                <span className="friend-region">{QUEUE_LABELS[listing.queue]}</span>
+              </div>
+              <div className="friend-record">{listing.blurb}</div>
+            </div>
+            <div className="friend-icon-actions">
+              <button
+                className="friend-icon-btn"
+                title={isFriend ? "Already friends" : "Add Friend"}
+                aria-label={isFriend ? "Already friends" : "Add Friend"}
+                disabled={isFriend}
+                onClick={() => addFriend(listing.name, listing.region, listing.isPro, s.currentDate)}
+              >
+                <Icon name="plus" size={16} />
+              </button>
+            </div>
           </div>
         );
       })}

@@ -128,6 +128,8 @@ function migrateSaveData(raw: any): SaveData {
   if (data.pendingPartyInvite === undefined) data.pendingPartyInvite = null;
   if (data.lastPartyInviteCheckDate === undefined) data.lastPartyInviteCheckDate = data.currentDate;
   if (data.playerPfp === undefined) data.playerPfp = null;
+  if (data.postingLft === undefined) data.postingLft = false;
+  if (data.travelWindow === undefined) data.travelWindow = null;
   if (data.pendingShowmatchInvite === undefined) data.pendingShowmatchInvite = null;
   if (data.showmatchHistory === undefined) data.showmatchHistory = [];
   if (data.lastShowmatchInviteCheckDate === undefined) data.lastShowmatchInviteCheckDate = data.currentDate;
@@ -377,6 +379,8 @@ function createFreshSaveData(config: NewSaveConfig): SaveData {
     pendingPartyInvite: null,
     lastPartyInviteCheckDate: startDate,
     playerPfp: null,
+    postingLft: false,
+    travelWindow: null,
     recentlyPlayedWith: [],
     partyMembers: [],
   };

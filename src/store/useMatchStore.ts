@@ -20,6 +20,7 @@ import { aiTeamChemistryForDate } from "@/data/orgs";
 import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
 import { useAiTitleStore } from "@/store/useAiTitleStore";
 import { pickFictionalSeasonTitles } from "@/data/seasons";
+import { effectivePartyChemistry } from "@/data/partnerships";
 import { useSaveStore } from "@/store/useSaveStore";
 import {
   generateOpponentStats,
@@ -27,7 +28,6 @@ import {
   simulateDuelPossession,
   prefersCounterAttack,
   flattenProgress,
-  effectivePlaystyle,
   type MatchParticipantStats,
   type DuelMastery,
   type PossessionResult,
@@ -664,47 +664,6 @@ function tryRematchRoster(
   return applyPartyFlavor(players);
 }
 
-// A single stat/mechanic gap shouldn't be an instant, guaranteed result: real players have good and bad
-// days independent of their real skill level, someone can just be peaking (or off) for this one game. This
-// rolls ONE multiplier per player for the whole match (not per possession, a "day" is consistent), applied
-// to their effective Game Sense/Mechanical Consistency/foundation stats for this game only — their real
-// saved stats never change, only how they play out this specific match.
-const FORM_SPREAD = 0.18; // +/-18%
-const FORM_NOTE_THRESHOLD = 0.1; // only call it out in the log if the swing is actually noticeable
-
-/** A more consistent player (the trained playstyle trait, not the Mechanical Consistency stat which
- *  already governs in-match whiff variance) has tighter day-to-day form swings, a wildly inconsistent one
- *  swings harder both ways. */
-function rollForm(consistencyTrait: number): number {
-  const spread = Math.max(0.03, FORM_SPREAD * (1 - (consistencyTrait - 50) / 90));
-  return 1 + (Math.random() * 2 - 1) * spread;
-}
-
-function applyForm(player: MatchPlayer, form: number): MatchPlayer {
-  const scale = (v: number) => Math.max(0, Math.round(v * form));
-  return {
-    ...player,
-    gameSense: scale(player.gameSense),
-    mechanicalConsistency: scale(player.mechanicalConsistency),
-    foundationStats: Object.fromEntries(
-      Object.entries(player.foundationStats).map(([cat, v]) => [cat, scale(v as number)])
-    ) as MatchPlayer["foundationStats"],
-  };
-}
-
-/** 1v1-only for now: rolls each player's form for this match and applies it, returning the adjusted
- *  roster plus any log-worthy note about a noticeably good/bad day. */
-function applyMatchDayForm(players: MatchPlayer[]): { players: MatchPlayer[]; formNotes: string[] } {
-  const formNotes: string[] = [];
-  const adjusted = players.map((p) => {
-    const form = rollForm(effectivePlaystyle(p).consistency);
-    if (form - 1 >= FORM_NOTE_THRESHOLD) formNotes.push(`${p.name} looks like they're playing above their usual level today.`);
-    else if (1 - form >= FORM_NOTE_THRESHOLD) formNotes.push(`${p.name} looks a little off their usual game today.`);
-    return applyForm(p, form);
-  });
-  return { players: adjusted, formNotes };
-}
-
 // Cosmetic flavor only, no gameplay effect: in 2v2/3v3, the enemy team sometimes includes two players who
 // queued in together as a party, flagged with a shared partyId for the UI's duo icon.
 const PARTY_CHANCE = 0.35;
@@ -1169,11 +1128,6 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       logIdCounter = 0;
       ticksSincePossession = 0;
       const log: MatchLogLine[] = [{ id: logIdCounter++, clockLabel: clockLabel(GAME_DURATION_SECONDS), text: "Kickoff." }];
-      if (req.queue === "1v1") {
-        const formResult = applyMatchDayForm(players);
-        players = formResult.players;
-        formResult.formNotes.forEach((text) => log.push({ id: logIdCounter++, clockLabel: clockLabel(GAME_DURATION_SECONDS), text }));
-      }
       set({
         phase: "found",
         queue: req.queue,
@@ -1473,7 +1427,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       const partyFriendStats: Record<string, PartyFriendStats> = {};
       for (const name of save.partyMembers) {
         const friend = save.friends[name];
-        if (friend) partyFriendStats[name] = { mmr: friend.mmr, gameSense: friend.gameSense, mechanicalConsistency: friend.mechanicalConsistency, chemistry: friend.chemistry };
+        if (friend) partyFriendStats[name] = { mmr: friend.mmr, gameSense: friend.gameSense, mechanicalConsistency: friend.mechanicalConsistency, chemistry: effectivePartyChemistry(friend) };
       }
       get().startQueue(
         autoModes.map((q) => buildAutoQueueRequest(save, era, q)),

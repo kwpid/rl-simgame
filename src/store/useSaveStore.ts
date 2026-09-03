@@ -13,6 +13,7 @@ import {
   type OrgNewsEntry,
   type OrgTier,
   type PlaystyleProfile,
+  type TravelWindow,
 } from "@/data/mockSave";
 import { TACTICAL_FOUNDATION_CATEGORIES, type FoundationCategory } from "@/data/mechanics";
 import { addDays, daysBetween, type SimDate } from "@/data/dateUtils";
@@ -300,6 +301,14 @@ interface SaveStoreState extends SaveData {
   /** Dismisses the current invite without partying up, no penalty. */
   declinePartyInvite: () => void;
   setPlayerPfp: (url: string | null) => void;
+  setPostingLft: (posting: boolean) => void;
+  /** Sets the player's active travel window for an upcoming/current LAN event — called from
+   *  useTournamentStore.ts the moment the player's own team qualifies for a LAN major/Worlds. Overwrites
+   *  whatever window was already set (only one event's travel matters at a time). */
+  setTravelWindow: (window: TravelWindow) => void;
+  /** Clears the travel window once its end date has passed — call this the same way every other date-gated
+   *  "ensure" check in this store does, from a screen's own effect. */
+  clearExpiredTravelWindow: (currentDate: SimDate) => void;
   /** Real, live chance for a TEAMMATE who isn't already a friend to friend the player first, after a match
    *  they won together — separate from the player's own manual addFriend, this is the AI-initiated
    *  direction. No-op if `name` is already a friend. */
@@ -909,6 +918,15 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
 
   setPlayerPfp: (url) => set({ playerPfp: url }),
 
+  setPostingLft: (posting) => set({ postingLft: posting }),
+
+  setTravelWindow: (window) => set({ travelWindow: window }),
+
+  clearExpiredTravelWindow: (currentDate) => {
+    const window = get().travelWindow;
+    if (window && daysBetween(window.endDate, currentDate) >= 0) set({ travelWindow: null });
+  },
+
   maybeAiInitiatedFriendRequest: (name, region, isPro, currentDate) => {
     const state = get();
     if (state.friends[name]) return;
@@ -988,7 +1006,10 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     }
 
     const talent = orgTalentDetail(era, currentYear, state.foundationStats, state.player.mechanicalConsistency["2v2"], state.player.gameSense["2v2"]);
-    if (Math.random() > orgScoutingChance(talent.overallScore)) {
+    // Actively posting on the LFT board (see data/lftBoard.ts) makes an org a little more likely to notice —
+    // not a guarantee, just a nudge on top of the same real talent/rank gates everyone else goes through.
+    const scoutChance = orgScoutingChance(talent.overallScore) * (state.postingLft ? 1.3 : 1);
+    if (Math.random() > scoutChance) {
       set({ lastOrgScoutCheckDate: currentDate });
       return;
     }
@@ -1095,7 +1116,8 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       date: currentDate,
       text: `${tryout.orgName} signed you as a ${outcome === "starter" ? "full starter" : "sub"} after tryouts (${record} in scrims), alongside ${tryout.teammates[0]} and ${tryout.teammates[1]}.`,
     };
-    set({ pendingOrgTryout: null, orgContract: contract, orgNews: [news, ...state.orgNews].slice(0, ORG_NEWS_LIMIT) });
+    // Signed players aren't free agents anymore — take down any LFT listing automatically.
+    set({ pendingOrgTryout: null, orgContract: contract, orgNews: [news, ...state.orgNews].slice(0, ORG_NEWS_LIMIT), postingLft: false });
     // Getting signed alongside two real teammates is the kind of thing you'd actually add each other over,
     // not something the player has to separately go find them on the Social screen and friend-request.
     const proRegion = saveRegionToProRegion(state.region);

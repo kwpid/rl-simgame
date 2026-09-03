@@ -14,8 +14,9 @@ import { activeProPlayers, PRO_PLAYERS, type ProRegion } from "@/data/proPlayers
 import { flattenProgress } from "@/data/matchSim";
 import { orgTagForOrgName, saveRegionToProRegion, REGION_LABELS as PRO_REGION_LABELS } from "@/data/tournaments";
 import { seasonEndDate, rewardTierSequence, REWARD_WINS_REQUIRED, AI_PLACEMENT_GAMES_REQUIRED } from "@/data/seasons";
-import { daysBetween, type SimDate } from "@/data/dateUtils";
+import { daysBetween, formatSimDate, type SimDate } from "@/data/dateUtils";
 import { Avatar } from "@/ui/components/Avatar";
+import { effectivePartyChemistry } from "@/data/partnerships";
 
 const LEADERBOARD_SIZE = 100;
 
@@ -165,6 +166,7 @@ export function RankedScreen() {
   const estimatedQueueDurationsMs = useMatchStore((m) => m.estimatedQueueDurationsMs);
   const searchStartedAt = useMatchStore((m) => m.searchStartedAt);
   const setSelectedMatchmakingRegions = useSaveStore((st) => st.setSelectedMatchmakingRegions);
+  const clearExpiredTravelWindow = useSaveStore((st) => st.clearExpiredTravelWindow);
   const [autoQueueChecked, setAutoQueueChecked] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const isTopTierQueue = profile.rankTier === "grand_champion" || profile.rankTier === "ssl";
@@ -176,6 +178,23 @@ export function RankedScreen() {
     const interval = setInterval(tick, 300);
     return () => clearInterval(interval);
   }, [matchPhase, searchStartedAt]);
+
+  useEffect(() => {
+    clearExpiredTravelWindow(s.currentDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.currentDate.year, s.currentDate.month, s.currentDate.day]);
+
+  // Traveling for a LAN major/Worlds (see mockSave.ts's TravelWindow) opens up matchmaking against the
+  // event's host region regardless of the normal GC+/SSL region-select gate below — the whole team is
+  // physically there, of course they end up playing locals while they're in town, ranked or not.
+  const travelWindow = s.travelWindow;
+  const travelActive =
+    !!travelWindow && daysBetween(travelWindow.startDate, s.currentDate) >= 0 && daysBetween(s.currentDate, travelWindow.endDate) >= 0;
+  const travelRegions = travelActive && travelWindow ? [travelWindow.region] : [];
+  const effectiveMatchmakingRegions = Array.from(new Set([...s.selectedMatchmakingRegions, ...travelRegions]));
+  // Always shown in the header, not just while traveling — a quiet "where are you actually playing from
+  // right now" readout rather than a banner, since most of the time it's just your own home region.
+  const currentLocationRegion = travelActive && travelWindow ? travelWindow.region : saveRegionToProRegion(s.region);
 
   function toggleRegion(region: ProRegion) {
     const current = s.selectedMatchmakingRegions;
@@ -196,7 +215,7 @@ export function RankedScreen() {
       queue: q,
       rankTier: qMatchmakingTier,
       playerMmr: p.mmr,
-      regions: s.selectedMatchmakingRegions,
+      regions: effectiveMatchmakingRegions,
       self: {
         name: s.displayName,
         gameSense: s.player.gameSense[q],
@@ -228,7 +247,7 @@ export function RankedScreen() {
     const partyFriendStats: Record<string, { mmr: Record<QueueMode, number>; gameSense: Record<QueueMode, number>; mechanicalConsistency: Record<QueueMode, number>; chemistry?: number }> = {};
     for (const name of s.partyMembers) {
       const friend = s.friends[name];
-      if (friend) partyFriendStats[name] = { mmr: friend.mmr, gameSense: friend.gameSense, mechanicalConsistency: friend.mechanicalConsistency, chemistry: friend.chemistry };
+      if (friend) partyFriendStats[name] = { mmr: friend.mmr, gameSense: friend.gameSense, mechanicalConsistency: friend.mechanicalConsistency, chemistry: effectivePartyChemistry(friend) };
     }
     setAutoQueueModes(autoQueueChecked ? queuesToSearch : null);
     startQueue(queuesToSearch.map(buildQueueRequest), s.clockHour, era, s.seasonNumber, s.currentDate.year, s.currentDate, s.seasonStartDate, s.partyMembers, partyFriendStats, s.rlcsTeamsResetSeed);
@@ -243,6 +262,12 @@ export function RankedScreen() {
           <span className="season-badge-sep">&middot;</span>
           <span style={{ fontVariantNumeric: "tabular-nums" }}>
             {daysRemaining}d {hoursRemaining}h left
+          </span>
+          <span className="season-badge-sep">&middot;</span>
+          <span
+            title={travelActive && travelWindow ? `Traveling for ${travelWindow.eventLabel} until ${formatSimDate(travelWindow.endDate)}` : undefined}
+          >
+            Currently in {PRO_REGION_LABELS[currentLocationRegion]}
           </span>
         </div>
       </header>

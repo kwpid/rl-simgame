@@ -477,14 +477,26 @@ interface MajorGroup {
   id: "major1" | "major2";
   location: string;
   regions: ProRegion[];
+  /** Where the LAN event itself physically is — see the travel system (useTournamentStore.ts's
+   *  qualifyForTravel and RankedScreen.tsx's travel banner): a team from ANY of `regions` above still only
+   *  travels to this one host region, they don't get to matchmake against their own region's players just
+   *  for showing up to their own major. */
+  hostRegion: ProRegion;
 }
 
 /** Major 1 runs in Europe with EU/SAM/APAC's regional champions, Major 2 runs in the US with NA/MENA/
  *  OCE/SSA's, matching the two-major structure described in the design chat. */
 export const MAJOR_GROUPS: MajorGroup[] = [
-  { id: "major1", location: "London", regions: ["EU", "SAM", "APAC"] },
-  { id: "major2", location: "Las Vegas", regions: ["NA", "MENA", "OCE", "SSA"] },
+  { id: "major1", location: "London", regions: ["EU", "SAM", "APAC"], hostRegion: "EU" },
+  { id: "major2", location: "Las Vegas", regions: ["NA", "MENA", "OCE", "SSA"], hostRegion: "NA" },
 ];
+
+/** Worlds alternates host region by year for a bit of real-calendar variety — not tied to any one major
+ *  group since every region's own champion (via whichever major they came through) converges on Worlds
+ *  together, unlike a major which only ever draws from its own half of the map. */
+export function worldsHostRegion(year: number): ProRegion {
+  return year % 2 === 0 ? "NA" : "EU";
+}
 
 export const MAJOR_STAGES: StageConfig[] = [{ format: "single_elim", label: "Major Bracket", entrants: 8, advanceCount: 1, days: 3 }];
 export const WORLDS_STAGES: StageConfig[] = [{ format: "single_elim", label: "World Championship Final", entrants: 2, advanceCount: 1, days: 1 }];

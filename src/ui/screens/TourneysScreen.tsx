@@ -20,10 +20,11 @@ import {
   rivalSeriesTitlesEarned,
   RLCS_1V1_INTRODUCED_SEASON,
   isLanEvent,
+  worldsHostRegion,
 } from "@/data/tournaments";
 import type { TitleEntry } from "@/data/seasons";
 import { eraForDate } from "@/data/rankSystem";
-import { daysBetween, formatSimDate, type SimDate } from "@/data/dateUtils";
+import { daysBetween, addDays, formatSimDate, type SimDate } from "@/data/dateUtils";
 import { flattenProgress } from "@/data/matchSim";
 import { orgTagForOrgName, type TournamentKind } from "@/data/tournaments";
 
@@ -131,6 +132,35 @@ export function TourneysScreen() {
   const startTournamentSeries = useMatchStore((m) => m.startTournamentSeries);
   const matchPhase = useMatchStore((m) => m.phase);
   const addTitle = useSaveStore((st) => st.addTitle);
+  const setTravelWindow = useSaveStore((st) => st.setTravelWindow);
+  const clearExpiredTravelWindow = useSaveStore((st) => st.clearExpiredTravelWindow);
+
+  // Travel system: the moment the player's own team is confirmed into a LAN major/Worlds, the whole team
+  // physically travels to wherever that event actually is — see mockSave.ts's TravelWindow doc comment for
+  // the window shape (about a week before through two weeks after, up to 3 weeks). Only instances anywhere
+  // near "now" are worth checking each render (a years-old completed major sitting in `instances` shouldn't
+  // get reprocessed every tick just because its id still matches), and re-setting the same window a
+  // instance already produced is a harmless no-op, not a fresh countdown reset.
+  useEffect(() => {
+    clearExpiredTravelWindow(currentDate);
+    for (const inst of Object.values(instances)) {
+      if (!inst.playerTeamId) continue;
+      if (inst.kind !== "rlcs_major" && inst.kind !== "rlcs_worlds") continue;
+      const daysSinceStart = daysBetween(inst.startDate, currentDate);
+      if (daysSinceStart < -14 || daysSinceStart > 21) continue;
+      const instSeasonNumber = inst.startDate.year;
+      if (!isLanEvent(inst.kind, instSeasonNumber)) continue;
+      const group = inst.kind === "rlcs_major" ? MAJOR_GROUPS.find((g) => inst.id.includes(`_${g.id}_`)) : undefined;
+      const hostRegion = inst.kind === "rlcs_major" ? group?.hostRegion : worldsHostRegion(instSeasonNumber);
+      if (!hostRegion) continue;
+      const eventLabel = inst.kind === "rlcs_major" ? `the ${group?.location ?? "Major"} Major` : "Worlds";
+      const startDate = addDays(inst.startDate, -7);
+      const endDate = addDays(inst.startDate, 14);
+      if (s.travelWindow?.eventLabel === eventLabel && s.travelWindow?.region === hostRegion && s.travelWindow?.startDate.year === startDate.year) continue;
+      setTravelWindow({ region: hostRegion, startDate, endDate, eventLabel });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentDate.year, currentDate.month, currentDate.day, instances]);
 
   useEffect(() => {
     ensureProgress(currentDate, currentYear, s.startDate.year, s.rlcsTeamsResetSeed, s.seasonStartDate);

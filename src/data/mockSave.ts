@@ -144,6 +144,19 @@ export interface PartyInvite {
   expiresDate: SimDate;
 }
 
+/** A LAN major/Worlds the player's own team qualified for takes everyone there for real — teams don't
+ *  materialize on-site, they travel. While this window is open (the event's home region, a stretch from
+ *  about a week before the event through about two weeks after, up to 3 weeks total) ranked matchmaking can
+ *  pull opponents from that region too, regardless of the normal GC+/SSL region-select gate — see
+ *  RankedScreen.tsx's queue-request building and useTournamentStore.ts for where this gets set. */
+export interface TravelWindow {
+  region: ProRegion;
+  startDate: SimDate;
+  endDate: SimDate;
+  /** Flavor label for the banner, e.g. "the Las Vegas Major". */
+  eventLabel: string;
+}
+
 export interface ShowmatchResultEntry {
   streamerId: "shadow" | "feer" | "johnboi";
   opponentName: string;
@@ -453,6 +466,14 @@ export const mockSave = {
   // pictures in src/assets/pfps — see usePfpStore.ts), null if they've never set one. Unlike every AI's own
   // pfp (shared/global, assigned automatically), this is per-save and never auto-reassigned.
   playerPfp: null as string | null,
+  // Posted on the LFT (Looking For Team) board alongside the AI's own real free-agent listings (see
+  // data/lftBoard.ts) — purely a flavor/visibility flag, no separate listing data needed since the player's
+  // own name/region/rank are already known. Modestly raises org scouting chance while active (see
+  // useSaveStore.ts's ensureOrgScouting) — an org is a little more likely to notice someone actively saying
+  // they're looking.
+  postingLft: false,
+  // See TravelWindow's own doc comment — null whenever the player isn't currently traveling for a LAN event.
+  travelWindow: null as TravelWindow | null,
   // Names encountered in recent matches (opponents and teammates alike), most recent first, capped short.
   // Adding a friend is done from this list rather than an open search of every name in the sim.
   recentlyPlayedWith: [] as string[],
