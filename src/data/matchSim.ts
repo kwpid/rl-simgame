@@ -606,10 +606,17 @@ function defenderRoles(defendingTeam: MatchParticipantStats[]): DefenderRoles {
  *  teammate to arrive only makes sense when there IS a teammate still rotating in. */
 function pickChallengeType(defender: MatchParticipantStats, teammateAvailable: boolean): ChallengeType {
   const style = effectivePlaystyle(defender);
-  const stallWeight = teammateAvailable ? Math.max(0, 0.15 + (50 - style.aggression) / 300) : 0;
-  const shadowWeight = Math.max(0.05, 0.3 + (style.rotationDiscipline - 50) / 300);
-  const fakeWeight = Math.max(0.05, 0.2 + (defender.gameSense - 1000) / 8000);
-  const hardWeight = Math.max(0.15, 0.35 + (style.aggression - 50) / 300);
+  // Every weight here is built ONLY off effectivePlaystyle's already-bounded 5-95 scale, never raw
+  // gameSense/mechanicalConsistency directly — those legitimately reach into the tens of thousands at high
+  // MMR (SSL alone spans roughly 20k-80k, see gameSenseAnchors), so scaling a weight linearly off the raw
+  // number let "fake" run away into practically the ONLY challenge thrown at high rank once gameSense got
+  // huge, while shadow/hard stayed flat. Real high-level play uses a soft fake as an occasional tool, not
+  // the default read — fakeWeight is capped well below the other three so it can never dominate the mix,
+  // a sharper (higher mechanicalFlair) defender leans on it only modestly more than a duller one.
+  const stallWeight = teammateAvailable ? Math.max(0.04, 0.16 + (50 - style.aggression) / 400) : 0;
+  const shadowWeight = Math.max(0.15, 0.32 + (style.rotationDiscipline - 50) / 300);
+  const fakeWeight = Math.max(0.06, Math.min(0.2, 0.12 + (style.mechanicalFlair - 50) / 600));
+  const hardWeight = Math.max(0.2, 0.38 + (style.aggression - 50) / 300);
   const total = stallWeight + shadowWeight + fakeWeight + hardWeight;
   let roll = Math.random() * total;
   if ((roll -= stallWeight) <= 0) return "stall";
