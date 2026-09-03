@@ -42,6 +42,10 @@ export interface MatchParticipantStats {
    *  they're not signed to anything. For the human player this comes from their own orgContract; for an AI
    *  opponent see orgTagForOpponent below. */
   orgTag?: string;
+  /** Whether this player is currently posting a Looking For Team listing (see data/lftBoard.ts and
+   *  useSaveStore.ts's postingLft), shown as a grey [LFT] tag (see ui/components/LftTag.tsx) — only ever
+   *  true for someone with no orgTag at all, a signed player isn't a free agent. */
+  isLft?: boolean;
   /** This player's real region (their own save region for the human, or a real pro's/regional grinder's
    *  tracked region for an AI opponent) — undefined for an untracked generic filler name. Purely cosmetic,
    *  drives the live ping readout (see data/pingModel.ts), no gameplay effect. */

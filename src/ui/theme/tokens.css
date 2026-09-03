@@ -138,3 +138,13 @@ button {
   font-size: 0.9em;
   margin-right: 3px;
 }
+
+/* [LFT] tag prefix, see LftTag.tsx: shown before a name (player or AI) currently posting a Looking For
+   Team listing — deliberately grey/muted, unlike the accent-colored org tag, since it's a flavor note
+   ("free agent, currently looking") rather than an achievement. */
+.lft-tag {
+  color: var(--text-tertiary);
+  font-weight: 700;
+  font-size: 0.9em;
+  margin-right: 3px;
+}

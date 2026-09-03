@@ -21,6 +21,7 @@ import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
 import { useAiTitleStore } from "@/store/useAiTitleStore";
 import { pickFictionalSeasonTitles } from "@/data/seasons";
 import { effectivePartyChemistry } from "@/data/partnerships";
+import { isPostingLft } from "@/data/lftBoard";
 import { useSaveStore } from "@/store/useSaveStore";
 import {
   generateOpponentStats,
@@ -366,11 +367,15 @@ function buildOpponent(
           ? useRegionalRosterStore.getState().getStats(name, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate)
           : useLeaderboardFillerStore.getState().getStats(name, queue, era, currentYear, currentDate, seasonStartDate);
   const region = pro?.region ?? grinderRegion;
+  const orgTag = realOrgTagForPlayer(name, region, currentYear, era, currentDate, seasonStartDate, rlcsTeamsResetSeed);
   return {
     ...generateOpponentStats(name, team, rankTier, era, seasonNumber, currentYear, playerMmr, queue, proQueueOverride, false, resolvedTitle, persistentStats),
     points: 0,
     region,
-    orgTag: realOrgTagForPlayer(name, region, currentYear, era, currentDate, seasonStartDate, rlcsTeamsResetSeed),
+    orgTag,
+    // Only a real pro/grinder identity with no org tag is a genuine free agent at all — a signed player
+    // isn't LFT, and a plain filler/friend name was never eligible for a listing in the first place.
+    isLft: !orgTag && !!(pro || grinderRegion) && isPostingLft(name, currentDate),
     // An established "queue buddy" friend (see FriendRecord.chemistry) feeds the same teamChemistry
     // mechanic an org roster's chemistry already does — playing with someone you've built real rapport
     // with genuinely plays a bit better than a stranger teammate, not just a Social screen flavor number.

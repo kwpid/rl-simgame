@@ -13,8 +13,7 @@ import { eraForDate, deriveRankFromMmr, divisionLabel, tierColor, type RankTierI
 import { daysBetween } from "@/data/dateUtils";
 import { FOUNDATION_LABELS, type FoundationCategory } from "@/data/mechanics";
 import type { FriendRecord, QueueMode } from "@/data/mockSave";
-import { orgTagForOrgName, saveRegionToProRegion, rlcsSeasonForDate, REGION_LABELS } from "@/data/tournaments";
-import { lftListings } from "@/data/lftBoard";
+import { orgTagForOrgName, saveRegionToProRegion } from "@/data/tournaments";
 import { isOnlineNow } from "@/data/aiActivity";
 import { RankBadge } from "@/ui/components/RankBadge";
 import { Icon } from "@/ui/components/Icon";
@@ -980,63 +979,24 @@ function ShowmatchesTab() {
 function LftTab() {
   const s = useSaveStore();
   const setPostingLft = useSaveStore((st) => st.setPostingLft);
-  const addFriend = useSaveStore((st) => st.addFriend);
-  const era = eraForDate(s.currentDate);
-  const { seasonNumber } = rlcsSeasonForDate(s.currentDate);
-
-  const listings = lftListings(s.currentDate, s.currentDate.year, era, seasonNumber, s.rlcsTeamsResetSeed, s.seasonStartDate);
 
   return (
-    <>
-      <div className="lft-post-card">
-        <div>
-          <div className="lft-post-title">Post your own LFT listing</div>
-          <div className="lft-post-sub">
-            {s.orgContract
-              ? `You're signed with ${s.orgContract.orgName} — not a free agent, no LFT listing while under contract.`
-              : "Signals you're looking for a partner or org — modestly raises your own chance of getting scouted while active."}
-          </div>
+    <div className="lft-post-card">
+      <div>
+        <div className="lft-post-title">Looking For Team</div>
+        <div className="lft-post-sub">
+          {s.orgContract
+            ? `You're signed with ${s.orgContract.orgName} — not a free agent, no LFT listing while under contract.`
+            : "Post that you're looking for a partner or org — modestly raises your own chance of getting scouted, and shows a grey [LFT] tag next to your name in matches while active. AI can post one too."}
         </div>
-        <button
-          className={"settings-name-btn" + (s.postingLft ? " lft-post-active" : "")}
-          disabled={!!s.orgContract}
-          onClick={() => setPostingLft(!s.postingLft)}
-        >
-          {s.postingLft ? "Posted — Take Down" : "Post LFT"}
-        </button>
       </div>
-
-      <div className="section-label">Free Agents</div>
-      {listings.length === 0 && (
-        <div style={{ fontSize: 13, color: "var(--text-tertiary)" }}>No listings right now, check back later.</div>
-      )}
-      {listings.map((listing) => {
-        const isFriend = !!s.friends[listing.name];
-        return (
-          <div key={listing.name} className="friend-card friend-card-compact">
-            <Avatar name={listing.name} currentDate={s.currentDate} size={34} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <span className="friend-name">{listing.name}</span>
-                <span className="friend-region">{REGION_LABELS[listing.region]}</span>
-                <span className="friend-region">{QUEUE_LABELS[listing.queue]}</span>
-              </div>
-              <div className="friend-record">{listing.blurb}</div>
-            </div>
-            <div className="friend-icon-actions">
-              <button
-                className="friend-icon-btn"
-                title={isFriend ? "Already friends" : "Add Friend"}
-                aria-label={isFriend ? "Already friends" : "Add Friend"}
-                disabled={isFriend}
-                onClick={() => addFriend(listing.name, listing.region, listing.isPro, s.currentDate)}
-              >
-                <Icon name="plus" size={16} />
-              </button>
-            </div>
-          </div>
-        );
-      })}
-    </>
+      <button
+        className={"settings-name-btn" + (s.postingLft ? " lft-post-active" : "")}
+        disabled={!!s.orgContract}
+        onClick={() => setPostingLft(!s.postingLft)}
+      >
+        {s.postingLft ? "Posted — Take Down" : "Post LFT"}
+      </button>
+    </div>
   );
 }

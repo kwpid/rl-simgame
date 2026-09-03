@@ -14,6 +14,7 @@ import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 import { regionalGrinderRoster } from "@/data/regionalGrinders";
 import { computeMmrDelta, computeOverallRating } from "@/data/matchSim";
 import { OrgTag } from "@/ui/components/OrgTag";
+import { LftTag } from "@/ui/components/LftTag";
 import { ARENA_MAPS, mapImagePath } from "@/data/maps";
 import { livePingMs } from "@/data/pingModel";
 import { displayNameFor, applyAltNameDisplay } from "@/data/altNames";
@@ -162,6 +163,7 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
   const advanceMinutes = useSaveStore((s) => s.advanceMinutes);
   const currentDate = useSaveStore((s) => s.currentDate);
   const playerPfp = useSaveStore((s) => s.playerPfp);
+  const playerPostingLft = useSaveStore((s) => s.postingLft);
   const clockHour = useSaveStore((s) => s.clockHour);
   const seasonStartDate = useSaveStore((s) => s.seasonStartDate);
   const inPlacements = useSaveStore((s) => (queue ? s.rankedProfiles[queue].placementMatchesRemaining > 0 : false));
@@ -379,6 +381,7 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
                   <span>
                     {p.partyId && <PartyIcon />}
                     {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} <OrgTag tag={p.orgTag} />
+                    <LftTag active={p.isSelf ? playerPostingLft : p.isLft} />
                     {p.isSelf ? p.name : displayNameFor(p.name, currentDate, clockHour)}
                   </span>
                   {p.title && (
@@ -422,6 +425,7 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
                   <span>
                     {p.partyId && <PartyIcon />}
                     {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} <OrgTag tag={p.orgTag} />
+                    <LftTag active={p.isSelf ? playerPostingLft : p.isLft} />
                     {p.isSelf ? p.name : displayNameFor(p.name, currentDate, clockHour)}
                   </span>
                   {p.title && (
