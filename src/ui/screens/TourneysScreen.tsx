@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSaveStore } from "@/store/useSaveStore";
-import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, projectedSeasonSchedule, effectiveRlcsSeason, type TournamentInstance, type RlcsDiscipline } from "@/store/useTournamentStore";
+import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, projectedSeasonSchedule, effectiveRlcsSeason, type TournamentInstance, type RlcsDiscipline, type MajorReadiness, type EarlyEraWorldsReadiness } from "@/store/useTournamentStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
 import { TournamentBracket } from "./TournamentBracket";
 import {
@@ -22,7 +22,7 @@ import {
 } from "@/data/tournaments";
 import type { TitleEntry } from "@/data/seasons";
 import { eraForDate } from "@/data/rankSystem";
-import { daysBetween, formatSimDate } from "@/data/dateUtils";
+import { daysBetween, formatSimDate, type SimDate } from "@/data/dateUtils";
 import { flattenProgress } from "@/data/matchSim";
 import { orgTagForOrgName, type TournamentKind } from "@/data/tournaments";
 
@@ -33,6 +33,34 @@ function isRegistrationOpen(instance: TournamentInstance | undefined): boolean {
   if (instance.playerTeamId) return false;
   if (instance.stageIndex > 0 || instance.completed) return false;
   return true;
+}
+
+/** Plain-text status for a scheduled-but-maybe-not-yet-created regional/Rival Series instance, for the
+ *  Season Overview — same wording as each region's own tile, minus the player-specific "You're in!"
+ *  branch, since the overview is read-only for regions the player has no stake in. */
+function regionalOverviewStatus(instance: TournamentInstance | undefined, startDate: SimDate, currentDate: SimDate): string {
+  if (!instance) {
+    const daysUntil = daysBetween(currentDate, startDate);
+    return daysUntil > 0 ? `Starts in ${daysUntil}d` : "Starting...";
+  }
+  if (instance.completed) return `Champion: ${instance.championName}`;
+  return `${instance.stages[instance.stageIndex].label} · ${instance.currentTeams.length} left`;
+}
+
+/** Same idea as `regionalOverviewStatus` but for a Major/Worlds group, which isn't calendar-scheduled —
+ *  it only has a real `startDate` once its prerequisites are actually done (see `MajorReadiness`/
+ *  `EarlyEraWorldsReadiness`), otherwise it shows what it's still waiting on. */
+function majorOverviewStatus(instance: TournamentInstance | undefined, readiness: MajorReadiness | EarlyEraWorldsReadiness, currentDate: SimDate): string {
+  if (instance) {
+    if (instance.completed) return `Champion: ${instance.championName}`;
+    return `${instance.stages[instance.stageIndex].label} · ${instance.currentTeams.length} left`;
+  }
+  if (readiness.kind === "scheduled") {
+    const daysAway = daysBetween(currentDate, readiness.scheduledStart);
+    return daysAway > 0 ? `Starts in ${daysAway}d` : "Starting soon";
+  }
+  if (readiness.kind === "awaiting_3v3_major") return "Awaiting the 3v3 Major to conclude";
+  return `Awaiting: ${readiness.missingRegions.map((r) => REGION_LABELS[r]).join(", ")}`;
 }
 
 /** The bracket tree to show for this instance's currently-relevant stage, if it has one at all (swiss/
@@ -174,7 +202,17 @@ export function TourneysScreen() {
   // champion instead, see getEarlyEraWorldsReadiness's doc comment.
   const earlyEraWorldsReadiness = rlcsStructureEraNow === "early" ? getEarlyEraWorldsReadiness(instances, discipline, currentDate) : null;
 
+  // The Season Overview always shows the 3v3 storyline specifically, regardless of which discipline tab
+  // is currently selected — 3v3 is the main draw a lower-rank/uninvolved player would actually want a
+  // read on, and computing it separately from the mode-dependent vars above means switching to the 1v1
+  // tab doesn't change what the overview shows underneath it.
+  const overviewMajorIds = MAJOR_GROUPS.map((g) => latestInstanceId((inst) => inst.kind === "rlcs_major" && inst.id.startsWith(`major_3v3_${g.id}_`)));
+  const overviewWorldsId = latestInstanceId((inst) => inst.kind === "rlcs_worlds" && inst.id.startsWith("worlds_3v3_"));
+  const overviewMajorReadiness = MAJOR_GROUPS.map((g) => getMajorReadiness(instances, "3v3", g, currentDate));
+  const overviewEarlyEraWorldsReadiness = rlcsStructureEraNow === "early" ? getEarlyEraWorldsReadiness(instances, "3v3", currentDate) : null;
+
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [overviewOpen, setOverviewOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = selectedId ? instances[selectedId] : null;
   const [resultMessage, setResultMessage] = useState<string | null>(null);
@@ -280,6 +318,54 @@ export function TourneysScreen() {
                 </span>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      <div className="schedule-panel">
+        <button className="schedule-panel-toggle" onClick={() => setOverviewOpen((o) => !o)}>
+          <span>Season {rlcsSeasonNumber} Overview</span>
+          <span>{overviewOpen ? "▲" : "▼"}</span>
+        </button>
+        {overviewOpen && (
+          <div className="schedule-panel-body">
+            <div className="schedule-panel-note">
+              What's happening across every region's 3v3 RLCS right now — worth a look even if you're not
+              personally competing (or eligible) this season.
+            </div>
+            {schedule
+              .filter((sc) => sc.kind === "rlcs_regional")
+              .map((sc) => (
+                <div key={sc.id} className="schedule-panel-row">
+                  <span className="schedule-panel-date">{REGION_LABELS[sc.region!]}</span>
+                  <span>{regionalOverviewStatus(instances[sc.id], sc.startDate, currentDate)}</span>
+                </div>
+              ))}
+            {rlcsStructureEraNow === "early"
+              ? (
+                <div className="schedule-panel-row">
+                  <span className="schedule-panel-date">World Championship</span>
+                  <span>{majorOverviewStatus(overviewWorldsId ? instances[overviewWorldsId] : undefined, overviewEarlyEraWorldsReadiness!, currentDate)}</span>
+                </div>
+              )
+              : (
+                <>
+                  {MAJOR_GROUPS.map((g, i) => (
+                    <div key={g.id} className="schedule-panel-row">
+                      <span className="schedule-panel-date">{g.location} Major</span>
+                      <span>{majorOverviewStatus(overviewMajorIds[i] ? instances[overviewMajorIds[i]!] : undefined, overviewMajorReadiness[i], currentDate)}</span>
+                    </div>
+                  ))}
+                  <div className="schedule-panel-row">
+                    <span className="schedule-panel-date">World Championship</span>
+                    <span>
+                      {overviewWorldsId && instances[overviewWorldsId]
+                        ? majorOverviewStatus(instances[overviewWorldsId], overviewMajorReadiness[0], currentDate)
+                        : "Awaiting both Major champions"}
+                    </span>
+                  </div>
+                </>
+              )}
           </div>
         )}
       </div>
