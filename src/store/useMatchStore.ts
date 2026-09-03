@@ -6,7 +6,7 @@ import type { TitleEntry } from "@/data/seasons";
 import type { SimDate } from "@/data/dateUtils";
 import { LB_NAMES } from "@/data/mockSave";
 import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
-import { rlcsSeasonForDate, orgTagForOrgName, saveRegionToProRegion, generateTeamsForRegion } from "@/data/tournaments";
+import { rlcsSeasonForDate, orgTagForOrgName, saveRegionToProRegion, realTeamsForRegion } from "@/data/tournaments";
 import { randomMapForDate, mapsForSeries } from "@/data/maps";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
@@ -92,7 +92,7 @@ export interface PartyFriendStats {
 export const GAME_DURATION_SECONDS = 300; // 5:00, a standard RL regulation match
 const TICK_MS = 1000; // real ms per tick
 const GAME_SECONDS_PER_TICK = 6; // compress 5:00 of game time into ~50 real seconds
-const POSSESSION_CHANCE_PER_TICK = 0.3;
+const POSSESSION_CHANCE_PER_TICK = 0.34;
 
 // A team down by enough goals with too little regulation time left to realistically come back votes to
 // forfeit rather than play it out, same as real RL lobbies. Never triggers in overtime (one goal always
@@ -298,7 +298,7 @@ function realOrgTagForPlayer(
 ): string | undefined {
   if (!region) return undefined;
   const { seasonNumber } = rlcsSeasonForDate(currentDate);
-  const teams = generateTeamsForRegion(region, currentYear, seasonNumber, resetSeed, "orgtagcheck", era, currentDate, seasonStartDate);
+  const teams = realTeamsForRegion(region, currentYear, seasonNumber, resetSeed, "orgtagcheck", era, currentDate, seasonStartDate);
   const team = teams.find((t) => t.players.includes(name));
   return team ? orgTagForOrgName(team.name) : undefined;
 }
@@ -674,6 +674,12 @@ function clockLabel(secondsRemaining: number): string {
 }
 
 let logIdCounter = 0;
+// How many ticks in a row have gone by with no possession attempt — used to escalate the effective
+// per-tick chance the longer the drought runs, so the log reads as steadily paced instead of occasionally
+// skipping large, silent chunks of game clock (a flat per-tick coinflip is a geometric distribution, which
+// left unbounded produces exactly that "some sections dense, others empty" unevenness). Reset alongside
+// logIdCounter at the start of every game.
+let ticksSincePossession = 0;
 // One pending search per queue mode, so multi-queueing (searching 1v1 and 2v2 at once, say) can have
 // several running in parallel — whichever pops first cancels the rest.
 let queueTimers: Partial<Record<QueueMode, ReturnType<typeof setTimeout>>> = {};
@@ -898,7 +904,13 @@ function startTicking(
     let pressure = state.pressure;
     let needsKickoff = state.needsKickoff;
 
-    if (Math.random() < POSSESSION_CHANCE_PER_TICK) {
+    // A flat per-tick coinflip is a geometric distribution — left alone it produces exactly the uneven
+    // "some stretches dense, others suspiciously empty" pacing this was flagged for. Escalating the
+    // effective chance the longer a drought runs keeps the log evenly paced without removing all
+    // randomness (an unlucky short gap still happens, an unrealistically long silent one basically can't).
+    const effectivePossessionChance = Math.min(0.95, POSSESSION_CHANCE_PER_TICK + ticksSincePossession * 0.11);
+    if (Math.random() < effectivePossessionChance) {
+      ticksSincePossession = 0;
       let result: PossessionResult;
 
       if (state.queue === "1v1") {
@@ -926,7 +938,7 @@ function startTicking(
         // cleared for every following possession until the next goal/overtime start sets it again.
         const blueTeam = players.filter((p) => p.team === "blue");
         const orangeTeam = players.filter((p) => p.team === "orange");
-        const chainResult = simulateTeamChain(blueTeam, orangeTeam, pressure, needsKickoff);
+        const chainResult = simulateTeamChain(blueTeam, orangeTeam, pressure, needsKickoff, useSaveStore.getState().currentDate);
         result = chainResult;
         pressure = chainResult.pressure;
         needsKickoff = false;
@@ -958,6 +970,8 @@ function startTicking(
       if (result.outcome === "save" && result.actorName === selfName) {
         selfSaves += 1;
       }
+    } else {
+      ticksSincePossession++;
     }
 
     function finishGame(extra: Partial<MatchStoreState>) {
@@ -1094,6 +1108,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       queueTimers = {};
 
       logIdCounter = 0;
+      ticksSincePossession = 0;
       const log: MatchLogLine[] = [{ id: logIdCounter++, clockLabel: clockLabel(GAME_DURATION_SECONDS), text: "Kickoff." }];
       if (req.queue === "1v1") {
         const formResult = applyMatchDayForm(players);
@@ -1199,6 +1214,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     const perTeam = opponentNames.length;
     const queue = perTeam === 1 ? "1v1" : perTeam === 2 ? "2v2" : "3v3";
     logIdCounter = 0;
+    ticksSincePossession = 0;
     // A real pro/regional grinder tournament teammate or opponent uses their actual persistent Game Sense/
     // Mechanical Consistency (same resolution buildOpponent uses for ranked matchmaking) instead of a fresh
     // one-off jittered roll every series — same person, same stats, everywhere they show up.
@@ -1334,6 +1350,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     }
 
     logIdCounter = 0;
+    ticksSincePossession = 0;
     clearAllTimers();
     set({
       phase: "in_match",

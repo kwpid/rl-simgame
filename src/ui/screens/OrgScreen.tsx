@@ -11,7 +11,7 @@ import {
   rlcsSeasonForDate,
   ORG_NAMES,
   orgTagForOrgName,
-  generateTeamsForRegion,
+  realTeamsForRegion,
   generateGlobalTeams,
   applyPlayerOrgOverride,
   REGION_LABELS,
@@ -79,7 +79,7 @@ function pickScrimOpponents(
   seasonStartDate: SimDate,
   excludeOrgName: string
 ): { orgName: string | null; players: string[] } {
-  const teams = generateTeamsForRegion(proRegion, currentYear, seasonNumber, resetSeed, "orgscrim_opp", era, currentDate, seasonStartDate).filter(
+  const teams = realTeamsForRegion(proRegion, currentYear, seasonNumber, resetSeed, "orgscrim_opp", era, currentDate, seasonStartDate).filter(
     (t) => t.name !== excludeOrgName
   );
   if (teams.length > 0) {
@@ -123,10 +123,10 @@ export function OrgScreen() {
   // (not useMemo) because these read real MMR via the leaderboard stores' getMmr, which also warms
   // (writes) that entry's catch-up state — a side effect that must not run during another component's
   // render, same rule every screen reading these stores follows.
-  const [topRegionTeams, setTopRegionTeams] = useState<ReturnType<typeof generateTeamsForRegion>>([]);
+  const [topRegionTeams, setTopRegionTeams] = useState<ReturnType<typeof realTeamsForRegion>>([]);
   const [topWorldTeams, setTopWorldTeams] = useState<ReturnType<typeof generateGlobalTeams>>([]);
   useEffect(() => {
-    const regionTeams = generateTeamsForRegion(proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, `orgtop_region_${proRegion}`, era, s.currentDate, s.seasonStartDate);
+    const regionTeams = realTeamsForRegion(proRegion, currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, `orgtop_region_${proRegion}`, era, s.currentDate, s.seasonStartDate);
     const worldTeams = generateGlobalTeams(currentYear, rlcsSeasonNumber, s.rlcsTeamsResetSeed, "orgtop_world", era, s.currentDate, s.seasonStartDate);
     setTopRegionTeams(applyPlayerOrgOverride(regionTeams, s.orgContract, s.displayName).sort((a, b) => b.power - a.power));
     setTopWorldTeams(applyPlayerOrgOverride(worldTeams, s.orgContract, s.displayName).sort((a, b) => b.power - a.power));

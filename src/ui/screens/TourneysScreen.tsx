@@ -5,6 +5,7 @@ import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
 import { TournamentBracket } from "./TournamentBracket";
 import {
   REGION_LABELS,
+  regionalSlotLabel,
   MAJOR_GROUPS,
   buildSeasonSchedule,
   rlcsStructureEra,
@@ -337,7 +338,7 @@ export function TourneysScreen() {
               .filter((sc) => sc.kind === "rlcs_regional")
               .map((sc) => (
                 <div key={sc.id} className="schedule-panel-row">
-                  <span className="schedule-panel-date">{REGION_LABELS[sc.region!]}</span>
+                  <span className="schedule-panel-date">{regionalSlotLabel(sc.region!)}</span>
                   <span>{regionalOverviewStatus(instances[sc.id], sc.startDate, currentDate)}</span>
                 </div>
               ))}
@@ -426,7 +427,7 @@ export function TourneysScreen() {
               tabIndex={0}
               onClick={() => instance && setSelectedId(item.id)}
             >
-              <div className="tourney-tile-region">{REGION_LABELS[item.region!]}</div>
+              <div className="tourney-tile-region">{item.kind === "rlcs_regional" ? regionalSlotLabel(item.region!) : REGION_LABELS[item.region!]}</div>
               <div className="tourney-tile-status">
                 {instance?.playerTeamId
                   ? instance.playerFinalPlacement

@@ -32,7 +32,7 @@ import {
   BOOTCAMP_SCRIM_COUNT,
   ORG_TIER_LABELS,
 } from "@/data/orgs";
-import { ORG_NAMES, saveRegionToProRegion, rlcsSeasonPhase, rlcsSeasonForDate, generateTeamsForRegion } from "@/data/tournaments";
+import { ORG_NAMES, saveRegionToProRegion, rlcsSeasonPhase, rlcsSeasonForDate, realTeamsForRegion } from "@/data/tournaments";
 import { QUEUES } from "@/data/queues";
 import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { useTournamentStore } from "@/store/useTournamentStore";
@@ -140,7 +140,7 @@ function pickRealOrgTeam(
   // ranked-ladder season anchor, matching every other caller of that shared leaderboard — see
   // useTournamentStore.ts's createInstance doc comment for why mixing the two thrashes everyone's MMR.
   const { seasonNumber } = rlcsSeasonForDate(currentDate);
-  const teams = generateTeamsForRegion(proRegion, currentYear, seasonNumber, resetSeed, "orginvite", era, currentDate, rankedSeasonStartDate);
+  const teams = realTeamsForRegion(proRegion, currentYear, seasonNumber, resetSeed, "orginvite", era, currentDate, rankedSeasonStartDate);
   if (teams.length === 0) return null;
   const sorted = [...teams].sort((a, b) => b.power - a.power);
   const bucketSize = Math.max(1, Math.ceil(sorted.length / 3));

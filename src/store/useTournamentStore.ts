@@ -14,6 +14,7 @@ import {
   rlcsSeasonForDate,
   rlcsStructureEra,
   generateTeamsForRegion,
+  realTeamsForRegion,
   generateGlobalTeams,
   generateSoloEntrantsForRegion,
   generateRivalSeriesTeamsForRegion,
@@ -370,7 +371,7 @@ function createInstance(scheduled: ScheduledTournament, currentYear: number, sea
         ? generateSoloEntrantsForRegion(scheduled.region, currentYear, scheduled.fieldSize, scheduled.id)
         : scheduled.kind === "rlrs_regional"
           ? generateRivalSeriesTeamsForRegion(scheduled.region, scheduled.fieldSize, scheduled.id)
-          : generateTeamsForRegion(scheduled.region, currentYear, seasonNumber, teamsResetSeed, scheduled.id, era, currentDate, aiSeasonStartDate);
+          : realTeamsForRegion(scheduled.region, currentYear, seasonNumber, teamsResetSeed, scheduled.id, era, currentDate, aiSeasonStartDate);
   const instance: TournamentInstance = {
     id: scheduled.id,
     kind: scheduled.kind,

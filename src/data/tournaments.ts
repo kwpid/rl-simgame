@@ -51,6 +51,27 @@ export const RLCS_1V1_INTRODUCED_SEASON = 2025;
 
 export const RLCS_REGIONS: ProRegion[] = ["NA", "EU", "SAM", "OCE", "MENA"];
 
+/** Some regions are deliberately grouped into ONE shared 3v3 regional qualifier instead of each running its
+ *  own full field — real RLCS has done exactly this for its own thinner regions (rather than the sim
+ *  manufacturing a bunch of extra AI just to give a thin region a standalone bracket). SSA never gets a
+ *  standalone 3v3 regional of its own (nor can the player ever start there — it's not a selectable save
+ *  region), it's folded into MENA's here. Every team still keeps its own real origin region (see
+ *  generateTeamsForRegion's `team.region`) and draws from its OWN region's org-name pool — this is a
+ *  genuinely dual-branded shared field, not MENA's identity swallowing SSA's. Keyed by the "primary" region
+ *  the schedule/instance itself is still filed under (unchanged everywhere else — `TournamentInstance.region`
+ *  stays a single ProRegion, no type changes needed anywhere that already reads it). */
+export const RLCS_REGION_GROUPS: Partial<Record<ProRegion, ProRegion[]>> = {
+  MENA: ["MENA", "SSA"],
+};
+
+/** Real, human-readable label for a 3v3 regional slot, folding in every region actually competing in it —
+ *  "MENA / SSA" for a grouped slot, just "MENA" (via REGION_LABELS) for an ungrouped one. */
+export function regionalSlotLabel(region: ProRegion): string {
+  const group = RLCS_REGION_GROUPS[region];
+  if (!group) return REGION_LABELS[region];
+  return group.map((r) => REGION_LABELS[r]).join(" / ");
+}
+
 export const REGION_LABELS: Record<ProRegion, string> = {
   NA: "North America",
   EU: "Europe",
@@ -223,6 +244,33 @@ export function generateTeamsForRegion(region: ProRegion, currentYear: number, s
     teams.push({ id: `${idPrefix}_${i}`, name: orgNames[i], region, power, players: roster.map((p) => p.name) });
   }
   return teams;
+}
+
+/** Builds a shared field for a GROUPED 3v3 regional (see RLCS_REGION_GROUPS): generates each member region's
+ *  own real teams independently via `generateTeamsForRegion` (so every team still draws from its own
+ *  region's real eligible players and its own org-name pool, keeping its true origin region) and combines
+ *  them into one field for a single bracket — a genuinely dual-branded qualifier, not one region absorbing
+ *  the other's identity. Deterministic the same way generateTeamsForRegion is, for the same reason. */
+export function generateTeamsForRegionGroup(regions: ProRegion[], currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string, era: RankEra, currentDate: SimDate, seasonStartDate: SimDate): TournamentTeam[] {
+  return regions.flatMap((region) => generateTeamsForRegion(region, currentYear, seasonNumber, resetSeed, `${idPrefix}_${region}`, era, currentDate, seasonStartDate));
+}
+
+/** The real, actually-competing field for a region — resolves grouping automatically (see
+ *  RLCS_REGION_GROUPS). Every caller that needs "this region's real RLCS teams" for anything other than
+ *  building the regional instance itself (org invites/scrims/tags, the org screen's top-teams view) should
+ *  go through this instead of calling `generateTeamsForRegion` directly, so they always agree with whatever
+ *  field the actual regional bracket is using — a MENA player's org invite/scrim opponents/tag lookups
+ *  need to see the same merged MENA+SSA field the regional itself resolves to, not a stale MENA-only one
+ *  that would silently disagree with it (the same class of bug the tournament-instance-vs-schedule mismatch
+ *  was, earlier in this project). */
+export function realTeamsForRegion(region: ProRegion, currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string, era: RankEra, currentDate: SimDate, seasonStartDate: SimDate): TournamentTeam[] {
+  // Resolves whichever group (if any) this region actually belongs to, whether it's the group's labeled
+  // "primary" region or one of its folded-in members — an SSA player still competes in the MENA-labeled
+  // merged field, so a lookup for "SSA" needs to resolve to that same merged field too, not a standalone
+  // SSA-only one that no longer reflects anything real.
+  const ownGroup = RLCS_REGION_GROUPS[region] ?? Object.values(RLCS_REGION_GROUPS).find((g) => g?.includes(region));
+  if (ownGroup) return generateTeamsForRegionGroup(ownGroup, currentYear, seasonNumber, resetSeed, idPrefix, era, currentDate, seasonStartDate);
+  return generateTeamsForRegion(region, currentYear, seasonNumber, resetSeed, idPrefix, era, currentDate, seasonStartDate);
 }
 
 /** Reconciles a generated team list with the player's own signed org, if any: `generateTeamsForRegion`/
@@ -567,7 +615,7 @@ export function buildSeasonSchedule(seasonNumber: number, seasonStartDate: SimDa
   const schedule: ScheduledTournament[] = RLCS_REGIONS.map((region, i) => ({
     id: `rlcs_s${seasonNumber}_${region}`,
     kind: "rlcs_regional" as const,
-    label: `RLCS Season ${seasonNumber} Regional — ${REGION_LABELS[region]}`,
+    label: `RLCS Season ${seasonNumber} Regional — ${regionalSlotLabel(region)}`,
     region,
     startDate: addDays(seasonStartDate, i * RLCS_REGION_STAGGER_DAYS),
     stages: RLCS_OPEN_STAGES,

@@ -9,6 +9,7 @@ import { pickAiTitle, type TitleEntry } from "./seasons";
 import { PRO_PLAYERS, isGenerationalTalent, experienceGrowth, hashString, type ProRegion } from "./proPlayers";
 import type { PlaystyleProfile } from "./mockSave";
 import { ORG_NAMES, orgTagForOrgName } from "./orgNames";
+import type { SimDate } from "./dateUtils";
 
 /** The human player's real per-mechanic/per-concept training and playstyle tendency, only ever present
  *  for `isSelf` — an AI opponent has no individual trained-mechanic breakdown, the 1v1 duel engine falls
@@ -496,7 +497,32 @@ function resolveFinish(
   const keeper = pickDefender(defendingTeam);
   const shotPower = attacker.foundationStats.offense + attacker.mechanicalConsistency * 0.15;
   const savePower = (keeper.foundationStats.defense + keeper.mechanicalConsistency * 0.15) * keeperPowerMultiplier;
-  lines.push({ text: `${keeper.name} scrambles back to defend the net.` });
+  // A composed, well-positioned recovery reads differently than a panicked scramble — a stronger keeper
+  // (relative to this finish's own difficulty) gets the calmer lines, "scrambles back" stops being the
+  // only recovery this engine ever describes.
+  // Softer than a near-even bar — a merely somewhat-outmatched keeper still reads as composed sometimes
+  // instead of every real mismatch defaulting to the panicked-language pool every single time.
+  const composed = savePower > shotPower * 0.75;
+  // A wider pool than just 3 lines each — this fires on basically every finish attempt in a match, a small
+  // pool repeats within a single short stretch often enough to read as templated.
+  const recoveryLines = composed
+    ? [
+        `${keeper.name} is already set and shape stays clean.`,
+        `${keeper.name} recovers with plenty of time to spare.`,
+        `${keeper.name} reads it early and gets goalside in good shape.`,
+        `${keeper.name} times the rotation perfectly and is waiting.`,
+        `${keeper.name} never loses shape and slots back in calmly.`,
+        `${keeper.name} anticipates it and is already back in position.`,
+      ]
+    : [
+        `${keeper.name} scrambles back to defend the net.`,
+        `${keeper.name} recovers late, still getting across in time.`,
+        `${keeper.name} hustles back to cover the net.`,
+        `${keeper.name} is caught out but just manages to get back.`,
+        `${keeper.name} rotates back in a hurry.`,
+        `${keeper.name} barely makes it back in time.`,
+      ];
+  lines.push({ text: recoveryLines[Math.floor(Math.random() * recoveryLines.length)] });
 
   if (Math.random() > statProbability(shotPower, savePower)) {
     lines.push({ text: `SAVE! ${keeper.name} gets enough on it to keep it out.` });
@@ -518,9 +544,46 @@ function attemptFinish(
   lines: PossessionLogLine[],
   pointsAwarded: { name: string; amount: number }[],
   kind: ChainKind,
-  keeperMultiplier: number
+  keeperMultiplier: number,
+  currentDate: SimDate
 ): PossessionResult {
   if (kind === "aerial") {
+    // A named mechanic only ever comes up here — never forced into every aerial look. It needs the
+    // situation to actually support it (this beat already earned an aerial chance), the move to actually
+    // exist yet (era-filtered), and the attacker to clear a shot-selection/confidence bar that scales with
+    // how mechanically dense the era is — 2021+ play leans on this far more than earlier years, and a
+    // player/AI whose own playstyle skews toward flair clears that bar more easily regardless of era.
+    const eraPool = AERIAL_ATTACK_MOVE_IDS.filter((id) => mechanicUnlockedByDate(id, currentDate));
+    const style = effectivePlaystyle(attacker);
+    if (eraPool.length > 0) {
+      const move = pickWeightedMove(eraPool, attacker);
+      const mastery = moveMasteryValue(move.id, attacker);
+      // Mastery/consistency values live on a wildly different absolute scale depending on era/rank (a
+      // gameSense-adjacent stat can be single digits early on or tens of thousands at elite level) — the
+      // gate has to be RELATIVE to the attacker's own general ceiling, never a flat number, or it either
+      // never fires early on or fires on basically every attempt once stats get large (the exact scale-
+      // mismatch bug pickChallengeType's fakeWeight had). relativeMastery near 1 means this specific move
+      // is basically as sharp as their overall consistency — a real signature they reach for often.
+      const relativeMastery = mastery / Math.max(1, attacker.mechanicalConsistency);
+      const mechanicalEra = Math.max(0, Math.min(1, (currentDate.year - 2019) / 3)); // ~0 pre-2019, 1 by 2022+
+      const flairRelief = (style.mechanicalFlair - 50) / 200;
+      const attemptBar = Math.max(0.12, 0.6 - mechanicalEra * 0.25 - flairRelief);
+      if (relativeMastery > attemptBar) {
+        lines.push({ text: `${attacker.name} sees the chance and goes for a ${move.label}.` });
+        const whiffFloor = relativeMastery > attemptBar * 1.8 ? 0.1 : 0.24;
+        const whiff = whiffChance(attacker, mastery, whiffFloor);
+        if (Math.random() < whiff) {
+          lines.push({ text: `${attacker.name} can't quite pull it off, mistimed and wasted.` });
+          return { lines, outcome: "whiff", pointsAwarded };
+        }
+        if (relativeMastery < attemptBar * 1.4) {
+          lines.push({ text: `The execution is a bit loose, still on frame but nowhere near clean.` });
+          return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.22, keeperMultiplier * 0.9);
+        }
+        lines.push({ text: `${attacker.name} gets a clean, dangerous look on goal.` });
+        return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.16, keeperMultiplier * 1.1);
+      }
+    }
     lines.push({ text: `${attacker.name} goes up for an aerial finish.` });
     const whiff = whiffChance(attacker, attacker.foundationStats.aerialControl, 0.32);
     if (Math.random() < whiff) {
@@ -699,7 +762,10 @@ const KICKOFF_STRAT_LABEL: Record<KickoffStrat, string> = {
  *  level, standard is mostly a fallback for someone who can't reliably pull the flip off yet. A botched
  *  speedflip is a real risk, not just flavor: it actually costs that side effective power for the
  *  challenge. */
-function simulateKickoffBeat(blueTeam: MatchParticipantStats[], orangeTeam: MatchParticipantStats[]): { lines: PossessionLogLine[]; winnerSide: "blue" | "orange"; winner: MatchParticipantStats } {
+function simulateKickoffBeat(
+  blueTeam: MatchParticipantStats[],
+  orangeTeam: MatchParticipantStats[]
+): { lines: PossessionLogLine[]; winnerSide: "blue" | "orange"; winner: MatchParticipantStats; scrappy: boolean } {
   const blueTaker = pickAttacker(blueTeam);
   const orangeTaker = pickAttacker(orangeTeam);
   const blueCheaters = blueTeam.filter((p) => p !== blueTaker);
@@ -742,43 +808,45 @@ function simulateKickoffBeat(blueTeam: MatchParticipantStats[], orangeTeam: Matc
   const blueEff = power(blueTaker, blueStrat);
   const orangeEff = power(orangeTaker, orangeStrat);
   const p = statProbability(blueEff, orangeEff, 500);
-
   const decisive = Math.abs(p - 0.5) > 0.2;
-  if (decisive) {
-    const winnerSide: "blue" | "orange" = Math.random() < p ? "blue" : "orange";
-    const winner = winnerSide === "blue" ? blueTaker : orangeTaker;
-    lines.push({ text: `${winner.name} gets there first and takes clean control off the kickoff.` });
-    return { lines, winnerSide, winner };
-  }
+  const firstTouchSide: "blue" | "orange" = Math.random() < p ? "blue" : "orange";
+  const firstTouchPlayer = firstTouchSide === "blue" ? blueTaker : orangeTaker;
+  const otherTaker = firstTouchSide === "blue" ? orangeTaker : blueTaker;
+  const otherTakerSide: "blue" | "orange" = firstTouchSide === "blue" ? "orange" : "blue";
+  lines.push({
+    text: decisive
+      ? `${firstTouchPlayer.name} gets there first and wins the initial 50 cleanly.`
+      : `${blueTaker.name} and ${orangeTaker.name} challenge it 50/50, the ball squirts loose.`,
+  });
 
-  lines.push({ text: `${blueTaker.name} and ${orangeTaker.name} challenge it 50/50, the ball squirts loose.` });
-  // Weighted toward whoever reads/reacts best — rotationDiscipline, effectivePlaystyle's bounded 5-95
-  // scale, never raw gameSense (see pickChallengeType's own doc comment on why that scale mismatch is a
-  // real bug elsewhere in this file). Both cheating teammates get first crack at the loose bounce at
-  // roughly the same odds as either original taker, on either side.
+  // Winning the initial 50 doesn't automatically mean keeping the ball — the ENTIRE point of a teammate
+  // cheating instead of committing to that challenge is that they're already reading the bounce, live for
+  // the second touch. A decisive first-touch winner is heavily favored to just keep it, but a cheater on
+  // EITHER side is still a real threat, not just a contested-50 side effect — weighted toward whoever
+  // reads/reacts best (rotationDiscipline, effectivePlaystyle's bounded 5-95 scale, never raw gameSense —
+  // see pickChallengeType's own doc comment on why that scale mismatch is a real bug elsewhere here).
   const candidates: { player: MatchParticipantStats; side: "blue" | "orange"; weight: number }[] = [
-    { player: blueTaker, side: "blue", weight: 1 },
-    { player: orangeTaker, side: "orange", weight: 1 },
-    ...blueCheaters.map((c) => ({ player: c, side: "blue" as const, weight: 0.9 + (effectivePlaystyle(c).rotationDiscipline - 50) / 100 })),
-    ...orangeCheaters.map((c) => ({ player: c, side: "orange" as const, weight: 0.9 + (effectivePlaystyle(c).rotationDiscipline - 50) / 100 })),
+    { player: firstTouchPlayer, side: firstTouchSide, weight: decisive ? 2.2 : 1.3 },
+    { player: otherTaker, side: otherTakerSide, weight: decisive ? 0.15 : 0.5 },
+    ...blueCheaters.map((c) => ({ player: c, side: "blue" as const, weight: 0.85 + (effectivePlaystyle(c).rotationDiscipline - 50) / 100 })),
+    ...orangeCheaters.map((c) => ({ player: c, side: "orange" as const, weight: 0.85 + (effectivePlaystyle(c).rotationDiscipline - 50) / 100 })),
   ];
-  const total = candidates.reduce((sum, c) => sum + c.weight, 0);
-  let roll = Math.random() * total;
-  let picked = candidates[candidates.length - 1];
-  for (const c of candidates) {
-    roll -= c.weight;
-    if (roll <= 0) {
-      picked = c;
-      break;
-    }
-  }
+  const picked = weightedPick(candidates);
   const isCheater = picked.player !== blueTaker && picked.player !== orangeTaker;
   lines.push({
-    text: isCheater
-      ? `${picked.player.name} reads the bounce off the cheat and comes away with it.`
-      : `${picked.player.name} reacts fastest and comes away with it.`,
+    text:
+      picked.player === firstTouchPlayer
+        ? `${picked.player.name} keeps control off the first touch.`
+        : isCheater
+          ? `${picked.player.name}'s cheat reads the bounce perfectly and comes away with it.`
+          : `${picked.player.name} recovers it after all.`,
   });
-  return { lines, winnerSide: picked.side, winner: picked.player };
+  // "Scrappy" — anything short of the clean-favorite winning the initial challenge AND keeping it
+  // themselves — is what should stop the very next beat from immediately reading as a polished, settled
+  // possession (see simulateTeamChain's use of this). A cheat winning the bounce, or any genuinely
+  // contested 50 in the first place, means the ball only JUST came under control, not a clean setup.
+  const scrappy = !decisive || picked.player !== firstTouchPlayer;
+  return { lines, winnerSide: picked.side, winner: picked.player, scrappy };
 }
 
 /** Resolves one full possession as a variable-length chain of beats for 2v2/3v3, carrying signed pressure
@@ -789,7 +857,8 @@ export function simulateTeamChain(
   blueTeam: MatchParticipantStats[],
   orangeTeam: MatchParticipantStats[],
   currentPressure: number,
-  isKickoff: boolean
+  isKickoff: boolean,
+  currentDate: SimDate
 ): TeamChainResult {
   const lines: PossessionLogLine[] = [];
   const pointsAwarded: { name: string; amount: number }[] = [];
@@ -799,11 +868,16 @@ export function simulateTeamChain(
 
   let attackingSide: "blue" | "orange";
   let kickoffWinner: MatchParticipantStats | null = null;
+  // A scrappy kickoff pickup (a cheat winning the bounce, or any genuinely contested 50) means the ball
+  // only JUST came under control — the very next beat shouldn't be allowed to immediately read as a
+  // polished, settled possession with a clean shot at goal, that undersells how scrappy the pickup was.
+  let scrappyKickoffFirstBeat = false;
   if (isKickoff) {
     const kickoff = simulateKickoffBeat(blueTeam, orangeTeam);
     lines.push(...kickoff.lines);
     attackingSide = kickoff.winnerSide;
     kickoffWinner = kickoff.winner;
+    scrappyKickoffFirstBeat = kickoff.scrappy;
   } else {
     // Pressure biases who's more likely to have/keep the ball this possession, but never removes the
     // coinflip entirely — a team under siege can still snatch it back, this just makes it less likely.
@@ -838,11 +912,17 @@ export function simulateTeamChain(
 
     // Attacker can demo the stepping-up challenger before the challenge even happens, leaving the net
     // effectively open (whoever's left covers alone, same worse-odds shape as a 2v2 last-man situation).
-    const attackerDemo = attemptDemo(attacker, roles.challenger, "lines up and demos");
+    // Only rolled on the very first beat of a possession — checking it fresh every beat compounded into a
+    // demo showing up in something like 40% of whole possessions, which is what made "demo into a goal"
+    // read as a template. Never right off a scrappy kickoff pickup either (see scrappyKickoffFirstBeat) —
+    // a ball that JUST barely came under control hasn't given anyone time to line up a demo yet.
+    const attackerDemo = beat === 0 && !(scrappyKickoffFirstBeat) ? attemptDemo(attacker, roles.challenger, "lines up and demos") : { demoed: false, lines: [] };
     if (attackerDemo.demoed) {
       lines.push(...attackerDemo.lines);
       pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 25);
-      return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), teammateAvailable ? 0.75 : 0.55));
+      // A demo opens things up, it shouldn't make the finish nearly automatic — still a real advantage
+      // (whoever's left covers alone), just not a guaranteed goal every time it happens.
+      return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), teammateAvailable ? 0.95 : 0.85, currentDate));
     }
 
     const challengeType = pickChallengeType(roles.challenger, teammateAvailable);
@@ -850,16 +930,32 @@ export function simulateTeamChain(
     if (challengeType === "stall") {
       // Pure flavor half the time — a covering teammate on either side using the lull to actually go
       // collect a pad reads as real background texture (this is what a stall's slower pace is FOR), never
-      // changes the odds below.
+      // changes the odds below. A wider pool than one fixed sentence each — this fires often enough in a
+      // defensive stretch that a single line repeats within a few beats of itself otherwise.
       const attackingCover = attackingTeam.find((p) => p !== attacker);
-      const padLine = attackingCover && Math.random() < 0.5
-        ? `${attackingCover.name} peels wide to collect pads while ${roles.challenger.name} shadows.`
-        : `${roles.challenger.name} holds off, backing toward goal and waiting for ${roles.cover[0]?.name ?? "support"} to rotate in.`;
-      lines.push({ text: padLine });
+      const padLines = attackingCover
+        ? [
+            `${attackingCover.name} peels wide to collect pads while ${roles.challenger.name} shadows.`,
+            `${attackingCover.name} rotates back for boost while ${roles.challenger.name} holds the shadow.`,
+            `${attackingCover.name} grabs the corner pad, staying patient.`,
+            `${attackingCover.name} tops off boost on the far side.`,
+          ]
+        : [];
+      const holdLines = [
+        `${roles.challenger.name} holds off, backing toward goal and waiting for ${roles.cover[0]?.name ?? "support"} to rotate in.`,
+        `${roles.challenger.name} stays goalside, in no hurry to commit.`,
+        `${roles.challenger.name} shadows patiently, content to wait this one out.`,
+      ];
+      const pool = attackingCover && Math.random() < 0.5 ? padLines : holdLines;
+      lines.push({ text: pool[Math.floor(Math.random() * pool.length)] });
       pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 14);
       // A stall buys the attacker a free look but doesn't hand them the ball outright — decide fast
       // whether they cash in now or the chain keeps going (another beat, possibly a different attacker).
-      if (Math.random() < 0.4) return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), 1));
+      // Never on the very first beat after a scrappy kickoff pickup — that ball only just came under
+      // control, it hasn't earned a clean look at goal yet.
+      if (!(beat === 0 && scrappyKickoffFirstBeat) && Math.random() < 0.4) {
+        return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), 1, currentDate));
+      }
       if (teammateAvailable && Math.random() < 0.5) attacker = pickAttacker(attackingTeam);
       continue;
     }
@@ -885,17 +981,66 @@ export function simulateTeamChain(
 
     if (challengeType === "shadow") {
       lines.push({ text: `${roles.challenger.name} shadows, backing toward net instead of committing.` });
+      // A good shadow is genuinely hard to beat cleanly — weighted a little toward the defender relative
+      // to the other challenge types, matching real high-level defense being the harder read to crack.
       const contest = statProbability(
         attacker.foundationStats.carControl + attacker.gameSense * 0.2,
-        roles.challenger.foundationStats.defense + roles.challenger.gameSense * 0.15
+        roles.challenger.foundationStats.defense + roles.challenger.gameSense * 0.2
       );
       if (Math.random() > contest) {
-        lines.push({ text: `${roles.challenger.name} stays patient and forces a bad touch, clearing it away.` });
-        award(roles.challenger.name, 25);
+        // A shadow win isn't always the same dead end — real defense forces different KINDS of bad
+        // situations, and a couple of them keep the ball live instead of ending the possession outright
+        // (exactly what late-game defensive stretches need to not read as identical clear-and-reset loops).
+        const outcomeRoll = Math.random();
+        const attackingCover = attackingTeam.find((p) => p !== attacker);
+        if (outcomeRoll < 0.35) {
+          lines.push({ text: `${roles.challenger.name} stays patient and forces a bad touch, clearing it away.` });
+          award(roles.challenger.name, 25);
+          return pack({ lines, outcome: "clear", pointsAwarded });
+        }
+        if (outcomeRoll < 0.55) {
+          lines.push({ text: `${roles.challenger.name} reads it and forces the play out to the corner.` });
+          award(roles.challenger.name, 25);
+          return pack({ lines, outcome: "clear", pointsAwarded });
+        }
+        if (outcomeRoll < 0.7) {
+          lines.push({ text: `${roles.challenger.name} cuts off the angle and forces a weak flick that sails harmlessly through.` });
+          award(roles.challenger.name, 20);
+          return pack({ lines, outcome: "clear", pointsAwarded });
+        }
+        if (outcomeRoll < 0.85 && attackingCover) {
+          lines.push({ text: `${roles.challenger.name} forces a rushed pass back to ${attackingCover.name}.` });
+          pressureForAttacker = Math.max(-PRESSURE_CAP, pressureForAttacker - 6);
+          attacker = attackingCover;
+          continue;
+        }
+        lines.push({ text: `${roles.challenger.name} forces a weak touch — the ball pops up into a scrappy 50.` });
+        const loose = weightedPick([
+          { player: attacker, forAttacker: true, weight: 0.8 },
+          { player: roles.challenger, forAttacker: false, weight: 1.2 },
+          ...attackingTeam.filter((p) => p !== attacker).map((p) => ({ player: p, forAttacker: true, weight: 0.5 + (effectivePlaystyle(p).rotationDiscipline - 50) / 150 })),
+          ...roles.cover.map((p) => ({ player: p, forAttacker: false, weight: 0.5 + (effectivePlaystyle(p).rotationDiscipline - 50) / 150 })),
+        ]);
+        if (loose.forAttacker) {
+          lines.push({ text: `${loose.player.name} wins the scrappy 50 and keeps it alive.` });
+          attacker = loose.player;
+          pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 10);
+          continue;
+        }
+        lines.push({ text: `${loose.player.name} wins the scrappy 50 and clears it away.` });
+        award(loose.player.name, 25);
         return pack({ lines, outcome: "clear", pointsAwarded });
       }
-      lines.push({ text: `${attacker.name} works around the shadow and keeps possession.` });
-      pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 12);
+      // Even surviving the shadow isn't a clean break most of the time — beating a proper shadow SHOULD
+      // cost the attacker something (a weaker touch, worse shape for what comes next), a fully clean break
+      // is the exception, not the coinflip it used to be.
+      if (Math.random() < 0.25) {
+        lines.push({ text: `${attacker.name} works around the shadow and keeps possession.` });
+        pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 12);
+      } else {
+        lines.push({ text: `${attacker.name} forces a touch through, but ${roles.challenger.name} stays right there in the play.` });
+        pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 4);
+      }
       const passed = maybePassToTeammate(attacker, attackingTeam, roles.challenger, 0.3);
       lines.push(...passed.lines);
       attacker = passed.attacker;
@@ -920,8 +1065,10 @@ export function simulateTeamChain(
     // A genuinely close 50 doesn't just get handed to one side outright — the ball pops up loose and
     // ANYONE nearby (either side's covering teammate included) gets a real crack at it, same shape as a
     // contested kickoff (see simulateKickoffBeat). A clean, lopsided result skips straight to the plain
-    // win/lose below, matching how decisive a real mismatch actually reads.
-    if (Math.abs(contest - 0.5) < 0.12) {
+    // win/lose below, matching how decisive a real mismatch actually reads. Widened band (vs a clean
+    // mismatch) — most challenges at this level are closer to a real 50 than a total blowout, a narrow
+    // band made "wins it and drives on" repeat far too often with no real contest to it.
+    if (Math.abs(contest - 0.5) < 0.22) {
       lines.push({ text: `Contested 50 — the ball pops up loose.` });
       const loose = weightedPick([
         { player: attacker, forAttacker: true, weight: 1 },
@@ -944,18 +1091,43 @@ export function simulateTeamChain(
       award(roles.challenger.name, 30);
       return pack({ lines, outcome: "clear", pointsAwarded });
     }
-    lines.push({ text: `${attacker.name} wins the challenge and drives on.` });
+    // Second-man intervention: winning the initial challenge doesn't mean the danger's over — a covering
+    // defender can still step in immediately, a real chance to end the possession right there instead of
+    // every won challenge automatically converting into "drives on".
+    if (roles.cover.length > 0 && Math.random() < 0.25) {
+      const second = roles.cover[Math.floor(Math.random() * roles.cover.length)];
+      lines.push({ text: `${second.name} steps in immediately as second man.` });
+      const secondContest = statProbability(
+        attacker.foundationStats.carControl + attacker.gameSense * 0.1,
+        second.foundationStats.defense + second.gameSense * 0.15
+      );
+      if (Math.random() > secondContest) {
+        lines.push({ text: `${second.name} recovers it and clears the danger.` });
+        award(second.name, 25);
+        return pack({ lines, outcome: "clear", pointsAwarded });
+      }
+      lines.push({ text: `${attacker.name} shakes off the second-man pressure and keeps driving.` });
+    }
+    const driveLines = [
+      `${attacker.name} wins the challenge and drives on.`,
+      `${attacker.name} forces a weak touch through and keeps the ball alive.`,
+      `${attacker.name} edges the 50 and keeps possession.`,
+    ];
+    lines.push({ text: driveLines[Math.floor(Math.random() * driveLines.length)] });
     pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 22);
     const passed = maybePassToTeammate(attacker, attackingTeam, roles.challenger, 0.35);
     lines.push(...passed.lines);
     attacker = passed.attacker;
     // A won hard challenge is the most decisive beat — good odds this converts straight into a shot.
-    if (Math.random() < 0.3 + beat * 0.15) return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), teammateAvailable ? 1.05 : 1));
+    // Never on the very first beat after a scrappy kickoff pickup, same reasoning as the stall branch.
+    if (!(beat === 0 && scrappyKickoffFirstBeat) && Math.random() < 0.3 + beat * 0.15) {
+      return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), teammateAvailable ? 1.05 : 1, currentDate));
+    }
   }
 
   // Ran out of advance beats without a clean look or a turnover — the attacker cashes in whatever they've
   // built up rather than looping forever, a supported keeper (still contested, no demo/breakaway bonus).
-  return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), 1));
+  return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), 1, currentDate));
 }
 
 // ============================================================================================
@@ -969,6 +1141,15 @@ export function simulateTeamChain(
 // ============================================================================================
 
 const MECHANIC_BY_ID = new Map(MECHANICS.map((m) => [m.id, m]));
+
+/** Whether a mechanic had actually been discovered/was realistic to attempt by this point in the
+ *  timeline — every mechanic carries a real `eraStart` (see mechanics.ts), a save/match set in an earlier
+ *  year should never show a move nobody had figured out yet. */
+function mechanicUnlockedByDate(id: string, currentDate: SimDate): boolean {
+  const mech = MECHANIC_BY_ID.get(id);
+  if (!mech) return false;
+  return currentDate.year > mech.eraStart.year || (currentDate.year === mech.eraStart.year && currentDate.month >= mech.eraStart.month);
+}
 
 // A curated subset of the ~80 mechanics that make sense as a named "signature setup move" in a duel,
 // split by whether it's realistic to attempt on low boost. The full mechanic list (movement/kickoff/passing

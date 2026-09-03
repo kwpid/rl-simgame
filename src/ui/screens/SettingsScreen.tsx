@@ -16,6 +16,7 @@ import { useTournamentStore } from "@/store/useTournamentStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 import { rlcsSeasonForDate } from "@/data/tournaments";
 import { seasonTitleFor } from "@/data/seasons";
+import { activeProPlayers, type ProRegion } from "@/data/proPlayers";
 
 const DEV_MODE_KEY = "rl-sim:dev-mode";
 const REWARD_TIER_OPTIONS: RankTierId[] = [
@@ -48,6 +49,21 @@ export function SettingsScreen() {
   }
 
   async function handleExport() {
+    const state = useSaveStore.getState();
+    const era = eraForDate(state.currentDate);
+    const currentYear = state.currentDate.year;
+    // Org team composition (data/tournaments.ts's generateTeamsForRegion, via eligibleRealPlayersForRegion)
+    // is only as stable as the pro/regional-roster MMR cache it sorts by — an entry that was never actually
+    // looked up during casual play simply isn't in the exported blob yet, so the OTHER device would freshly
+    // reseed/simulate it with fresh randomness the moment it's needed, silently reshuffling who lands on
+    // which team and breaking "am I still on my signed org's roster" (applyPlayerOrgOverride) and "is this
+    // AI still one of my teammates" (realOrgTagForPlayer) after the move. Force every real pro and every
+    // regional grinder's 2v2 entry (the queue org eligibility always checks) to be concretely cached before
+    // snapshotting, so nothing gets freshly rerolled on the receiving device.
+    const ALL_PRO_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
+    useProLeaderboardStore.getState().ensureSeeded(activeProPlayers(currentYear).map((p) => p.name), "2v2", era, currentYear, state.currentDate, state.seasonStartDate);
+    ALL_PRO_REGIONS.forEach((region) => useRegionalRosterStore.getState().ensureSeeded(region, "2v2", era, currentYear, state.currentDate, state.seasonStartDate));
+
     const data = extractSaveData(useSaveStore.getState());
     // Bundles in the RLCS history/regional-roster/title-choice/leaderboard state that lives in its own
     // localStorage blobs rather than on `data` itself — without this, a save moved to another device would
