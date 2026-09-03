@@ -45,11 +45,27 @@ export interface StageResult {
   standings: StandingEntry[]; // every team that entered the stage, with wins/losses/placement
 }
 
-/** Win probability for team A in a single game, logistic on the power gap, same shape as the live match
- *  sim's statProbability, tuned so even a big gap stays somewhat competitive over a single game. */
-function gameWinProbability(powerA: number, powerB: number, spread = 260): number {
-  const diff = powerA - powerB;
-  return 1 / (1 + Math.pow(10, -diff / spread));
+// A RELATIVE spread, not an absolute point count — team `power` (see tournaments.ts's rlcsPowerFromStats)
+// is built from the same uncapped Game Sense/Mechanical Consistency/MMR-derived numbers every AI stat in
+// this sim uses, which keep growing over a long save (a veteran pro's stats are on a totally different
+// absolute scale than a fresh rookie's, even though both are "real pro caliber"). A FIXED absolute spread
+// (this used to be a flat `260`) drifts out of calibration as that scale grows: the exact same genuinely
+// decisive skill gap reads as a coin-flip once both teams' raw power numbers are big enough, which is
+// exactly why a legitimately dominant, #1-power-rated org could still fail to reliably win real brackets
+// (and, in turn, never actually earn the recent championship-tier titles their roster deserves) — the gap
+// was real, it just stopped being big enough RELATIVE to a spread constant that no longer matched the
+// numbers' own scale. Using the gap as a FRACTION of the two teams' average power instead keeps the model
+// correctly calibrated at any scale: the same relative skill edge is always worth the same thing.
+const RELATIVE_POWER_SPREAD = 0.1;
+
+/** Win probability for team A in a single game, logistic on the RELATIVE power gap (see
+ *  RELATIVE_POWER_SPREAD above), same shape as the live match sim's statProbability, tuned so even a
+ *  genuinely dominant team stays a LITTLE competitive over a single game (nobody's a 100% lock), while a
+ *  real skill edge actually shows up as a real edge in outcomes rather than washing out to a coin flip. */
+function gameWinProbability(powerA: number, powerB: number): number {
+  const avgPower = Math.max(1, (powerA + powerB) / 2);
+  const relativeDiff = (powerA - powerB) / avgPower;
+  return 1 / (1 + Math.pow(10, -relativeDiff / RELATIVE_POWER_SPREAD));
 }
 
 /** Simulates one best-of-N series between two teams, returns the winner/loser and the game score. */

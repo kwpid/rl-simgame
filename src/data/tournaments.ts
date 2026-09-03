@@ -676,14 +676,17 @@ export function pickFictionalPastRlcsTitle(pro: { name: string; debutYear: numbe
   const pastYear = pro.debutYear + (hashString(pro.name + "#history_year") % pastYearsAvailable);
   const roll = hashString(pro.name + "#history_roll") % 1000 / 1000;
 
-  // Caps how big a result this pro could plausibly have had AT THAT POINT in their career — the exact
-  // same experience/talent signal `seedProMmr` uses to seed their actual MMR (just without that function's
-  // own randomized jitter), so a title can never claim a result their career stage couldn't support (a
-  // debut-year rookie with no generational-talent flag simply can't roll a Worlds Championship result here,
-  // no matter what the tier roll below says) — this is what makes a shown title track the same skill a
-  // pro's MMR reflects, instead of an unrelated per-name coin flip that could hand a nobody a legendary run.
-  const yearsExperienceThen = Math.max(0, pastYear - pro.debutYear);
-  const skillScore = experienceGrowth(yearsExperienceThen, 20, 6000) + (isTalent ? 100 : 0);
+  // Caps how big a result this pro could plausibly have EVER had, gated by their FULL career experience by
+  // NOW (`pastYearsAvailable`) — the exact same experience/talent signal `seedProMmr` uses to seed their
+  // actual current MMR (just without that function's own randomized jitter). Deliberately NOT gated by
+  // however much experience they'd banked at the specific past year that got rolled for WHEN this result
+  // happened: `pastYear` is uniformly random across their whole career, so a long-tenured, currently-elite
+  // pro could otherwise have this land on an early, low-experience year and get stuck rolling as if they
+  // were still a rookie — capping their whole fictional history at a mediocre regional result despite
+  // clearly being elite by now. A title can still never claim a result their OVERALL career stage couldn't
+  // support (a fresh non-generational-talent rookie can't roll a Worlds Championship here), it just judges
+  // that by who they are today, not by a random cosmetic "which year" pick.
+  const skillScore = experienceGrowth(pastYearsAvailable, 20, 6000) + (isTalent ? 100 : 0);
 
   if (skillScore >= 140 && roll < 0.05 + talentBonus * 0.1) return worldsTitlesEarned(pastYear, 1);
   if (skillScore >= 100 && roll < 0.15 + talentBonus * 0.15) return worldsTitlesEarned(pastYear, 4);
