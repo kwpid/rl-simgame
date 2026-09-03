@@ -119,6 +119,14 @@ function migrateSaveData(raw: any): SaveData {
     if (friend.peakMmr !== undefined) continue;
     friend.peakMmr = { ...(friend.mmr ?? {}) };
   }
+  // Chemistry ("queue buddy" closeness, see FriendRecord's doc comment) didn't exist before — an
+  // already-established friend isn't a total stranger, seed a bit above the fresh-friend baseline rather
+  // than making every pre-existing friend read as brand new.
+  for (const friend of Object.values(data.friends) as Record<string, any>[]) {
+    if (friend.chemistry === undefined) friend.chemistry = 50;
+  }
+  if (data.pendingPartyInvite === undefined) data.pendingPartyInvite = null;
+  if (data.lastPartyInviteCheckDate === undefined) data.lastPartyInviteCheckDate = data.currentDate;
   if (data.pendingShowmatchInvite === undefined) data.pendingShowmatchInvite = null;
   if (data.showmatchHistory === undefined) data.showmatchHistory = [];
   if (data.lastShowmatchInviteCheckDate === undefined) data.lastShowmatchInviteCheckDate = data.currentDate;
@@ -365,6 +373,8 @@ function createFreshSaveData(config: NewSaveConfig): SaveData {
     pendingShowmatchInvite: null,
     showmatchHistory: [],
     lastShowmatchInviteCheckDate: startDate,
+    pendingPartyInvite: null,
+    lastPartyInviteCheckDate: startDate,
     recentlyPlayedWith: [],
     partyMembers: [],
   };

@@ -6,6 +6,7 @@ import {
   type SaveData,
   type FriendRecord,
   type ShowmatchInvite,
+  type PartyInvite,
   type ShowmatchResultEntry,
   type OrgInvite,
   type OrgTryout,
@@ -107,6 +108,21 @@ const FRIEND_MOMENTS_LIMIT = 6;
 const SHOWMATCH_INVITE_CHECK_INTERVAL_DAYS = 3;
 const SHOWMATCH_INVITE_EXPIRY_DAYS = 5;
 const SHOWMATCH_HISTORY_LIMIT = 20;
+
+// A brand-new friend isn't a stranger (you presumably got along well enough to add them), but hasn't
+// built real queue-buddy chemistry yet either — that only comes from actually partying up and playing
+// together, see recordFriendMatch's "with" branch below.
+const FRESH_FRIEND_CHEMISTRY = 40;
+const CHEMISTRY_GAIN_WIN = 3;
+const CHEMISTRY_GAIN_LOSS = 1.5;
+const MAX_CHEMISTRY = 100;
+
+const AI_INITIATED_FRIEND_CHANCE = 0.08;
+const PARTY_INVITE_CHECK_INTERVAL_DAYS = 4;
+const PARTY_INVITE_EXPIRY_DAYS = 3;
+// Higher-chemistry friends are the ones who'd actually reach out to queue again — this floor keeps a
+// brand-new, barely-known friend from inviting you to party the very next day.
+const PARTY_INVITE_MIN_CHEMISTRY = 55;
 
 // Org/pro-scene track: a fresh scouting check only rolls every few days (real orgs aren't watching every
 // single ranked match you play), an unanswered invite goes stale after a while same as a showmatch one,
@@ -272,6 +288,20 @@ interface SaveStoreState extends SaveData {
   invitePartyMember: (name: string) => void;
   removePartyMember: (name: string) => void;
   clearParty: () => void;
+
+  /** Rolls whether an existing friend the player has real chemistry with reaches out to party up first —
+   *  date-gated (checks at most every few in-game days) and weighted toward higher-chemistry friends, an
+   *  unanswered invite just expires. No-op while already partied (nothing to invite into). Call from a
+   *  `useEffect`, never render-time. */
+  ensurePartyInvitations: (currentDate: SimDate) => void;
+  /** Accepts the pending party invite, adding them the same way inviting them yourself would. */
+  acceptPartyInvite: () => void;
+  /** Dismisses the current invite without partying up, no penalty. */
+  declinePartyInvite: () => void;
+  /** Real, live chance for a TEAMMATE who isn't already a friend to friend the player first, after a match
+   *  they won together — separate from the player's own manual addFriend, this is the AI-initiated
+   *  direction. No-op if `name` is already a friend. */
+  maybeAiInitiatedFriendRequest: (name: string, region: string, isPro: boolean, currentDate: SimDate) => void;
 
   /** Date-gated (checks at most every few in-game days): rolls whether a streamer whose 1v1 band fits
    *  the player's current level books a showmatch. Only one pending invite at a time, an unanswered one
@@ -747,6 +777,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
         "2v2": seedFor("2v2", state.rankedProfiles["2v2"].mmr),
         "3v3": seedFor("3v3", state.rankedProfiles["3v3"].mmr),
       },
+      chemistry: FRESH_FRIEND_CHEMISTRY,
     };
     set({ friends: { ...state.friends, [name]: record } });
   },
@@ -767,7 +798,15 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const next: FriendRecord =
       relation === "against"
         ? { ...friend, winsAgainst: friend.winsAgainst + (win ? 1 : 0), lossesAgainst: friend.lossesAgainst + (win ? 0 : 1), moments }
-        : { ...friend, winsWith: friend.winsWith + (win ? 1 : 0), lossesWith: friend.lossesWith + (win ? 0 : 1), moments };
+        : {
+            ...friend,
+            winsWith: friend.winsWith + (win ? 1 : 0),
+            lossesWith: friend.lossesWith + (win ? 0 : 1),
+            moments,
+            // Only playing WITH them (partied up) builds queue-buddy chemistry — facing them as an
+            // opponent doesn't, that's what "against" already tracks separately.
+            chemistry: Math.min(MAX_CHEMISTRY, friend.chemistry + (win ? CHEMISTRY_GAIN_WIN : CHEMISTRY_GAIN_LOSS)),
+          };
     set({ friends: { ...state.friends, [name]: next } });
   },
 
@@ -809,6 +848,65 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   },
 
   clearParty: () => set({ partyMembers: [] }),
+
+  ensurePartyInvitations: (currentDate) => {
+    const state = get();
+    if (state.pendingPartyInvite && daysBetween(state.pendingPartyInvite.expiresDate, currentDate) >= 0) {
+      set({ pendingPartyInvite: null });
+      return;
+    }
+    if (state.pendingPartyInvite) return; // already have one to answer
+    if (state.partyMembers.length > 0) return; // already partied, nothing to invite into
+    if (daysBetween(state.lastPartyInviteCheckDate, currentDate) < PARTY_INVITE_CHECK_INTERVAL_DAYS) return;
+
+    const candidates = Object.values(state.friends).filter((f) => f.chemistry >= PARTY_INVITE_MIN_CHEMISTRY);
+    if (candidates.length === 0) {
+      set({ lastPartyInviteCheckDate: currentDate });
+      return;
+    }
+    // Weighted toward higher chemistry — the friend you actually play with a lot is the one who'd reach
+    // out first, not a barely-known name who just cleared the floor.
+    const totalWeight = candidates.reduce((sum, f) => sum + f.chemistry, 0);
+    let roll = Math.random() * totalWeight;
+    let picked = candidates[candidates.length - 1];
+    for (const f of candidates) {
+      roll -= f.chemistry;
+      if (roll <= 0) {
+        picked = f;
+        break;
+      }
+    }
+    // Even clearing the chemistry floor doesn't mean an invite fires every single check — a real "hey,
+    // want to queue?" moment, not a guarantee.
+    if (Math.random() > 0.5) {
+      set({ lastPartyInviteCheckDate: currentDate });
+      return;
+    }
+    const invite: PartyInvite = {
+      name: picked.name,
+      queue: "2v2",
+      offeredDate: currentDate,
+      expiresDate: addDays(currentDate, PARTY_INVITE_EXPIRY_DAYS),
+    };
+    set({ pendingPartyInvite: invite, lastPartyInviteCheckDate: currentDate });
+  },
+
+  acceptPartyInvite: () => {
+    const state = get();
+    const invite = state.pendingPartyInvite;
+    if (!invite) return;
+    set({ pendingPartyInvite: null });
+    get().invitePartyMember(invite.name);
+  },
+
+  declinePartyInvite: () => set({ pendingPartyInvite: null }),
+
+  maybeAiInitiatedFriendRequest: (name, region, isPro, currentDate) => {
+    const state = get();
+    if (state.friends[name]) return;
+    if (Math.random() > AI_INITIATED_FRIEND_CHANCE) return;
+    get().addFriend(name, region, isPro, currentDate);
+  },
 
   ensureShowmatchInvitations: (currentDate, era, currentYear) => {
     const state = get();

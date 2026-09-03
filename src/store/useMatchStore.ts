@@ -7,6 +7,7 @@ import type { SimDate } from "@/data/dateUtils";
 import { LB_NAMES } from "@/data/mockSave";
 import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { rlcsSeasonForDate, orgTagForOrgName, saveRegionToProRegion, realTeamsForRegion } from "@/data/tournaments";
+import type { TournamentTeam } from "@/data/tournamentFormats";
 import { randomMapForDate, mapsForSeries } from "@/data/maps";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore, fillerLeaderboardNames } from "@/store/useLeaderboardFillerStore";
@@ -87,6 +88,9 @@ export interface PartyFriendStats {
   mmr: Record<QueueMode, number>;
   gameSense: Record<QueueMode, number>;
   mechanicalConsistency: Record<QueueMode, number>;
+  /** 0-100 "queue buddy" chemistry (see FriendRecord.chemistry) — fed into this match's teamChemistry the
+   *  same way an org roster's chemistry already is, an established duo plays a bit better together. */
+  chemistry?: number;
 }
 
 export const GAME_DURATION_SECONDS = 300; // 5:00, a standard RL regulation match
@@ -337,7 +341,11 @@ function buildOpponent(
   grinderRegion?: ProRegion,
   /** Which season's real RLCS team rosters to check this opponent against for a real org tag (see
    *  realOrgTagForPlayer) — the save's `rlcsTeamsResetSeed`, bumped by the dev "Reset Teams" tool. */
-  rlcsTeamsResetSeed = 0
+  rlcsTeamsResetSeed = 0,
+  /** An established "queue buddy" friend's chemistry (see FriendRecord.chemistry), independent of
+   *  `friendOverride` — a partied friend who ALSO happens to be a real pro/grinder/filler still has their
+   *  own FriendRecord chemistry even though their mmr/stats come from their leaderboard entry instead. */
+  partyChemistry?: number
 ): MatchPlayer {
   const effectiveMmr = friendOverride?.mmr ?? leaderboardMmr;
   const proQueueOverride = effectiveMmr !== undefined ? { mmr: effectiveMmr, queue } : undefined;
@@ -363,6 +371,10 @@ function buildOpponent(
     points: 0,
     region,
     orgTag: realOrgTagForPlayer(name, region, currentYear, era, currentDate, seasonStartDate, rlcsTeamsResetSeed),
+    // An established "queue buddy" friend (see FriendRecord.chemistry) feeds the same teamChemistry
+    // mechanic an org roster's chemistry already does — playing with someone you've built real rapport
+    // with genuinely plays a bit better than a stranger teammate, not just a Social screen flavor number.
+    teamChemistry: partyChemistry,
   };
 }
 
@@ -380,7 +392,7 @@ function generateRoster(
   /** A party member's own persisted stats (see useSaveStore.ts's FriendRecord) for whichever queue is
    *  being played right now, keyed by name — only ever consulted for a party member who isn't a real pro
    *  or filler-leaderboard regular (those already carry their own persistence). */
-  friendStatsForQueue: Record<string, { mmr: number; gameSense: number; mechanicalConsistency: number }> = {},
+  friendStatsForQueue: Record<string, { mmr: number; gameSense: number; mechanicalConsistency: number; chemistry?: number }> = {},
   /** GC+/SSL only: which regions the player selected to search, and the region-local hour to check each
    *  candidate's online/offline schedule against. Ignored (empty) below GC — pickName's own tier gate keeps
    *  those matches on the plain generic-filler path regardless. */
@@ -435,13 +447,58 @@ function generateRoster(
           ? useLeaderboardFillerStore.getState().getMmr(partyName, queue, era, currentYear, currentDate, seasonStartDate)
           : undefined;
     const friendOverride = !pro && !grinderRegion && !isFiller ? friendStatsForQueue[partyName] : undefined;
-    const friendPlayer = buildOpponent(partyName, selfTeam, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, leaderboardMmr, friendOverride, grinderRegion, rlcsTeamsResetSeed);
-    players.push({ ...friendPlayer, partyId: selfPartyId });
+    const partyChemistry = friendStatsForQueue[partyName]?.chemistry;
+    const friendPlayer = buildOpponent(partyName, selfTeam, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, leaderboardMmr, friendOverride, grinderRegion, rlcsTeamsResetSeed, partyChemistry);
+    players.push({ ...friendPlayer, partyId: selfPartyId, teamChemistry: partyChemistry });
+    // The player shares the same chemistry with their queue buddy — same shared-value shape an org
+    // roster's chemistry already has for everyone on the team.
+    players[0] = { ...players[0], teamChemistry: partyChemistry ?? players[0].teamChemistry };
     selfSlotsRemaining--;
   }
-  fillTeamSlots(selfTeam, selfSlotsRemaining, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier, rlcsTeamsResetSeed);
-  fillTeamSlots(oppTeam, perTeam, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier, rlcsTeamsResetSeed);
+  // Shared across both teams' fills so a region's real org roster is only fetched once per match, not once
+  // per candidate (see cachedRealTeamsForRegion).
+  const orgTeamsCache = new Map<ProRegion, TournamentTeam[]>();
+  fillTeamSlots(selfTeam, selfSlotsRemaining, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier, rlcsTeamsResetSeed, orgTeamsCache);
+  fillTeamSlots(oppTeam, perTeam, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier, rlcsTeamsResetSeed, orgTeamsCache);
   return applyPartyFlavor(players);
+}
+
+/** This season's real org roster for `region`, cached per-region so a `fillTeamSlots` call with many
+ *  candidates doesn't recompute the same team list over and over (see `realOrgTagForPlayer`, which does
+ *  the same underlying lookup but uncached since it's only ever called once per player there). */
+function cachedRealTeamsForRegion(
+  region: ProRegion,
+  cache: Map<ProRegion, TournamentTeam[]>,
+  currentYear: number,
+  era: RankEra,
+  currentDate: SimDate,
+  seasonStartDate: SimDate,
+  resetSeed: number
+): TournamentTeam[] {
+  const cached = cache.get(region);
+  if (cached) return cached;
+  const { seasonNumber } = rlcsSeasonForDate(currentDate);
+  const teams = realTeamsForRegion(region, currentYear, seasonNumber, resetSeed, "orgpartnercheck", era, currentDate, seasonStartDate);
+  cache.set(region, teams);
+  return teams;
+}
+
+/** `name`'s real org roster teammates this season (region-scoped, empty if unsigned or no region), fed into
+ *  `partyPartnerFor` so two teammates duo-queueing together (see ORG_TEAMMATE_PARTNER_CHANCE) is a real
+ *  elevated bias rather than a purely random regional peer. */
+function orgTeammatesFor(
+  name: string,
+  region: ProRegion,
+  cache: Map<ProRegion, TournamentTeam[]>,
+  currentYear: number,
+  era: RankEra,
+  currentDate: SimDate,
+  seasonStartDate: SimDate,
+  resetSeed: number
+): string[] {
+  const teams = cachedRealTeamsForRegion(region, cache, currentYear, era, currentDate, seasonStartDate, resetSeed);
+  const team = teams.find((t) => t.players.includes(name));
+  return team ? team.players.filter((p) => p !== name) : [];
 }
 
 /** Fills `slotCount` open roster spots on `team`, pushing onto `players` and reserving names in `used` as
@@ -465,7 +522,8 @@ function fillTeamSlots(
   regions: ProRegion[],
   hourOfDay: number,
   bandMultiplier: number,
-  rlcsTeamsResetSeed: number
+  rlcsTeamsResetSeed: number,
+  orgTeamsCache: Map<ProRegion, TournamentTeam[]>
 ) {
   let remaining = slotCount;
   while (remaining > 0) {
@@ -475,7 +533,8 @@ function fillTeamSlots(
 
     if (queue !== "2v2" || remaining <= 0 || !picked.region) continue;
     const peers = regionCompatiblePeers(picked.region, currentYear);
-    const partner = partyPartnerFor(picked.name, picked.region, peers);
+    const orgTeammates = orgTeammatesFor(picked.name, picked.region, orgTeamsCache, currentYear, era, currentDate, seasonStartDate, rlcsTeamsResetSeed);
+    const partner = partyPartnerFor(picked.name, picked.region, peers, orgTeammates);
     if (!partner || used.has(partner.name) || !isCurrentlyPartied(picked.name, picked.region, currentDate, hourOfDay)) continue;
     const partnerHour = (hourOfDay + REGION_HOUR_OFFSET[partner.region]) % 24;
     if (!isOnlineNow(partner.name, partner.region, currentDate, partnerHour, queue) || !isActivelyQueueing(partner.name, partner.region)) continue;
@@ -1093,10 +1152,10 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       searchStartedAt: Date.now(),
     });
     function friendStatsForQueue(req: QueueSearchRequest) {
-      const out: Record<string, { mmr: number; gameSense: number; mechanicalConsistency: number }> = {};
+      const out: Record<string, { mmr: number; gameSense: number; mechanicalConsistency: number; chemistry?: number }> = {};
       if (partyFriendStats) {
         for (const [name, record] of Object.entries(partyFriendStats)) {
-          out[name] = { mmr: record.mmr[req.queue], gameSense: record.gameSense[req.queue], mechanicalConsistency: record.mechanicalConsistency[req.queue] };
+          out[name] = { mmr: record.mmr[req.queue], gameSense: record.gameSense[req.queue], mechanicalConsistency: record.mechanicalConsistency[req.queue], chemistry: record.chemistry };
         }
       }
       return out;
@@ -1414,7 +1473,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       const partyFriendStats: Record<string, PartyFriendStats> = {};
       for (const name of save.partyMembers) {
         const friend = save.friends[name];
-        if (friend) partyFriendStats[name] = { mmr: friend.mmr, gameSense: friend.gameSense, mechanicalConsistency: friend.mechanicalConsistency };
+        if (friend) partyFriendStats[name] = { mmr: friend.mmr, gameSense: friend.gameSense, mechanicalConsistency: friend.mechanicalConsistency, chemistry: friend.chemistry };
       }
       get().startQueue(
         autoModes.map((q) => buildAutoQueueRequest(save, era, q)),

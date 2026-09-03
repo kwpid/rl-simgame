@@ -11,6 +11,9 @@ import type { SimDate } from "./dateUtils";
 const PARTY_TYPE_CHANCE = 0.45; // fraction of identities who ever duo queue at all, rest always solo-queue
 const PARTY_SESSION_BLOCK_HOURS = 6; // how long a party tends to stick together before possibly splitting
 const PARTY_SESSION_ACTIVE_CHANCE = 0.7; // of the identities capable of partying, how often they're actually partied up (vs. soloing) during a given session block
+// Real org teammates duo up to build chemistry together somewhat often, but not every session — elevated
+// odds over a purely random regional peer, not a guarantee.
+const ORG_TEAMMATE_PARTNER_CHANCE = 0.55;
 
 export interface RegionalPeer {
   name: string;
@@ -42,11 +45,19 @@ function isPartyType(name: string, region: ProRegion): boolean {
 
 /** `name`'s stable duo partner, if they have one at all — drawn once from the region-compatible peer pool
  *  and fixed from then on (a real relationship, not re-rolled every match). Null if this identity never
- *  duo-queues, or has nobody compatible to pair with. */
-export function partyPartnerFor(name: string, region: ProRegion, peers: RegionalPeer[]): RegionalPeer | null {
+ *  duo-queues, or has nobody compatible to pair with. `orgTeammateNames` (this season's real org roster,
+ *  see data/tournaments.ts's realTeamsForRegion), when given, gets a real elevated chance of being the
+ *  pick over a purely random regional peer — real teammates duo up to build chemistry somewhat often, not
+ *  every time. */
+export function partyPartnerFor(name: string, region: ProRegion, peers: RegionalPeer[], orgTeammateNames: string[] = []): RegionalPeer | null {
   if (!isPartyType(name, region)) return null;
   const others = peers.filter((p) => p.name !== name);
   if (others.length === 0) return null;
+  const eligibleTeammates = others.filter((p) => orgTeammateNames.includes(p.name));
+  if (eligibleTeammates.length > 0 && hashString(name + region + "#orgpartnerroll") % 100 < ORG_TEAMMATE_PARTNER_CHANCE * 100) {
+    const idx = hashString(name + region + "#orgpartnerpick") % eligibleTeammates.length;
+    return eligibleTeammates[idx];
+  }
   const idx = hashString(name + region + "#partner") % others.length;
   return others[idx];
 }

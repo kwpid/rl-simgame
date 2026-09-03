@@ -16,6 +16,7 @@ import { computeMmrDelta, computeOverallRating } from "@/data/matchSim";
 import { OrgTag } from "@/ui/components/OrgTag";
 import { ARENA_MAPS, mapImagePath } from "@/data/maps";
 import { livePingMs } from "@/data/pingModel";
+import { displayNameFor, applyAltNameDisplay } from "@/data/altNames";
 
 const ALL_MATCHMAKING_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
 
@@ -159,12 +160,14 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
   const recordMatchResult = useSaveStore((s) => s.recordMatchResult);
   const advanceMinutes = useSaveStore((s) => s.advanceMinutes);
   const currentDate = useSaveStore((s) => s.currentDate);
+  const clockHour = useSaveStore((s) => s.clockHour);
   const seasonStartDate = useSaveStore((s) => s.seasonStartDate);
   const inPlacements = useSaveStore((s) => (queue ? s.rankedProfiles[queue].placementMatchesRemaining > 0 : false));
   const friends = useSaveStore((s) => s.friends);
   const recordFriendMatch = useSaveStore((s) => s.recordFriendMatch);
   const applyFriendMatchStats = useSaveStore((s) => s.applyFriendMatchStats);
   const recordRecentlyPlayedWith = useSaveStore((s) => s.recordRecentlyPlayedWith);
+  const maybeAiInitiatedFriendRequest = useSaveStore((s) => s.maybeAiInitiatedFriendRequest);
 
   // Scrolls only the log's own container to its bottom, not the whole page — scrollIntoView would
   // otherwise drag the entire screen down every time a new line comes in, making the matchup stats below
@@ -178,6 +181,9 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
   const blueTeam = players.filter((p) => p.team === "blue");
   const orangeTeam = players.filter((p) => p.team === "orange");
   const selfRegion = players.find((p) => p.isSelf)?.region;
+  // Only AI names are ever eligible for the alt-name display swap (see data/altNames.ts) — the player's
+  // own name is never substituted.
+  const aiNames = players.filter((p) => !p.isSelf).map((p) => p.name);
   const clockLabel = overtime
     ? `OT ${Math.floor(otSeconds / 60)}:${(otSeconds % 60).toString().padStart(2, "0")}`
     : `${Math.floor(clockSeconds / 60)}:${(clockSeconds % 60).toString().padStart(2, "0")}`;
@@ -252,6 +258,15 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
         const relation = p.team === self.team ? "with" : "against";
         recordFriendMatch(p.name, relation, resultWin, note);
       });
+      // A teammate who isn't already a friend can friend the player first after a good game together —
+      // separate from the player's own manual add-friend flow, this is the AI reaching out.
+      if (resultWin && self) {
+        players.forEach((p) => {
+          if (p.isSelf || p.team !== self.team || friends[p.name]) return;
+          const pro = PRO_PLAYERS.find((pp) => pp.name === p.name);
+          maybeAiInitiatedFriendRequest(p.name, p.region ?? "NA", !!pro, currentDate);
+        });
+      }
       recordRecentlyPlayedWith(players.filter((p) => !p.isSelf).map((p) => p.name));
     }
     // Real queue wait (per the rank/population/time-of-day model) plus the match itself, 5:00 regulation
@@ -332,7 +347,7 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
                 <span>
                   {p.partyId && <PartyIcon />}
                   {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} <OrgTag tag={p.orgTag} />
-                  {p.name}
+                  {p.isSelf ? p.name : displayNameFor(p.name, currentDate, clockHour)}
                 </span>
                 {p.title && (
                   <span
@@ -365,7 +380,7 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
                 <span>
                   {p.partyId && <PartyIcon />}
                   {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} <OrgTag tag={p.orgTag} />
-                  {p.name}
+                  {p.isSelf ? p.name : displayNameFor(p.name, currentDate, clockHour)}
                 </span>
                 {p.title && (
                   <span
@@ -397,7 +412,7 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
         {log.map((line) => (
           <div key={line.id} className={"match-log-line" + (line.emphasis ? " match-log-emphasis" : "")}>
             <span className="match-log-time">{line.clockLabel}</span>
-            <span>{line.text}</span>
+            <span>{applyAltNameDisplay(line.text, aiNames, currentDate, clockHour)}</span>
           </div>
         ))}
       </div>

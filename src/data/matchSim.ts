@@ -715,7 +715,12 @@ function maybePassToTeammate(
   passChance: number
 ): { attacker: MatchParticipantStats; lines: PossessionLogLine[]; awkward: boolean } {
   const teammates = attackingTeam.filter((p) => p !== attacker);
-  if (teammates.length === 0 || Math.random() > passChance) return { attacker, lines: [], awkward: false };
+  if (teammates.length === 0) return { attacker, lines: [], awkward: false };
+  // A team that's actually built real chemistry together (an org roster, or a friend "queue buddy" — see
+  // FriendRecord.chemistry/OrgContract.chemistry, this is the same shared mechanic both feed) reads each
+  // other's positioning better, a genuinely higher pass success rate, not just flavor text.
+  const chemistryBoost = attacker.teamChemistry !== undefined ? (attacker.teamChemistry - 70) / 400 : 0;
+  if (Math.random() > passChance + chemistryBoost) return { attacker, lines: [], awkward: false };
   const receiver = teammates[Math.floor(Math.random() * teammates.length)];
   const lines: PossessionLogLine[] = [{ text: `${attacker.name} finds ${receiver.name} with a pass.` }];
   const demoOnReceive = attemptDemo(defender, receiver, "reads the pass and demos");
@@ -1057,7 +1062,10 @@ export function simulateTeamChain(
       return pack({ lines, outcome: "clear", pointsAwarded });
     }
     lines.push({ text: `${roles.challenger.name} steps up and challenges ${attacker.name} hard.` });
-    const defBoost = roles.cover.reduce((sum, c) => sum + c.foundationStats.defense * 0.05, 0);
+    // A synced-up defense (real chemistry, org or friend "queue buddy" alike) covers/rotates a bit
+    // cleaner behind the challenger — same shared mechanic maybePassToTeammate's boost feeds.
+    const chemistryDefBoost = roles.challenger.teamChemistry !== undefined ? Math.max(0, (roles.challenger.teamChemistry - 70) * 2) : 0;
+    const defBoost = roles.cover.reduce((sum, c) => sum + c.foundationStats.defense * 0.05, 0) + chemistryDefBoost;
     const contest = statProbability(
       attacker.foundationStats.carControl + attacker.gameSense * 0.15,
       roles.challenger.foundationStats.defense + roles.challenger.gameSense * 0.1 + defBoost

@@ -175,10 +175,10 @@ export function RankedScreen() {
 
   function handleSearch() {
     const queuesToSearch = [queue, ...Array.from(multiQueueExtras).filter((q) => q !== queue && partyTotal <= TEAM_SIZE[q])];
-    const partyFriendStats: Record<string, { mmr: Record<QueueMode, number>; gameSense: Record<QueueMode, number>; mechanicalConsistency: Record<QueueMode, number> }> = {};
+    const partyFriendStats: Record<string, { mmr: Record<QueueMode, number>; gameSense: Record<QueueMode, number>; mechanicalConsistency: Record<QueueMode, number>; chemistry?: number }> = {};
     for (const name of s.partyMembers) {
       const friend = s.friends[name];
-      if (friend) partyFriendStats[name] = { mmr: friend.mmr, gameSense: friend.gameSense, mechanicalConsistency: friend.mechanicalConsistency };
+      if (friend) partyFriendStats[name] = { mmr: friend.mmr, gameSense: friend.gameSense, mechanicalConsistency: friend.mechanicalConsistency, chemistry: friend.chemistry };
     }
     setAutoQueueModes(autoQueueChecked ? queuesToSearch : null);
     startQueue(queuesToSearch.map(buildQueueRequest), s.clockHour, era, s.seasonNumber, s.currentDate.year, s.currentDate, s.seasonStartDate, s.partyMembers, partyFriendStats, s.rlcsTeamsResetSeed);

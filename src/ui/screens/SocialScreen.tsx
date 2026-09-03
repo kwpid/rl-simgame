@@ -650,8 +650,19 @@ function FriendsTab() {
   const removeFriend = useSaveStore((st) => st.removeFriend);
   const invitePartyMember = useSaveStore((st) => st.invitePartyMember);
   const removePartyMember = useSaveStore((st) => st.removePartyMember);
+  const ensurePartyInvitations = useSaveStore((st) => st.ensurePartyInvitations);
+  const acceptPartyInvite = useSaveStore((st) => st.acceptPartyInvite);
+  const declinePartyInvite = useSaveStore((st) => st.declinePartyInvite);
   const [declineMessage, setDeclineMessage] = useState<string | null>(null);
   const [viewingStats, setViewingStats] = useState<FriendRecord | null>(null);
+
+  useEffect(() => {
+    ensurePartyInvitations(s.currentDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.currentDate.year, s.currentDate.month, s.currentDate.day]);
+
+  const partyInvite = s.pendingPartyInvite;
+  const partyInviteDaysLeft = partyInvite ? Math.max(0, daysBetween(s.currentDate, partyInvite.expiresDate)) : 0;
 
   const friendList = Object.values(s.friends).sort((a, b) => a.name.localeCompare(b.name));
   const recentCandidates = s.recentlyPlayedWith.filter((n) => !s.friends[n]).slice(0, 15);
@@ -727,6 +738,23 @@ function FriendsTab() {
 
       {declineMessage && (
         <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: "var(--space-3)" }}>{declineMessage}</div>
+      )}
+
+      {partyInvite && (
+        <div className="invite-banner">
+          <div>
+            <div className="invite-title">{partyInvite.name} wants to party up for {QUEUE_LABELS[partyInvite.queue]}</div>
+            <div className="invite-sub">expires in {partyInviteDaysLeft}d</div>
+          </div>
+          <div className="invite-actions">
+            <button className="invite-accept-btn" onClick={acceptPartyInvite}>
+              Accept
+            </button>
+            <button className="invite-decline-btn" onClick={declinePartyInvite}>
+              Decline
+            </button>
+          </div>
+        </div>
       )}
 
       <div className="section-label">Your Friends ({friendList.length})</div>

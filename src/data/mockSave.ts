@@ -118,12 +118,28 @@ export interface FriendRecord {
   /** Career-high MMR per queue, updated whenever mmr[queue] exceeds it — mirrors the same peakMmr
    *  tracking on the player's own RankedProfile, used for the "View Stats" modal. */
   peakMmr: Record<QueueMode, number>;
+  /** 0-100, "queue buddy" chemistry — grows from playing WITH them (partied up), not from facing them as
+   *  an opponent. Fed into the exact same `teamChemistry` mechanic org rosters already use (see
+   *  matchSim.ts's simulateTeamChain) when this friend is actually partied for a match, so an established
+   *  duo genuinely plays a bit better together, not just a flavor number on the Social screen. */
+  chemistry: number;
 }
 
 export interface ShowmatchInvite {
   id: string;
   streamerId: "shadow" | "feer" | "johnboi";
   opponentName: string;
+  offeredDate: SimDate;
+  expiresDate: SimDate;
+}
+
+/** An existing friend reaching out first to queue together for a bit — more likely from a friend you've
+ *  actually built real chemistry with (see FriendRecord.chemistry), not a cold invite out of nowhere.
+ *  Opt-in: accepting adds them to the party the same way inviting them yourself would, declining just
+ *  lets it expire with no penalty. */
+export interface PartyInvite {
+  name: string;
+  queue: QueueMode;
   offeredDate: SimDate;
   expiresDate: SimDate;
 }
@@ -430,6 +446,9 @@ export const mockSave = {
   pendingShowmatchInvite: null as ShowmatchInvite | null,
   showmatchHistory: [] as ShowmatchResultEntry[],
   lastShowmatchInviteCheckDate: DEMO_CURRENT_DATE,
+  // A friend proactively inviting the player to party up, see PartyInvite's own doc comment.
+  pendingPartyInvite: null as PartyInvite | null,
+  lastPartyInviteCheckDate: DEMO_CURRENT_DATE,
   // Names encountered in recent matches (opponents and teammates alike), most recent first, capped short.
   // Adding a friend is done from this list rather than an open search of every name in the sim.
   recentlyPlayedWith: [] as string[],
