@@ -232,6 +232,11 @@ interface SaveStoreState extends SaveData {
    *  tournament instance (a roster change invalidates any in-progress bracket) — a fresh-team test run
    *  without needing a whole new save. */
   resetRlcsTeams: () => void;
+  /** Dev-only, nuclear option: same team/org reset as `resetRlcsTeams`, but hard-deletes the save's
+   *  tournament localStorage blob outright (`useTournamentStore`'s `fullResetInstances`) instead of just
+   *  overwriting it with an empty table — for a save whose RLCS state got stuck in a way the regular reset
+   *  couldn't clear (a leftover shape from an older build, corrupted JSON, etc.). */
+  fullResetRlcsAndTournaments: () => void;
   setEquippedTitleId: (id: string | null) => void;
   /** Adds a title to the player's collection if they don't already have it (deduped by id). Used for
    *  tournament results, competitive titles are earned once and kept forever, same as season titles. */
@@ -672,6 +677,16 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       orgContract: null,
     });
     useTournamentStore.getState().resetAllInstances(state.currentDate);
+  },
+  fullResetRlcsAndTournaments: () => {
+    const state = get();
+    set({
+      rlcsTeamsResetSeed: state.rlcsTeamsResetSeed + 1,
+      pendingOrgInvite: null,
+      pendingOrgTryout: null,
+      orgContract: null,
+    });
+    useTournamentStore.getState().fullResetInstances(state.currentDate);
   },
   setEquippedTitleId: (id) => set({ equippedTitleId: id }),
   dismissSeasonAnnouncement: () => set({ pendingSeasonAnnouncement: null }),

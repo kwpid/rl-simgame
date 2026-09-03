@@ -723,6 +723,13 @@ interface TournamentStoreState {
    *  season's regions reopen on a real delay instead of instantly recreating whatever was already
    *  scheduled (and likely already stale) for the current real calendar date. */
   resetAllInstances: (currentDate: SimDate) => void;
+  /** Dev-only, more aggressive than `resetAllInstances`: hard-deletes the save's tournament localStorage
+   *  blob outright (via `clearTournamentDataForSave`, the same path `deleteSave` uses) instead of just
+   *  overwriting it with an empty object, so a save that got itself into a bad state predating this reset
+   *  path (a instance shape an older build wrote that the current one can't make sense of, corrupted JSON,
+   *  etc.) can't come back from a stale on-disk copy. Otherwise identical to `resetAllInstances` — same
+   *  fresh RLCS_RESTART_DELAY_DAYS on-ramp. */
+  fullResetInstances: (currentDate: SimDate) => void;
 }
 
 export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
@@ -1026,6 +1033,13 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
     persistRestartAnchor(currentDate);
     set({ instances: {} });
     persist({});
+  },
+
+  fullResetInstances: (currentDate) => {
+    if (activeSaveId) clearTournamentDataForSave(activeSaveId);
+    seasonRestartAnchor = currentDate;
+    persistRestartAnchor(currentDate);
+    set({ instances: {} });
   },
 }));
 

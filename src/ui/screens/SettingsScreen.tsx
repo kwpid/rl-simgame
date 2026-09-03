@@ -316,6 +316,7 @@ function DeveloperToolsSection() {
   const resetRegionalRoster = useRegionalRosterStore((store) => store.resetAll);
   const resetAllInstances = useTournamentStore((store) => store.resetAllInstances);
   const resetRlcsTeams = useSaveStore((store) => store.resetRlcsTeams);
+  const fullResetRlcsAndTournaments = useSaveStore((store) => store.fullResetRlcsAndTournaments);
   const forceOrgInvite = useSaveStore((store) => store.forceOrgInvite);
   const releaseOrgContract = useSaveStore((store) => store.releaseOrgContract);
   const recordOrgTryoutScrim = useSaveStore((store) => store.recordOrgTryoutScrim);
@@ -564,6 +565,16 @@ function DeveloperToolsSection() {
                 }}
               >
                 Reset Teams (regenerates every region's real rosters, also resets RLCS season)
+              </button>
+            </div>
+            <div className="dev-tools-row">
+              <button
+                className="dev-btn"
+                onClick={() => {
+                  fullResetRlcsAndTournaments();
+                }}
+              >
+                Full Reset RLCS &amp; Tournaments (hard-deletes all saved tournament data, use if RLCS is stuck/broken)
               </button>
             </div>
           </div>
