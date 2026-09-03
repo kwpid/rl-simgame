@@ -88,10 +88,13 @@ function reseedEntry(
 
   // A real season reset hits everyone's actual rank the same way regardless of AI type — the same soft
   // reset (toward baseline 600, keeping 70% of the prior gap) the player's own MMR gets, not a separate,
-  // much milder compression toward a permanently-elite floor. Their skill target doesn't move, so
-  // simulateForward's per-game climb back toward it is what gets a real grinder back near the top within
-  // the first weeks of the season.
-  const priorMmr = previous ? previous.mmr : targetMmr;
+  // much milder compression toward a permanently-elite floor. Resetting from `previous.mmr` directly would
+  // let a grinder who happened to be caught mid-climb (an entry only reseeds/simulates when actually
+  // queried, so it can be snapshotted anywhere between a past reset and its real target) get soft-reset
+  // from that partial, already-low number — compounding downward every season they aren't looked at often
+  // enough to fully catch up first. Resetting from their best-demonstrated level instead (all-time peak, or
+  // their current target if that's even higher) keeps every reset anchored to how good they actually are.
+  const priorMmr = previous ? Math.max(previous.mmr, previous.peakMmr ?? previous.mmr, targetMmr) : targetMmr;
   const mmr = previous ? softResetMmr(priorMmr) : targetMmr;
 
   const statFloor = targetGameSense * STAT_RUST_FLOOR_FRACTION;

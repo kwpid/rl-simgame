@@ -93,10 +93,14 @@ function reseedEntry(
 
   // A real season reset hits everyone's actual rank the same way, pro or not — the same soft reset
   // (toward baseline 600, keeping 70% of the prior gap) the player's own MMR gets, not a separate, much
-  // milder compression toward a permanently-elite floor. A pro's skill (targetMmr/targetGameSense) doesn't
-  // go anywhere, so simulateForward's per-game climb back toward it is what gets them back near the top
-  // within the first weeks of the season, same as a real pro grinding back up from a fresh placement.
-  const priorMmr = previous ? previous.mmr : targetMmr;
+  // milder compression toward a permanently-elite floor. Resetting from `previous.mmr` directly would let a
+  // pro who happened to be caught mid-climb (an entry only reseeds/simulates when actually queried, so it
+  // can be snapshotted anywhere between a past reset and its real target) get soft-reset from that partial,
+  // already-low number — compounding downward every season a pro isn't looked at often enough to fully
+  // catch up first, the "one pro sitting at 995 MMR" bug. Resetting from their best-demonstrated level
+  // instead (their all-time peak, or their current target if that's even higher after a career-growth
+  // re-seed) keeps every reset anchored to how good they actually are, not to catch-up timing luck.
+  const priorMmr = previous ? Math.max(previous.mmr, previous.peakMmr ?? previous.mmr, targetMmr) : targetMmr;
   const mmr = previous ? softResetMmr(priorMmr) : targetMmr;
 
   const statFloor = targetGameSense * STAT_RUST_FLOOR_FRACTION;

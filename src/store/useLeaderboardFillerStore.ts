@@ -38,6 +38,9 @@ interface FillerMmrEntry {
   targetGameSense: number;
   targetMechanicalConsistency: number;
   seasonStartKey: string;
+  /** Highest MMR this name/queue has ever actually reached, carried forward across every season reset —
+   *  same "all-time best" concept as the player's own RankedProfile.peakMmr. */
+  peakMmr: number;
 }
 
 type FillerMmrTable = Record<string, Partial<Record<QueueMode, FillerMmrEntry>>>;
@@ -76,10 +79,13 @@ function reseedEntry(
 
   // A real season reset hits everyone's actual rank the same way regardless of AI type — the same soft
   // reset (toward baseline 600, keeping 70% of the prior gap) the player's own MMR gets, not a separate,
-  // much milder compression toward a permanently-elite floor. Their skill target doesn't move, so
-  // simulateForward's per-game climb back toward it is what gets a real leaderboard name back near the
-  // top within the first weeks of the season.
-  const priorMmr = previous ? previous.mmr : targetMmr;
+  // much milder compression toward a permanently-elite floor. Resetting from `previous.mmr` directly would
+  // let a name who happened to be caught mid-climb (an entry only reseeds/simulates when actually queried,
+  // so it can be snapshotted anywhere between a past reset and its real target) get soft-reset from that
+  // partial, already-low number — compounding downward every season they aren't looked at often enough to
+  // fully catch up first. Resetting from their best-demonstrated level instead (all-time peak, or their
+  // current target if that's even higher) keeps every reset anchored to how good they actually are.
+  const priorMmr = previous ? Math.max(previous.mmr, previous.peakMmr ?? previous.mmr, targetMmr) : targetMmr;
   const mmr = previous ? softResetMmr(priorMmr) : targetMmr;
 
   const statFloor = targetGameSense * STAT_RUST_FLOOR_FRACTION;
@@ -98,6 +104,7 @@ function reseedEntry(
     targetGameSense,
     targetMechanicalConsistency,
     seasonStartKey: seasonKey(seasonStartDate),
+    peakMmr: Math.max(previous?.peakMmr ?? 0, priorMmr, mmr, targetMmr),
   };
 }
 
@@ -116,10 +123,11 @@ function simulateForward(entry: FillerMmrEntry, name: string, currentDate: SimDa
       gameSense: Math.round(entry.targetGameSense),
       mechanicalConsistency: Math.round(entry.targetMechanicalConsistency),
       gamesPlayedThisSeason: expectedGames,
+      peakMmr: Math.max(entry.peakMmr, entry.targetMmr),
     };
   }
 
-  let { mmr, gameSense, mechanicalConsistency, gamesPlayedThisSeason } = entry;
+  let { mmr, gameSense, mechanicalConsistency, gamesPlayedThisSeason, peakMmr } = entry;
   for (let i = 0; i < gamesBehind; i++) {
     const isPlacement = gamesPlayedThisSeason < PLACEMENT_GAMES;
     const oppRating = mmr + (Math.random() - 0.5) * 2 * 350;
@@ -132,6 +140,7 @@ function simulateForward(entry: FillerMmrEntry, name: string, currentDate: SimDa
     gameSense += (entry.targetGameSense - gameSense) * STAT_CLOSE_RATE;
     mechanicalConsistency += (entry.targetMechanicalConsistency - mechanicalConsistency) * STAT_CLOSE_RATE;
     gamesPlayedThisSeason++;
+    peakMmr = Math.max(peakMmr, mmr);
   }
 
   return {
@@ -140,6 +149,7 @@ function simulateForward(entry: FillerMmrEntry, name: string, currentDate: SimDa
     gameSense: Math.round(gameSense),
     mechanicalConsistency: Math.round(mechanicalConsistency),
     gamesPlayedThisSeason,
+    peakMmr: Math.round(peakMmr),
   };
 }
 
