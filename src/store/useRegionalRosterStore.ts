@@ -13,6 +13,7 @@ import type { QueueMode } from "@/data/mockSave";
 import type { ProRegion } from "@/data/proPlayers";
 import { regionalGrinderRoster, type RosterBand } from "@/data/regionalGrinders";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
+import { softResetMmr } from "@/data/seasons";
 
 const STORAGE_KEY_PREFIX = "rl-sim:regional-roster-v1";
 
@@ -85,8 +86,13 @@ function reseedEntry(
   const targetGameSense = estimateGameSenseForMmr(targetMmr, era, queue, currentYear);
   const targetMechanicalConsistency = targetGameSense * 0.9;
 
+  // A real season reset hits everyone's actual rank the same way regardless of AI type — the same soft
+  // reset (toward baseline 600, keeping 70% of the prior gap) the player's own MMR gets, not a separate,
+  // much milder compression toward a permanently-elite floor. Their skill target doesn't move, so
+  // simulateForward's per-game climb back toward it is what gets a real grinder back near the top within
+  // the first weeks of the season.
   const priorMmr = previous ? previous.mmr : targetMmr;
-  const mmr = Math.max(floor, Math.round(floor + (priorMmr - floor) * RESET_COMPRESSION));
+  const mmr = previous ? softResetMmr(priorMmr) : targetMmr;
 
   const statFloor = targetGameSense * STAT_RUST_FLOOR_FRACTION;
   const mechFloor = targetMechanicalConsistency * STAT_RUST_FLOOR_FRACTION;

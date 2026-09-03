@@ -8,11 +8,12 @@
 // out skill paired with a still-depressed early-season rating.
 
 import { create } from "zustand";
-import { tierMinMmr, type RankEra } from "@/data/rankSystem";
+import type { RankEra } from "@/data/rankSystem";
 import { PRO_PLAYERS, seedProMmr, hashString } from "@/data/proPlayers";
 import { proQueueStatCeiling, eloExpectedScore, eloKFactor } from "@/data/matchSim";
 import type { QueueMode } from "@/data/mockSave";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
+import { softResetMmr } from "@/data/seasons";
 
 const STORAGE_KEY = "rl-sim:pro-leaderboard-mmr-v3";
 
@@ -89,10 +90,14 @@ function reseedEntry(
   const targetMmr = seedProMmr(pro, era, currentYear)[queue];
   const targetGameSense = proQueueStatCeiling(pro, currentYear, targetMmr, era, queue);
   const targetMechanicalConsistency = targetGameSense * 0.95;
-  const floor = tierMinMmr(era === "modern" ? "ssl" : "grand_champion", era, queue);
 
+  // A real season reset hits everyone's actual rank the same way, pro or not — the same soft reset
+  // (toward baseline 600, keeping 70% of the prior gap) the player's own MMR gets, not a separate, much
+  // milder compression toward a permanently-elite floor. A pro's skill (targetMmr/targetGameSense) doesn't
+  // go anywhere, so simulateForward's per-game climb back toward it is what gets them back near the top
+  // within the first weeks of the season, same as a real pro grinding back up from a fresh placement.
   const priorMmr = previous ? previous.mmr : targetMmr;
-  const mmr = Math.max(floor, Math.round(floor + (priorMmr - floor) * RESET_COMPRESSION));
+  const mmr = previous ? softResetMmr(priorMmr) : targetMmr;
 
   const statFloor = targetGameSense * STAT_RUST_FLOOR_FRACTION;
   const mechFloor = targetMechanicalConsistency * STAT_RUST_FLOOR_FRACTION;
