@@ -170,6 +170,24 @@ export const REGISTRATION_WINDOW_DAYS = 7;
  *  spirit as a real rookie season not starting mid-split. Only ever applies to the save's first season. */
 export const RLCS_FIRST_SEASON_DELAY_DAYS = 90;
 
+/** null outside the save's first RLCS season (no gate at all — every later season opens right on its own
+ *  staggered date). Inside the first season, the date nothing can open before, regardless of a region's own
+ *  earlier stagger offset — used by BOTH `ensureProgress` (to actually gate creation) and any UI computing
+ *  its own "starts in Nd" countdown for display, so the two can't disagree the way they did before this
+ *  was extracted: a region whose raw stagger offset (e.g. day 10) is much earlier than this gate (day 90)
+ *  would otherwise count down to zero and show "Starting..." for the ~80 days in between, when the real
+ *  wait is still that much longer. */
+export function firstSeasonGateDate(seasonNumber: number, saveStartYear: number, seasonStartDate: SimDate): SimDate | null {
+  if (seasonNumber !== saveStartYear) return null;
+  return addDays(seasonStartDate, RLCS_FIRST_SEASON_DELAY_DAYS);
+}
+
+/** The date a schedule item's tile should actually count down to for display — its own raw stagger date,
+ *  or the save's first-season gate date if that's later (see `firstSeasonGateDate`). */
+export function effectiveOpenDate(itemStartDate: SimDate, gateDate: SimDate | null): SimDate {
+  return gateDate && daysBetween(itemStartDate, gateDate) > 0 ? gateDate : itemStartDate;
+}
+
 /** Simplified, uniform rule for the player's own live journey through a stage: win enough series to
  *  clinch one of the stage's advancing spots, two losses (regardless of the stage's real-world format,
  *  Swiss/GSL included) always ends your run there, a generous safety net so one bad series doesn't feel
@@ -760,15 +778,14 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
     // A brand-new save doesn't drop the player into a live RLCS season on day one — the very first season
     // only opens once RLCS_FIRST_SEASON_DELAY_DAYS have passed, same on-ramp a real fresh career would get.
     // Every later season (seasonNumber !== saveStartYear) is unaffected, still opens right on its own Jan 1.
-    const isFirstSeason = seasonNumber === saveStartYear;
-    const firstSeasonGateDate = isFirstSeason ? addDays(seasonStartDate, RLCS_FIRST_SEASON_DELAY_DAYS) : seasonStartDate;
+    const gateDate = firstSeasonGateDate(seasonNumber, saveStartYear, seasonStartDate);
 
     for (const item of scheduled) {
       // Fields open up to REGISTRATION_WINDOW_DAYS before the scheduled start so the player can see and
       // register ahead of time, the stage itself still won't actually resolve until the real start date
       // (daysBetween(stageStartDate, currentDate) stays negative until then, see advanceInstance).
       if (daysBetween(item.startDate, currentDate) < -REGISTRATION_WINDOW_DAYS) continue;
-      if (isFirstSeason && daysBetween(firstSeasonGateDate, currentDate) < 0) continue;
+      if (gateDate && daysBetween(gateDate, currentDate) < 0) continue;
       if (!next[item.id]) {
         next[item.id] = createInstance(item, currentYear, seasonNumber, teamsResetSeed, currentDate, seasonStartDate);
         changed = true;
