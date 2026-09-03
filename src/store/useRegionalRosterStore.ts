@@ -6,7 +6,7 @@
 // met this AI before", so it must not bleed between unrelated save profiles the way the older stores do.
 
 import { create } from "zustand";
-import { tierMinMmr, type RankEra } from "@/data/rankSystem";
+import { tierMinMmr, mmrEraInflation, type RankEra } from "@/data/rankSystem";
 import { hashString } from "@/data/proPlayers";
 import { estimateGameSenseForMmr, eloExpectedScore, eloKFactor } from "@/data/matchSim";
 import type { QueueMode } from "@/data/mockSave";
@@ -82,7 +82,13 @@ function reseedEntry(
 ): RosterMmrEntry {
   const floor = tierMinMmr(era === "modern" ? "ssl" : "grand_champion", era, queue);
   const spread = hashString(`${name}${region}${queue}`) % BAND_SPREAD[band];
-  const targetMmr = floor + BAND_FLOOR_FRACTION[band] * BAND_CEILING_SPAN + spread;
+  // "low" band deliberately sits out the era creep below — those are just regular ranked-ladder regulars,
+  // not remotely leaderboard/RLCS caliber, and shouldn't drift toward SSL+ just because the years pass.
+  // Every other band tracks the same rising ceiling real pros get (see proPlayers.ts's seedProMmr), which
+  // is what actually makes the Top 50 board's floor climb season over season rather than just the real
+  // pros individually pulling away from an otherwise-static grinder pool.
+  const inflation = band === "low" ? 0 : mmrEraInflation(currentYear, era);
+  const targetMmr = floor + BAND_FLOOR_FRACTION[band] * BAND_CEILING_SPAN + spread + inflation;
   const targetGameSense = estimateGameSenseForMmr(targetMmr, era, queue, currentYear);
   const targetMechanicalConsistency = targetGameSense * 0.9;
 

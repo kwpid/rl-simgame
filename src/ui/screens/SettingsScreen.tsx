@@ -545,7 +545,7 @@ function DeveloperToolsSection() {
                   resetRegionalRoster(era, s.currentDate.year, s.seasonStartDate);
                 }}
               >
-                Refresh Leaderboard (pros + fillers + regional roster)
+                Reset AI (regenerates every pro/grinder/filler from scratch with the latest formulas, no new save needed)
               </button>
             </div>
           </div>

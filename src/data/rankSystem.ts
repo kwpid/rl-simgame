@@ -181,6 +181,30 @@ export function tierMinMmr(tier: RankTierId, era: RankEra, queue: RankQueue): nu
   return brackets.find((b) => b.tier === tier)?.min ?? 0;
 }
 
+/** Diminishing-return growth from years of something (experience, era creep, etc), same shape as every
+ *  other uncapped stat in this sim: fast early gains, slower later, but never a hard ceiling. */
+export function experienceGrowth(years: number, perYear: number, diminishingScale: number): number {
+  let value = 0;
+  for (let y = 0; y < years; y++) {
+    value += perYear * (diminishingScale / (diminishingScale + value));
+  }
+  return value;
+}
+
+/** How much the competitive MMR ceiling has crept up since the Sept 2020 relaunch, independent of any one
+ *  player's/pro's own experience curve — real RL's actual top-end MMR climbed noticeably every year as the
+ *  playerbase grew and the mechanical ceiling rose with it (2v2 top-50 went from just clearing SSL right
+ *  after relaunch to routinely 2400-2500+ a few years in). Modeled with the same diminishing-returns shape
+ *  as everything else here: real growth, but not linear forever. Legacy era predates the relaunch, no
+ *  creep applies (there's no SSL yet to have crept above). Applied on top of the fixed SSL/GC floor by
+ *  every AI MMR source that should track the top of the ladder rising over time (pro seeding, and the
+ *  upper ranked-grinder bands) — see proPlayers.ts's seedProMmr and useRegionalRosterStore.ts's reseedEntry. */
+export function mmrEraInflation(currentYear: number, era: RankEra): number {
+  if (era !== "modern") return 0;
+  const yearsSinceRelaunch = Math.max(0, currentYear - ERA_CUTOVER.year);
+  return experienceGrowth(yearsSinceRelaunch, 100, 6000);
+}
+
 // Roughly matches real RL's actual published rank distribution shape (a hump centered on Platinum/Diamond,
 // thinning out fast above Champion), same percentages regardless of queue or era — only the MMR floor a
 // percentage lands on shifts (via rankBrackets/tierMinMmr above), the SHAPE of "how many people are Bronze

@@ -5,7 +5,8 @@
 // rather than "elite" at that point. A player who debuts in year N is available in every year >= N, same
 // as real careers (a 2018 pro is still around in 2022), this list is never used before its debut year.
 
-import { tierMinMmr, type RankEra } from "./rankSystem";
+import { tierMinMmr, experienceGrowth, mmrEraInflation, type RankEra } from "./rankSystem";
+export { experienceGrowth };
 import type { QueueMode } from "./mockSave";
 
 export type ProRegion = "NA" | "EU" | "OCE" | "SAM" | "MENA" | "APAC" | "SSA";
@@ -242,16 +243,6 @@ export function isGenerationalTalent(name: string): boolean {
   return hashString(name + "!") % 100 < 6;
 }
 
-/** Diminishing-return growth from years of experience, same shape as every other uncapped stat in this
- *  sim: fast early gains, slower later, but never a hard ceiling, a decade-deep veteran still climbs. */
-export function experienceGrowth(years: number, perYear: number, diminishingScale: number): number {
-  let value = 0;
-  for (let y = 0; y < years; y++) {
-    value += perYear * (diminishingScale / (diminishingScale + value));
-  }
-  return value;
-}
-
 /** Seeds a pro's starting MMR per queue: strong in their primary queue (scaling with experience, no hard
  *  ceiling, a rare "generational talent" roll pushes some outliers well past the pack), decent but
  *  clearly behind in their secondary queue, and deliberately unremarkable in 3v3, since real pros mostly
@@ -270,8 +261,10 @@ export function seedProMmr(pro: ProPlayer, era: RankEra, currentYear: number): R
 
   // The jump in real RL's actual MMR scale after the Sept 2020 relaunch was substantial (far bigger
   // playerbase, higher mechanical ceiling), legacy pros cluster not far above the era's top-tier floor
-  // (~1700-1900 in 2s), modern pros sit a bit clear of it (~2300-2450 in 2s typically) even at the top.
-  const baseOffset = era === "modern" ? 300 : 40;
+  // (~1700-1900 in 2s). Modern pros start a bit clear of it and keep climbing further clear of it every
+  // year after that (mmrEraInflation), matching real RL's actual top-end MMR creep — a few years post-
+  // relaunch, 2s top-50 typically runs 2300-2500+, not just barely above the SSL floor.
+  const baseOffset = era === "modern" ? 300 + mmrEraInflation(currentYear, era) : 40;
 
   const primaryMmr = jitter(
     tierMinMmr(topAnchor, era, primary) + baseOffset + experienceGrowth(experienceYears, 20, 6000) + talentBonus,
@@ -287,7 +280,7 @@ export function seedProMmr(pro: ProPlayer, era: RankEra, currentYear: number): R
     0.08
   );
   const grindedThirdMmr = jitter(
-    tierMinMmr("grand_champion", era, "3v3") + experienceGrowth(experienceYears, 10, 6000),
+    tierMinMmr("grand_champion", era, "3v3") + experienceGrowth(experienceYears, 10, 6000) + mmrEraInflation(currentYear, era) * 0.4,
     0.15
   );
 
