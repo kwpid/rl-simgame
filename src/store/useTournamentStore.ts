@@ -105,6 +105,30 @@ export function clearTournamentDataForSave(saveId: string): void {
   }
 }
 
+/** Raw (already-JSON-string) tournament progress for one save — RLCS history/instances plus the dev-restart
+ *  anchor — read verbatim rather than parsed/re-typed, so `saveManager.ts`'s export/import can round-trip it
+ *  without needing to know this store's internal shape. Exported so a save's full RLCS history actually
+ *  travels with an export/import instead of being silently left behind (it lives in its own localStorage
+ *  blob, not on the SaveData object itself). */
+export function exportTournamentDataForSave(saveId: string): { instances: string | null; restartAnchor: string | null } {
+  return {
+    instances: localStorage.getItem(tournamentStorageKeyFor(saveId)),
+    restartAnchor: localStorage.getItem(restartAnchorStorageKeyFor(saveId)),
+  };
+}
+
+/** Writes a previously-exported blob (see `exportTournamentDataForSave`) into storage under a NEW save id —
+ *  a plain localStorage write, doesn't touch this store's in-memory state at all, the normal `loadForSave`
+ *  call that happens whenever a save is actually opened picks it up from here naturally. */
+export function importTournamentDataForSave(saveId: string, data: { instances?: string | null; restartAnchor?: string | null }): void {
+  try {
+    if (data.instances) localStorage.setItem(tournamentStorageKeyFor(saveId), data.instances);
+    if (data.restartAnchor) localStorage.setItem(restartAnchorStorageKeyFor(saveId), data.restartAnchor);
+  } catch {
+    // Storage full/unavailable, the imported RLCS history just won't carry over this session.
+  }
+}
+
 const RESTART_ANCHOR_KEY_PREFIX = "rl-sim:tournament-restart-anchor";
 function restartAnchorStorageKeyFor(saveId: string | null): string {
   return `${RESTART_ANCHOR_KEY_PREFIX}:${saveId ?? "unsaved"}`;

@@ -20,6 +20,23 @@ function storageKeyFor(saveId: string | null): string {
   return `${STORAGE_KEY_PREFIX}:${saveId ?? "unsaved"}`;
 }
 
+/** Raw (already-JSON-string) title-choice state for one save, read verbatim — see
+ *  useTournamentStore.ts's `exportTournamentDataForSave` for why this exists: this store's per-save blob
+ *  lives outside the SaveData object entirely. */
+export function exportAiTitleDataForSave(saveId: string): string | null {
+  return localStorage.getItem(storageKeyFor(saveId));
+}
+
+/** Writes a previously-exported blob into storage under a NEW save id — the normal `loadForSave` call that
+ *  happens whenever a save is actually opened picks it up from here. */
+export function importAiTitleDataForSave(saveId: string, data: string | null | undefined): void {
+  try {
+    if (data) localStorage.setItem(storageKeyFor(saveId), data);
+  } catch {
+    // Storage full/unavailable, the imported title choices just won't carry over this session.
+  }
+}
+
 function dateKey(d: SimDate): string {
   return `${d.year}-${d.month}-${d.day}`;
 }

@@ -5,7 +5,7 @@ import { Icon } from "@/ui/components/Icon";
 import { useSaveStore } from "@/store/useSaveStore";
 import { extractSaveData } from "@/store/persistBootstrap";
 import { REGION_LABELS, type QueueMode } from "@/data/mockSave";
-import { setActiveSaveId, importSaveFile, type SaveSummary } from "@/data/saveManager";
+import { setActiveSaveId, importSaveFile, getActiveSaveId, exportSaveBundle, type SaveSummary } from "@/data/saveManager";
 import { QUEUES, QUEUE_LABELS } from "@/data/queues";
 import { TIER_LABELS, eraForDate, type RankTierId } from "@/data/rankSystem";
 import { MECHANICS, FOUNDATION_LABELS, type FoundationCategory } from "@/data/mechanics";
@@ -47,9 +47,14 @@ export function SettingsScreen() {
     setEditingName(false);
   }
 
-  function handleExport() {
+  async function handleExport() {
     const data = extractSaveData(useSaveStore.getState());
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    // Bundles in the RLCS history/regional-roster/title-choice/leaderboard state that lives in its own
+    // localStorage blobs rather than on `data` itself — without this, a save moved to another device would
+    // silently lose all of that (see saveManager.ts's exportSaveBundle doc comment).
+    const activeId = await getActiveSaveId();
+    const bundle = exportSaveBundle(activeId ?? "unsaved", data);
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

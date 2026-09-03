@@ -388,14 +388,21 @@ export function eloExpectedScore(myMmr: number, oppMmr: number): number {
   return 1 / (1 + Math.pow(10, (oppMmr - myMmr) / ELO_RATING_SCALE));
 }
 
+/** A completely expected result at the very top of the ladder (see `eloKFactor`'s compression) can round
+ *  down to a near-nothing swing — every match should still feel like it moved the needle at least a
+ *  little, win or lose. */
+const MIN_MMR_DELTA_MAGNITUDE = 7;
+
 /** Computes one team's signed MMR delta for a match via a standard Elo formula (K * (actual - expected)),
  *  so upsets swing hard and expected results barely move anyone, same as a real competitive rating system.
  *  K itself compresses as `myAvgMmr` climbs into GC/SSL territory (see `eloKFactor`), the top of the ladder
- *  moves slower per game than the middle does. */
+ *  moves slower per game than the middle does. Floored at `MIN_MMR_DELTA_MAGNITUDE` either direction — a
+ *  win never gains less than that, a loss never costs less than that. */
 export function computeMmrDelta(myAvgMmr: number, oppAvgMmr: number, won: boolean): number {
   const expected = eloExpectedScore(myAvgMmr, oppAvgMmr);
   const actual = won ? 1 : 0;
-  return Math.round(eloKFactor(myAvgMmr) * (actual - expected));
+  const raw = Math.round(eloKFactor(myAvgMmr) * (actual - expected));
+  return won ? Math.max(MIN_MMR_DELTA_MAGNITUDE, raw) : Math.min(-MIN_MMR_DELTA_MAGNITUDE, raw);
 }
 
 /** Logistic comparison: converts an arbitrary-scale stat gap into a win probability for the attacker.

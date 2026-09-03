@@ -176,6 +176,23 @@ function loadStored(): FillerMmrTable {
   }
 }
 
+/** Raw (already-JSON-string) filler leaderboard state, read verbatim — genuinely global/shared-world state,
+ *  not scoped to any one save, but a save export/import still bundles it so switching devices doesn't
+ *  quietly reset every filler regular's tracked progress. Exported for saveManager.ts. */
+export function exportFillerLeaderboardData(): string | null {
+  return localStorage.getItem(STORAGE_KEY);
+}
+
+/** Overwrites the global filler leaderboard blob — a plain localStorage write, picked up on next load since
+ *  this store only ever reads it once at module init. */
+export function importFillerLeaderboardData(data: string | null | undefined): void {
+  try {
+    if (data) localStorage.setItem(STORAGE_KEY, data);
+  } catch {
+    // Storage full/unavailable, the imported leaderboard just won't carry over this session.
+  }
+}
+
 function persist(table: FillerMmrTable) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(table));

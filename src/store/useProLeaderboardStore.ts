@@ -65,6 +65,24 @@ function loadStored(): ProMmrTable {
   }
 }
 
+/** Raw (already-JSON-string) pro leaderboard state, read verbatim — this is genuinely global/shared-world
+ *  state (see this file's own top-of-file doc comment), not scoped to any one save, but a save export/
+ *  import still bundles it so switching devices doesn't quietly reset every pro's tracked progress back to
+ *  a fresh reseed. Exported for saveManager.ts. */
+export function exportProLeaderboardData(): string | null {
+  return localStorage.getItem(STORAGE_KEY);
+}
+
+/** Overwrites the global pro leaderboard blob — a plain localStorage write, picked up on next load since
+ *  this store only ever reads it once at module init. */
+export function importProLeaderboardData(data: string | null | undefined): void {
+  try {
+    if (data) localStorage.setItem(STORAGE_KEY, data);
+  } catch {
+    // Storage full/unavailable, the imported leaderboard just won't carry over this session.
+  }
+}
+
 function persist(table: ProMmrTable) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(table));

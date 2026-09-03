@@ -23,6 +23,24 @@ function storageKeyFor(saveId: string | null): string {
   return `${STORAGE_KEY_PREFIX}:${saveId ?? "unsaved"}`;
 }
 
+/** Raw (already-JSON-string) regional-grinder progress for one save, read verbatim — see
+ *  useTournamentStore.ts's `exportTournamentDataForSave` for why this exists: this store's per-save blob
+ *  lives outside the SaveData object entirely, so a plain save export/import would otherwise silently
+ *  leave every grinder identity's tracked progress behind. */
+export function exportRegionalRosterDataForSave(saveId: string): string | null {
+  return localStorage.getItem(storageKeyFor(saveId));
+}
+
+/** Writes a previously-exported blob into storage under a NEW save id — a plain localStorage write, the
+ *  normal `loadForSave` call that happens whenever a save is actually opened picks it up from here. */
+export function importRegionalRosterDataForSave(saveId: string, data: string | null | undefined): void {
+  try {
+    if (data) localStorage.setItem(storageKeyFor(saveId), data);
+  } catch {
+    // Storage full/unavailable, the imported roster progress just won't carry over this session.
+  }
+}
+
 const RESET_COMPRESSION = 0.45;
 const STAT_RUST_FLOOR_FRACTION = 0.35;
 

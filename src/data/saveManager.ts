@@ -9,7 +9,11 @@ import { MECHANICS } from "./mechanics";
 import { QUEUE_CONCEPTS } from "./queueConcepts";
 import { eraForDate, divisionCount } from "./rankSystem";
 import { initialSeasonForDate } from "./seasons";
-import { clearTournamentDataForSave } from "@/store/useTournamentStore";
+import { clearTournamentDataForSave, exportTournamentDataForSave, importTournamentDataForSave } from "@/store/useTournamentStore";
+import { exportRegionalRosterDataForSave, importRegionalRosterDataForSave } from "@/store/useRegionalRosterStore";
+import { exportAiTitleDataForSave, importAiTitleDataForSave } from "@/store/useAiTitleStore";
+import { exportProLeaderboardData, importProLeaderboardData } from "@/store/useProLeaderboardStore";
+import { exportFillerLeaderboardData, importFillerLeaderboardData } from "@/store/useLeaderboardFillerStore";
 import { saveRegionToProRegion } from "./tournaments";
 
 /**
@@ -380,23 +384,74 @@ export async function createSave(config: NewSaveConfig): Promise<SaveSummary> {
   return (await listSaves()).find((s) => s.id === id)!;
 }
 
-/** Imports a save previously exported via `exportSaveData` (see SettingsScreen.tsx), as a brand-new save
+/** Everything a save export actually needs to fully restore a career on another device: the core SaveData
+ *  blob (orgs, ranked profiles, titles, friends, etc — everything already living on the save object itself)
+ *  PLUS the several pieces of RLCS/AI-tracking state that live in their OWN separate localStorage blobs
+ *  instead (see each store's own export helper) — without these, an exported/imported save would silently
+ *  come back with no RLCS history, a reset regional-grinder roster, and a freshly-reseeded pro/filler
+ *  leaderboard, even though none of that data actually lives on `save` itself. `proLeaderboard`/
+ *  `leaderboardFiller` are genuinely global (not per-save) but still bundled here so a device switch
+ *  doesn't quietly reset every tracked pro/filler's progress. */
+export interface SaveExportBundle {
+  formatVersion: 2;
+  save: SaveData;
+  tournamentInstances?: string | null;
+  tournamentRestartAnchor?: string | null;
+  regionalRoster?: string | null;
+  aiTitleChoices?: string | null;
+  proLeaderboard?: string | null;
+  leaderboardFiller?: string | null;
+}
+
+/** Builds the full export bundle for a save (see `SaveExportBundle`) — call with the save's own id (from
+ *  `getActiveSaveId`) and its current SaveData (from `extractSaveData`). */
+export function exportSaveBundle(saveId: string, data: SaveData): SaveExportBundle {
+  const tournament = exportTournamentDataForSave(saveId);
+  return {
+    formatVersion: 2,
+    save: data,
+    tournamentInstances: tournament.instances,
+    tournamentRestartAnchor: tournament.restartAnchor,
+    regionalRoster: exportRegionalRosterDataForSave(saveId),
+    aiTitleChoices: exportAiTitleDataForSave(saveId),
+    proLeaderboard: exportProLeaderboardData(),
+    leaderboardFiller: exportFillerLeaderboardData(),
+  };
+}
+
+/** Imports a save previously exported via `exportSaveBundle` (see SettingsScreen.tsx), as a brand-new save
  *  entry alongside whatever's already in the list — never overwrites an existing save, even one with a
  *  matching username, this is how a save actually moves from one device/browser to another. Runs the
  *  imported blob through the exact same `migrateSaveData` path a normal IndexedDB load does, so a save
  *  exported from an older (or newer) build still comes in cleanly. Throws on anything that doesn't look
- *  like a real save at all, rather than silently creating a save full of undefined fields. */
+ *  like a real save at all, rather than silently creating a save full of undefined fields.
+ *
+ *  Also accepts a bare old-style export (just the flat SaveData object, no wrapper) for backward
+ *  compatibility with files exported before the bundle format existed — those just come back without the
+ *  RLCS-history/leaderboard sidecar data, same as before this existed. */
 export async function importSaveFile(raw: unknown): Promise<SaveSummary> {
   const index = await listSaves();
   if (index.length >= MAX_SAVES) {
     throw new Error(`Cannot have more than ${MAX_SAVES} saves at once.`);
   }
-  if (typeof raw !== "object" || raw === null || !("username" in raw) || !("rankedProfiles" in raw) || !("currentDate" in raw)) {
+  const isBundle = typeof raw === "object" && raw !== null && "save" in raw && "formatVersion" in raw;
+  const saveRaw = isBundle ? (raw as SaveExportBundle).save : raw;
+  if (typeof saveRaw !== "object" || saveRaw === null || !("username" in saveRaw) || !("rankedProfiles" in saveRaw) || !("currentDate" in saveRaw)) {
     throw new Error("That file doesn't look like a valid save.");
   }
-  const data = migrateSaveData(raw);
+  const data = migrateSaveData(saveRaw);
   const id = `save_import_${Date.now()}_${Math.round(Math.random() * 1e6)}`;
   await writeSave(id, data);
+
+  if (isBundle) {
+    const bundle = raw as SaveExportBundle;
+    importTournamentDataForSave(id, { instances: bundle.tournamentInstances, restartAnchor: bundle.tournamentRestartAnchor });
+    importRegionalRosterDataForSave(id, bundle.regionalRoster);
+    importAiTitleDataForSave(id, bundle.aiTitleChoices);
+    importProLeaderboardData(bundle.proLeaderboard);
+    importFillerLeaderboardData(bundle.leaderboardFiller);
+  }
+
   return (await listSaves()).find((s) => s.id === id)!;
 }
 
