@@ -4,6 +4,7 @@ import { useMatchStore, GAME_DURATION_SECONDS, type MatchPlayer } from "@/store/
 import { useSaveStore, PLACEMENT_MMR_AMPLIFIER } from "@/store/useSaveStore";
 import { QUEUE_LABELS, QUEUE_ICONS } from "@/data/queues";
 import { FOUNDATION_LABELS, type FoundationCategory } from "@/data/mechanics";
+import type { QueueMode } from "@/data/mockSave";
 import { glowColor } from "@/data/seasons";
 import { eraForDate } from "@/data/rankSystem";
 import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
@@ -17,6 +18,15 @@ import { ARENA_MAPS, mapImagePath } from "@/data/maps";
 import { livePingMs } from "@/data/pingModel";
 
 const ALL_MATCHMAKING_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
+
+/** Any series match (seriesFormat > 1 — org scrims, tournament regionals/majors/worlds/Rival Series) isn't
+ *  ranked at all, so it shouldn't read "Ranked Duel/Doubles/Standard" the way an actual ranked queue match
+ *  does — just the plain mode name, same real-RL naming minus the "Ranked" prefix. */
+const NON_RANKED_QUEUE_LABELS: Record<QueueMode, string> = {
+  "1v1": "Duel",
+  "2v2": "Doubles",
+  "3v3": "Standard",
+};
 
 /** Scans every region's grinder roster for a name — used to route a post-match result to the right
  *  region's persistent MMR/stats (see useRegionalRosterStore.ts). */
@@ -65,6 +75,7 @@ export function MatchScreen() {
 
 function MatchFoundOverlay() {
   const queue = useMatchStore((m) => m.queue);
+  const seriesFormat = useMatchStore((m) => m.seriesFormat);
   if (!queue) return null;
 
   return (
@@ -73,7 +84,7 @@ function MatchFoundOverlay() {
         <Icon name={QUEUE_ICONS[queue]} size={48} />
       </div>
       <div className="found-title">MATCH FOUND</div>
-      <div className="found-subtitle">{QUEUE_LABELS[queue]}</div>
+      <div className="found-subtitle">{seriesFormat > 1 ? NON_RANKED_QUEUE_LABELS[queue] : QUEUE_LABELS[queue]}</div>
 
       <style>{`
         .found-overlay {
@@ -119,7 +130,7 @@ function MatchFoundOverlay() {
   );
 }
 
-function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | null }) {
+function LiveMatch({ queue }: { queue: QueueMode | null }) {
   const phase = useMatchStore((m) => m.phase);
   const clockSeconds = useMatchStore((m) => m.clockSeconds);
   const overtime = useMatchStore((m) => m.overtime);
@@ -302,7 +313,7 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
       <div className="match-header">
         <div className="match-clock">{phase === "post_match" ? "FINAL" : clockLabel}</div>
         <div className="match-queue">
-          {queue ? QUEUE_LABELS[queue] : ""}
+          {queue ? (isSeriesMatch ? NON_RANKED_QUEUE_LABELS[queue] : QUEUE_LABELS[queue]) : ""}
           {isSeriesMatch && ` · Bo${seriesFormat} · Game ${seriesGameNumber} · Series ${seriesWinsSelf}-${seriesWinsOpp}`}
         </div>
       </div>
