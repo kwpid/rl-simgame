@@ -647,20 +647,36 @@ const KICKOFF_STRAT_LABEL: Record<KickoffStrat, string> = {
   fake: "a delayed fake",
 };
 
-/** Decides who gets first touch off a kickoff — occasional strats beyond the standard approach, gated a
- *  little by mechanical consistency (a speedflip is only worth attempting reliably once you can land it),
- *  "somewhat rare but not super uncommon" per the design brief. A botched speedflip is a real risk, not
- *  just flavor: it actually costs that side effective power for the challenge. */
-function simulateKickoffBeat(blueTeam: MatchParticipantStats[], orangeTeam: MatchParticipantStats[]): { lines: PossessionLogLine[]; winnerSide: "blue" | "orange" } {
+/** Decides who gets first touch off a kickoff AND, just as importantly, who actually ends up WITH THE
+ *  BALL afterward — the two aren't the same player as often as you'd think. Each side sends one taker up
+ *  the middle; the OTHER teammate(s) "cheat" — hang back reading the bounce rather than committing to the
+ *  initial 50 — exactly like real GC/SSL 2v2/3v3 kickoff play. A lopsided challenge (one taker clearly
+ *  wins it) is a clean read, that taker just keeps the ball themselves. A genuinely close 50 is a real
+ *  bounce: it's decided by who wins THAT second contact, and a cheating teammate reading it is just as
+ *  live a candidate as either front-line taker, on either side.
+ *
+ *  Kickoff strat: speedflipping is close to universal once a player's mechanically sharp enough to land it
+ *  reliably — not a rotating coinflip with "standard" — cheat/fake are the real situational reads at that
+ *  level, standard is mostly a fallback for someone who can't reliably pull the flip off yet. A botched
+ *  speedflip is a real risk, not just flavor: it actually costs that side effective power for the
+ *  challenge. */
+function simulateKickoffBeat(blueTeam: MatchParticipantStats[], orangeTeam: MatchParticipantStats[]): { lines: PossessionLogLine[]; winnerSide: "blue" | "orange"; winner: MatchParticipantStats } {
   const blueTaker = pickAttacker(blueTeam);
   const orangeTaker = pickAttacker(orangeTeam);
+  const blueCheaters = blueTeam.filter((p) => p !== blueTaker);
+  const orangeCheaters = orangeTeam.filter((p) => p !== orangeTaker);
 
   function pickStrat(taker: MatchParticipantStats): KickoffStrat {
-    const exoticChance = Math.min(0.3, 0.12 + taker.mechanicalConsistency / 12000);
-    const roll = Math.random();
-    if (roll < exoticChance * 0.3) return "cheat";
-    if (roll < exoticChance * 0.6) return "fake";
-    if (roll < exoticChance) return "speed";
+    const skilled = taker.mechanicalConsistency > 6000;
+    const speedWeight = skilled ? 0.82 : Math.max(0.08, taker.mechanicalConsistency / 20000);
+    const cheatWeight = 0.07;
+    const fakeWeight = 0.05;
+    const standardWeight = Math.max(0.03, 1 - speedWeight - cheatWeight - fakeWeight);
+    const total = speedWeight + cheatWeight + fakeWeight + standardWeight;
+    let roll = Math.random() * total;
+    if ((roll -= cheatWeight) <= 0) return "cheat";
+    if ((roll -= fakeWeight) <= 0) return "fake";
+    if ((roll -= speedWeight) <= 0) return "speed";
     return "standard";
   }
 
@@ -686,10 +702,44 @@ function simulateKickoffBeat(blueTeam: MatchParticipantStats[], orangeTeam: Matc
 
   const blueEff = power(blueTaker, blueStrat);
   const orangeEff = power(orangeTaker, orangeStrat);
-  const winnerSide: "blue" | "orange" = Math.random() < statProbability(blueEff, orangeEff, 500) ? "blue" : "orange";
-  const winnerTaker = winnerSide === "blue" ? blueTaker : orangeTaker;
-  lines.push({ text: `${winnerTaker.name} gets there first and takes control off the kickoff.` });
-  return { lines, winnerSide };
+  const p = statProbability(blueEff, orangeEff, 500);
+
+  const decisive = Math.abs(p - 0.5) > 0.2;
+  if (decisive) {
+    const winnerSide: "blue" | "orange" = Math.random() < p ? "blue" : "orange";
+    const winner = winnerSide === "blue" ? blueTaker : orangeTaker;
+    lines.push({ text: `${winner.name} gets there first and takes clean control off the kickoff.` });
+    return { lines, winnerSide, winner };
+  }
+
+  lines.push({ text: `${blueTaker.name} and ${orangeTaker.name} challenge it 50/50, the ball squirts loose.` });
+  // Weighted toward whoever reads/reacts best — rotationDiscipline, effectivePlaystyle's bounded 5-95
+  // scale, never raw gameSense (see pickChallengeType's own doc comment on why that scale mismatch is a
+  // real bug elsewhere in this file). Both cheating teammates get first crack at the loose bounce at
+  // roughly the same odds as either original taker, on either side.
+  const candidates: { player: MatchParticipantStats; side: "blue" | "orange"; weight: number }[] = [
+    { player: blueTaker, side: "blue", weight: 1 },
+    { player: orangeTaker, side: "orange", weight: 1 },
+    ...blueCheaters.map((c) => ({ player: c, side: "blue" as const, weight: 0.9 + (effectivePlaystyle(c).rotationDiscipline - 50) / 100 })),
+    ...orangeCheaters.map((c) => ({ player: c, side: "orange" as const, weight: 0.9 + (effectivePlaystyle(c).rotationDiscipline - 50) / 100 })),
+  ];
+  const total = candidates.reduce((sum, c) => sum + c.weight, 0);
+  let roll = Math.random() * total;
+  let picked = candidates[candidates.length - 1];
+  for (const c of candidates) {
+    roll -= c.weight;
+    if (roll <= 0) {
+      picked = c;
+      break;
+    }
+  }
+  const isCheater = picked.player !== blueTaker && picked.player !== orangeTaker;
+  lines.push({
+    text: isCheater
+      ? `${picked.player.name} reads the bounce off the cheat and comes away with it.`
+      : `${picked.player.name} reacts fastest and comes away with it.`,
+  });
+  return { lines, winnerSide: picked.side, winner: picked.player };
 }
 
 /** Resolves one full possession as a variable-length chain of beats for 2v2/3v3, carrying signed pressure
@@ -709,10 +759,12 @@ export function simulateTeamChain(
   }
 
   let attackingSide: "blue" | "orange";
+  let kickoffWinner: MatchParticipantStats | null = null;
   if (isKickoff) {
     const kickoff = simulateKickoffBeat(blueTeam, orangeTeam);
     lines.push(...kickoff.lines);
     attackingSide = kickoff.winnerSide;
+    kickoffWinner = kickoff.winner;
   } else {
     // Pressure biases who's more likely to have/keep the ball this possession, but never removes the
     // coinflip entirely — a team under siege can still snatch it back, this just makes it less likely.
@@ -730,7 +782,10 @@ export function simulateTeamChain(
     return { ...result, pressure: Math.max(-PRESSURE_CAP, Math.min(PRESSURE_CAP, signed)) };
   }
 
-  let attacker = pickAttacker(attackingTeam);
+  // Whoever actually won the kickoff (taker OR the cheating teammate who read the bounce) carries the ball
+  // into the rest of the chain — re-rolling a fresh pickAttacker here would silently throw away exactly
+  // the "the cheater can end up with it" outcome simulateKickoffBeat just decided.
+  let attacker = kickoffWinner ?? pickAttacker(attackingTeam);
 
   for (let beat = 0; beat < MAX_ADVANCE_BEATS; beat++) {
     const roles = defenderRoles(defendingTeam);
