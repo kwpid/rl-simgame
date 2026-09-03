@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { useSaveStore } from "@/store/useSaveStore";
-import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, projectedSeasonSchedule, type TournamentInstance, type RlcsDiscipline } from "@/store/useTournamentStore";
+import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, projectedSeasonSchedule, effectiveRlcsSeason, type TournamentInstance, type RlcsDiscipline } from "@/store/useTournamentStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
 import { TournamentBracket } from "./TournamentBracket";
 import {
   REGION_LABELS,
   MAJOR_GROUPS,
   buildSeasonSchedule,
-  rlcsSeasonForDate,
   rlcsStructureEra,
   saveRegionToProRegion,
   regionalTitleFor,
@@ -91,7 +90,7 @@ export function TourneysScreen() {
   const currentDate = s.currentDate;
   const currentYear = currentDate.year;
   const rankedSeasonNumber = s.seasonNumber; // ranked ladder season, only used for AI opponents' flavor titles
-  const { seasonNumber: rlcsSeasonNumber, seasonStartDate: rlcsSeasonStartDate } = rlcsSeasonForDate(currentDate);
+  const { seasonNumber: rlcsSeasonNumber, seasonStartDate: rlcsSeasonStartDate } = effectiveRlcsSeason(currentDate);
   const playerProRegion = saveRegionToProRegion(s.region);
   const era = eraForDate(currentDate);
 

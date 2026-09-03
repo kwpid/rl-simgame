@@ -66,6 +66,22 @@ let activeSaveId: string | null = null;
 let seasonRestartAnchor: SimDate | null = null;
 const RLCS_RESTART_DELAY_DAYS = 7;
 
+/** The real RLCS season number/start-date to actually schedule from, accounting for a dev restart's
+ *  on-ramp (see `seasonRestartAnchor`) — this MUST be the single source of truth for "what season start
+ *  date is RLCS actually using right now", since `ensureProgress` (which creates/advances instances) and
+ *  any UI code that independently recomputes the season's schedule for DISPLAY purposes (see
+ *  TourneysScreen.tsx's own `buildSeasonSchedule` call, and `projectedSeasonSchedule` below) both need to
+ *  agree on it. Using `rlcsSeasonForDate`'s raw Jan-1 anchor in one place and this shifted one in another
+ *  was exactly the bug where a region's tile showed "Starting..." forever instead of a real countdown: its
+ *  own locally-recomputed (unshifted) date had already passed even though the REAL (shifted, store-side)
+ *  date hadn't arrived yet, so `!instance` stayed true with no future date to count down to. */
+export function effectiveRlcsSeason(currentDate: SimDate): { seasonNumber: number; seasonStartDate: SimDate } {
+  const { seasonNumber, seasonStartDate: realSeasonStartDate } = rlcsSeasonForDate(currentDate);
+  const restartAppliesThisSeason = seasonRestartAnchor !== null && rlcsSeasonForDate(seasonRestartAnchor).seasonNumber === seasonNumber;
+  const seasonStartDate = restartAppliesThisSeason ? addDays(seasonRestartAnchor!, RLCS_RESTART_DELAY_DAYS) : realSeasonStartDate;
+  return { seasonNumber, seasonStartDate };
+}
+
 function tournamentStorageKeyFor(saveId: string | null): string {
   return `${STORAGE_KEY_PREFIX}:${saveId ?? "unsaved"}`;
 }
@@ -737,15 +753,7 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
 
   ensureProgress: (currentDate, currentYear, saveStartYear, teamsResetSeed) => {
     const state = get();
-    // RLCS runs on its own year-long calendar, entirely independent of the player's ranked ladder season
-    // (which can reset on its own unrelated cadence) — see rlcsSeasonForDate's doc comment.
-    const { seasonNumber, seasonStartDate: realSeasonStartDate } = rlcsSeasonForDate(currentDate);
-    // The dev "Restart RLCS Season" tool anchors a fresh on-ramp from whenever it was pressed (see
-    // seasonRestartAnchor's doc comment) rather than recomputing the exact same already-stale Jan-1
-    // schedule the reset was trying to escape — only takes effect for the season it was set in, a real
-    // season rollover (seasonNumber changing) makes this comparison false on its own.
-    const restartAppliesThisSeason = seasonRestartAnchor !== null && rlcsSeasonForDate(seasonRestartAnchor).seasonNumber === seasonNumber;
-    const seasonStartDate = restartAppliesThisSeason ? addDays(seasonRestartAnchor!, RLCS_RESTART_DELAY_DAYS) : realSeasonStartDate;
+    const { seasonNumber, seasonStartDate } = effectiveRlcsSeason(currentDate);
     const scheduled = buildSeasonSchedule(seasonNumber, seasonStartDate);
     let changed = false;
     const next: InstanceTable = { ...state.instances };
