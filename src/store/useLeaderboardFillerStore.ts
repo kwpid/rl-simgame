@@ -12,7 +12,7 @@ import { estimateGameSenseForMmr, eloExpectedScore, eloKFactor } from "@/data/ma
 import { LB_NAMES, type QueueMode } from "@/data/mockSave";
 import { withNameFlourish } from "@/data/nameFlourish";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
-import { softResetMmr, seasonActivityMultiplier } from "@/data/seasons";
+import { softResetMmr, seasonActivityMultiplier, AI_PLACEMENT_GAMES_REQUIRED } from "@/data/seasons";
 
 const STORAGE_KEY = "rl-sim:leaderboard-filler-mmr-v2";
 
@@ -22,7 +22,7 @@ export const LEADERBOARD_FILLER_COUNT = 70;
 
 const GAMES_PER_DAY_MIN = 1.0;
 const GAMES_PER_DAY_SPREAD = 1.6;
-const PLACEMENT_GAMES = 10;
+const PLACEMENT_GAMES = AI_PLACEMENT_GAMES_REQUIRED;
 const ELO_K_PLACEMENT = 60;
 const STAT_CLOSE_RATE = 0.03;
 const MAX_GAMES_PER_CATCHUP = 300;

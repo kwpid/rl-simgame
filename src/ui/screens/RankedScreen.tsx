@@ -13,7 +13,7 @@ import { regionalGrinderRoster } from "@/data/regionalGrinders";
 import { activeProPlayers, PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { flattenProgress } from "@/data/matchSim";
 import { orgTagForOrgName, saveRegionToProRegion, REGION_LABELS as PRO_REGION_LABELS } from "@/data/tournaments";
-import { seasonEndDate, rewardTierSequence, REWARD_WINS_REQUIRED } from "@/data/seasons";
+import { seasonEndDate, rewardTierSequence, REWARD_WINS_REQUIRED, AI_PLACEMENT_GAMES_REQUIRED } from "@/data/seasons";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
 import { Avatar } from "@/ui/components/Avatar";
 
@@ -111,9 +111,11 @@ export function RankedScreen() {
       const entry = proMmrTable[pro.name]?.[queue];
       const mmr = entry?.mmr ?? 0;
       const derived = deriveRankFromMmr(mmr, era, queue);
-      return { rank: 0, name: pro.name, mmr, rankTier: derived.tier, division: derived.division, region: pro.region, isPlayer: false };
+      return { rank: 0, name: pro.name, mmr, rankTier: derived.tier, division: derived.division, region: pro.region, isPlayer: false, gamesPlayedThisSeason: entry?.gamesPlayedThisSeason ?? 0 };
     })
-    .filter((row) => row.mmr >= topTierFloor);
+    // A pro still mid-placement this season doesn't get to skip straight to a fully "settled" Top 100 spot
+    // the instant the season resets — same as the player's own rank staying hidden until placements finish.
+    .filter((row) => row.mmr >= topTierFloor && row.gamesPlayedThisSeason >= AI_PLACEMENT_GAMES_REQUIRED);
   // Grinder identities carry a real, persistent, region-tagged MMR (see useRegionalRosterStore) instead of
   // a fresh random roll every render, so the board is stable and a match opponent sharing one of these
   // names is provably the same person with the same MMR the board is showing — a global "see how every
@@ -124,9 +126,9 @@ export function RankedScreen() {
       const entry = regionalRosterMmrTable[region]?.[grinder.name]?.[queue];
       const mmr = entry?.mmr ?? 0;
       const derived = deriveRankFromMmr(mmr, era, queue);
-      return { rank: 0, name: grinder.name, mmr, rankTier: derived.tier, division: derived.division, region, isPlayer: false };
+      return { rank: 0, name: grinder.name, mmr, rankTier: derived.tier, division: derived.division, region, isPlayer: false, gamesPlayedThisSeason: entry?.gamesPlayedThisSeason ?? 0 };
     })
-  ).filter((row) => row.mmr >= topTierFloor);
+  ).filter((row) => row.mmr >= topTierFloor && row.gamesPlayedThisSeason >= AI_PLACEMENT_GAMES_REQUIRED);
   const playerProRegion = saveRegionToProRegion(s.region);
   const selfRow = { rank: 0, name: s.displayName, mmr: profile.mmr, rankTier: profile.rankTier, division: profile.division, region: playerProRegion, isPlayer: true };
   // "Friends" pulls live MMR straight off each friend's own tracked source (pro/grinder/filler/plain, see

@@ -16,6 +16,14 @@ import { addDays, daysBetween } from "./dateUtils";
 
 export const SEASON_LENGTH_DAYS = 84; // 12 weeks, "a few months" per the original design chat
 
+// How many games (real, for the player; simulated background games, for tracked AI — see
+// useProLeaderboardStore.ts/useRegionalRosterStore.ts/useLeaderboardFillerStore.ts's own PLACEMENT_GAMES,
+// which must stay equal to this) it takes to place into a fresh season, same number for everyone. Exported
+// so screens that show/rank AI (the Top 100 leaderboard) can hide someone still mid-placement the same way
+// the player's own rank stays hidden until their placements are done, instead of an AI reading as "instantly"
+// re-ranked the moment a season resets.
+export const AI_PLACEMENT_GAMES_REQUIRED = 10;
+
 export function seasonEndDate(seasonStartDate: SimDate): SimDate {
   return addDays(seasonStartDate, SEASON_LENGTH_DAYS);
 }

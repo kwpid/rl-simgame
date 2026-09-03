@@ -13,7 +13,7 @@ import type { QueueMode } from "@/data/mockSave";
 import type { ProRegion } from "@/data/proPlayers";
 import { regionalGrinderRoster, type RosterBand } from "@/data/regionalGrinders";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
-import { softResetMmr, seasonActivityMultiplier } from "@/data/seasons";
+import { softResetMmr, seasonActivityMultiplier, AI_PLACEMENT_GAMES_REQUIRED } from "@/data/seasons";
 
 const STORAGE_KEY_PREFIX = "rl-sim:regional-roster-v1";
 
@@ -43,7 +43,7 @@ export function importRegionalRosterDataForSave(saveId: string, data: string | n
 
 const GAMES_PER_DAY_MIN = 1.0;
 const GAMES_PER_DAY_SPREAD = 1.6;
-const PLACEMENT_GAMES = 10;
+const PLACEMENT_GAMES = AI_PLACEMENT_GAMES_REQUIRED;
 const ELO_K_PLACEMENT = 60;
 const STAT_CLOSE_RATE = 0.03;
 const MAX_GAMES_PER_CATCHUP = 300;

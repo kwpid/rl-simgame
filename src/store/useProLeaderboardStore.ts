@@ -15,13 +15,13 @@ import { rlcsTitleMmrBonus } from "@/data/tournaments";
 import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
 import type { QueueMode } from "@/data/mockSave";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
-import { softResetMmr, seasonActivityMultiplier } from "@/data/seasons";
+import { softResetMmr, seasonActivityMultiplier, AI_PLACEMENT_GAMES_REQUIRED } from "@/data/seasons";
 
 const STORAGE_KEY = "rl-sim:pro-leaderboard-mmr-v3";
 
 const GAMES_PER_DAY_MIN = 1.2;
 const GAMES_PER_DAY_SPREAD = 2.0;
-const PLACEMENT_GAMES = 10;
+const PLACEMENT_GAMES = AI_PLACEMENT_GAMES_REQUIRED;
 const ELO_K_PLACEMENT = 60; // placement matches swing much harder, same idea as the player's own placements
 const STAT_CLOSE_RATE = 0.03; // fraction of the remaining gap to target skill closed per simulated game
 const MAX_GAMES_PER_CATCHUP = 300; // safety cap so a huge date jump doesn't loop thousands of times
