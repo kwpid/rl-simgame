@@ -1086,6 +1086,11 @@ export function findRealRlcsTitlesForPlayer(playerName: string, currentYear?: nu
   const titles: TitleEntry[] = [];
   for (const inst of Object.values(instances)) {
     if (!inst.completed) continue;
+    // Never credit a result dated the current year (or later) — a title is only ever a genuinely PAST
+    // achievement, this season's own outcome isn't "history" yet even if this instance happens to have
+    // already resolved. Guards against a title reading as "from the future"/"not even over yet" no matter
+    // what drove the mismatch (a stale instance, a caller passing the wrong year, a scheduling edge case).
+    if (currentYear !== undefined && inst.startDate.year >= currentYear) continue;
     // Team-based formats (2v2/3v3) name the team after its ORG, not any one player — matching only
     // `team.name` meant an individual pro who genuinely won a 3v3 regional/major/Worlds in THIS save's own
     // completed history was never credited for it here, only 1v1's solo-entrant teams (named after the
