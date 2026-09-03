@@ -515,19 +515,30 @@ export function pickFictionalPastRlcsTitle(pro: { name: string; debutYear: numbe
   const pastYearsAvailable = currentRlcsYear - pro.debutYear;
   if (pastYearsAvailable < 1) return [];
 
-  const talentBonus = isGenerationalTalent(pro.name) ? 0.25 : 0;
+  const isTalent = isGenerationalTalent(pro.name);
+  const talentBonus = isTalent ? 0.25 : 0;
   const showChance = 0.35 + talentBonus;
   if (hashString(pro.name + "#history_show") % 1000 / 1000 > showChance) return [];
 
   const pastYear = pro.debutYear + (hashString(pro.name + "#history_year") % pastYearsAvailable);
   const roll = hashString(pro.name + "#history_roll") % 1000 / 1000;
-  if (roll < 0.05 + talentBonus * 0.1) return worldsTitlesEarned(pastYear, 1);
-  if (roll < 0.15 + talentBonus * 0.15) return worldsTitlesEarned(pastYear, 4);
-  if (roll < 0.3 + talentBonus * 0.15) {
+
+  // Caps how big a result this pro could plausibly have had AT THAT POINT in their career — the exact
+  // same experience/talent signal `seedProMmr` uses to seed their actual MMR (just without that function's
+  // own randomized jitter), so a title can never claim a result their career stage couldn't support (a
+  // debut-year rookie with no generational-talent flag simply can't roll a Worlds Championship result here,
+  // no matter what the tier roll below says) — this is what makes a shown title track the same skill a
+  // pro's MMR reflects, instead of an unrelated per-name coin flip that could hand a nobody a legendary run.
+  const yearsExperienceThen = Math.max(0, pastYear - pro.debutYear);
+  const skillScore = experienceGrowth(yearsExperienceThen, 20, 6000) + (isTalent ? 100 : 0);
+
+  if (skillScore >= 140 && roll < 0.05 + talentBonus * 0.1) return worldsTitlesEarned(pastYear, 1);
+  if (skillScore >= 100 && roll < 0.15 + talentBonus * 0.15) return worldsTitlesEarned(pastYear, 4);
+  if (skillScore >= 70 && roll < 0.3 + talentBonus * 0.15) {
     const group = MAJOR_GROUPS[hashString(pro.name + "#history_major") % MAJOR_GROUPS.length];
     return majorTitlesEarned(pastYear, 1, group.location);
   }
-  if (roll < 0.55) return regionalTitlesEarned(pastYear, 1);
+  if (skillScore >= 40 && roll < 0.55) return regionalTitlesEarned(pastYear, 1);
   return regionalTitlesEarned(pastYear, 8);
 }
 
