@@ -5,14 +5,15 @@ Drop PNG screenshots/renders of real Rocket League arenas in this folder using t
 Landscape, roughly 16:9 works best since these render full-bleed behind a match. A map with no file here
 yet just renders with no background image, nothing breaks.
 
-Launch arenas (always unlocked):
-- dfh-stadium.png
+This is the real Active Duty competitive map pool only — no casual-only event reskins/variants.
+
+Original Active Duty arenas (always unlocked):
 - mannfield.png
-- beckwith-park.png
-- beckwith-park-stormy.png
-- beckwith-park-midnight.png
-- urban-central.png
+- dfh-stadium.png
 - utopia-coliseum.png
+- beckwith-park.png
+- urban-central.png
+- wasteland.png
 
 Legacy-era additions (pre-F2P):
 - neo-tokyo.png
@@ -22,27 +23,14 @@ Legacy-era additions (pre-F2P):
 - farmstead.png
 - salty-shores.png
 - forbidden-temple.png
+- rivals-arena.png
 
 Post-F2P additions:
 - neon-fields.png
-- dfh-stadium-circuit.png
 - deadeye-canyon.png
-- starbase-arc-aftermath.png
-- neo-tokyo-comic.png
-- utopia-coliseum-gilded.png
 - sovereign-heights.png
-- forbidden-temple-fire-ice.png
-- deadeye-canyon-oasis.png
 - estadio-vida.png
-- neo-tokyo-hacked.png
-- mannfield-dusk.png
-- farmstead-pitched.png
-- wasteland-pitched.png
-- aquadome-salty-shallows.png
-- salty-shores-salty-fest.png
 - drift-woods.png
-- neo-tokyo-arcade.png
 - futura-garden.png
-- dfh-stadium-anniversary.png
 - boostfield-mall.png
 - parc-de-paris.png

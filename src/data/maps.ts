@@ -1,6 +1,7 @@
 // Arena/map system: purely cosmetic (the background shown behind a match), no gameplay effect. Real
-// Rocket League arenas, unlocking over the course of a save on the same real-world dates they actually
-// shipped on, so an early save's pool is small and it grows the same way the real game's did.
+// Rocket League arenas, restricted to the real Active Duty competitive map pool (no casual-only variants/
+// reskins), unlocking over the course of a save on the same real-world dates they actually joined that
+// pool, so an early save's pool is small and it grows the same way the real game's did.
 //
 // Ranked picks one random map from whatever's currently unlocked for each individual match (see
 // randomMapForDate). RLCS (and any other best-of series) instead gets a fixed map per game, picked without
@@ -16,21 +17,23 @@ export interface ArenaMap {
   name: string;
   /** Filename under public/maps/. */
   image: string;
-  /** null = available from the very first day of any save, regardless of era — the five original launch
-   *  arenas. Otherwise the real date this arena actually shipped in Rocket League, so a save's available
-   *  pool only ever contains maps that "exist yet" as of its current in-game date. */
+  /** null = available from the very first day of any save, regardless of era — the original Active Duty
+   *  arenas. Otherwise the real date this arena actually joined the competitive pool, so a save's
+   *  available pool only ever contains maps that "exist yet" as of its current in-game date. */
   addedDate: SimDate | null;
 }
 
+/** The real Active Duty competitive map pool — every map ranked/RLCS ever actually draws from. Casual-only
+ *  event reskins (Beckwith Park Stormy/Midnight, DFH Stadium Circuit, Neo Tokyo Comic, etc.) are
+ *  deliberately excluded, this is the base competitive list only. */
 export const ARENA_MAPS: ArenaMap[] = [
-  // Launch arenas — available from day one of any save, no date gate.
-  { id: "dfh-stadium", name: "DFH Stadium", image: "dfh-stadium.png", addedDate: null },
+  // Original Active Duty arenas — available from day one of any save, no date gate.
   { id: "mannfield", name: "Mannfield", image: "mannfield.png", addedDate: null },
-  { id: "beckwith-park", name: "Beckwith Park", image: "beckwith-park.png", addedDate: null },
-  { id: "beckwith-park-stormy", name: "Beckwith Park (Stormy)", image: "beckwith-park-stormy.png", addedDate: null },
-  { id: "beckwith-park-midnight", name: "Beckwith Park (Midnight)", image: "beckwith-park-midnight.png", addedDate: null },
-  { id: "urban-central", name: "Urban Central", image: "urban-central.png", addedDate: null },
+  { id: "dfh-stadium", name: "DFH Stadium", image: "dfh-stadium.png", addedDate: null },
   { id: "utopia-coliseum", name: "Utopia Coliseum", image: "utopia-coliseum.png", addedDate: null },
+  { id: "beckwith-park", name: "Beckwith Park", image: "beckwith-park.png", addedDate: null },
+  { id: "urban-central", name: "Urban Central", image: "urban-central.png", addedDate: null },
+  { id: "wasteland", name: "Wasteland", image: "wasteland.png", addedDate: null },
 
   // Legacy-era additions (pre-F2P).
   { id: "neo-tokyo", name: "Neo Tokyo", image: "neo-tokyo.png", addedDate: { year: 2016, month: 6, day: 20 } },
@@ -40,28 +43,15 @@ export const ARENA_MAPS: ArenaMap[] = [
   { id: "farmstead", name: "Farmstead", image: "farmstead.png", addedDate: { year: 2017, month: 9, day: 28 } },
   { id: "salty-shores", name: "Salty Shores", image: "salty-shores.png", addedDate: { year: 2018, month: 5, day: 29 } },
   { id: "forbidden-temple", name: "Forbidden Temple", image: "forbidden-temple.png", addedDate: { year: 2020, month: 1, day: 20 } },
+  { id: "rivals-arena", name: "Rivals Arena", image: "rivals-arena.png", addedDate: { year: 2020, month: 3, day: 10 } },
 
   // Post-F2P additions (Season 1 onward, Sept 23 2020).
   { id: "neon-fields", name: "Neon Fields", image: "neon-fields.png", addedDate: { year: 2020, month: 12, day: 1 } },
-  { id: "dfh-stadium-circuit", name: "DFH Stadium (Circuit)", image: "dfh-stadium-circuit.png", addedDate: { year: 2021, month: 1, day: 1 } },
   { id: "deadeye-canyon", name: "Deadeye Canyon", image: "deadeye-canyon.png", addedDate: { year: 2021, month: 4, day: 1 } },
-  { id: "starbase-arc-aftermath", name: "Starbase ARC (Aftermath)", image: "starbase-arc-aftermath.png", addedDate: { year: 2021, month: 8, day: 1 } },
-  { id: "neo-tokyo-comic", name: "Neo Tokyo (Comic)", image: "neo-tokyo-comic.png", addedDate: { year: 2022, month: 1, day: 1 } },
-  { id: "utopia-coliseum-gilded", name: "Utopia Coliseum (Gilded)", image: "utopia-coliseum-gilded.png", addedDate: { year: 2022, month: 4, day: 1 } },
   { id: "sovereign-heights", name: "Sovereign Heights", image: "sovereign-heights.png", addedDate: { year: 2022, month: 9, day: 1 } },
-  { id: "forbidden-temple-fire-ice", name: "Forbidden Temple (Fire & Ice)", image: "forbidden-temple-fire-ice.png", addedDate: { year: 2022, month: 12, day: 1 } },
-  { id: "deadeye-canyon-oasis", name: "Deadeye Canyon (Oasis)", image: "deadeye-canyon-oasis.png", addedDate: { year: 2023, month: 3, day: 1 } },
   { id: "estadio-vida", name: "Estadio Vida", image: "estadio-vida.png", addedDate: { year: 2023, month: 6, day: 1 } },
-  { id: "neo-tokyo-hacked", name: "Neo Tokyo (Hacked)", image: "neo-tokyo-hacked.png", addedDate: { year: 2023, month: 9, day: 1 } },
-  { id: "mannfield-dusk", name: "Mannfield (Dusk)", image: "mannfield-dusk.png", addedDate: { year: 2023, month: 12, day: 1 } },
-  { id: "farmstead-pitched", name: "Farmstead (Pitched)", image: "farmstead-pitched.png", addedDate: { year: 2023, month: 12, day: 1 } },
-  { id: "wasteland-pitched", name: "Wasteland (Pitched)", image: "wasteland-pitched.png", addedDate: { year: 2023, month: 12, day: 1 } },
-  { id: "aquadome-salty-shallows", name: "AquaDome (Salty Shallows)", image: "aquadome-salty-shallows.png", addedDate: { year: 2024, month: 3, day: 1 } },
-  { id: "salty-shores-salty-fest", name: "Salty Shores (Salty Fest)", image: "salty-shores-salty-fest.png", addedDate: { year: 2024, month: 6, day: 1 } },
   { id: "drift-woods", name: "Drift Woods", image: "drift-woods.png", addedDate: { year: 2024, month: 9, day: 1 } },
-  { id: "neo-tokyo-arcade", name: "Neo Tokyo (Arcade)", image: "neo-tokyo-arcade.png", addedDate: { year: 2024, month: 12, day: 1 } },
   { id: "futura-garden", name: "Futura Garden", image: "futura-garden.png", addedDate: { year: 2025, month: 3, day: 1 } },
-  { id: "dfh-stadium-anniversary", name: "DFH Stadium (10th Anniversary)", image: "dfh-stadium-anniversary.png", addedDate: { year: 2025, month: 6, day: 1 } },
   { id: "boostfield-mall", name: "Boostfield Mall", image: "boostfield-mall.png", addedDate: { year: 2025, month: 9, day: 1 } },
   { id: "parc-de-paris", name: "Parc de Paris", image: "parc-de-paris.png", addedDate: { year: 2025, month: 12, day: 1 } },
 ];
@@ -70,7 +60,7 @@ function isMapUnlocked(map: ArenaMap, currentDate: SimDate): boolean {
   return !map.addedDate || daysBetween(map.addedDate, currentDate) >= 0;
 }
 
-/** Every arena that "exists yet" as of `currentDate` — always at least the 7 launch arenas. */
+/** Every arena that "exists yet" as of `currentDate` — always at least the 6 original Active Duty arenas. */
 export function availableMaps(currentDate: SimDate): ArenaMap[] {
   return ARENA_MAPS.filter((m) => isMapUnlocked(m, currentDate));
 }
