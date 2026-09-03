@@ -550,10 +550,10 @@ function DeveloperToolsSection() {
               <button
                 className="dev-btn"
                 onClick={() => {
-                  resetAllInstances();
+                  resetAllInstances(s.currentDate);
                 }}
               >
-                Restart RLCS Season (fresh regionals, re-signs org if under contract)
+                Restart RLCS Season (fresh regionals in ~7d, re-signs org if under contract)
               </button>
             </div>
             <div className="dev-tools-row">

@@ -89,15 +89,51 @@ function roundLabel(prefix: string, roundIndex: number, totalRounds: number): st
   return `${prefix} Round ${roundIndex + 1}`.trim();
 }
 
+/** A binary elimination tree (every round exactly halves the previous one down to a single final match)
+ *  renders as a real two-sided bracket, March-Madness style: the field's two symmetric halves (which never
+ *  meet each other until the very last match — a direct consequence of how buildSingleElimBracket pairs
+ *  each round from the previous one) run outward from a center Final column, left side reading left-to-
+ *  right, right side mirrored so its own final-adjacent round sits next to the center. Falls back to a
+ *  plain left-to-right column list when the last round has more than one match (double-elim cut short at
+ *  a multi-team survivor field instead of a single champion — no single center to converge on). */
+function SplitOrPlainBracket({ rounds, teams, playerTeamId, roundPrefix, centerLabel }: { rounds: MatchNode[][]; teams: Record<string, TournamentTeam>; playerTeamId: string | null; roundPrefix: string; centerLabel: string }) {
+  const finalRound = rounds[rounds.length - 1];
+  const canSplit = rounds.length > 1 && finalRound.length === 1;
+  if (!canSplit) {
+    return (
+      <div className="bracket-scroll-row">
+        {rounds.map((round, i) => (
+          <RoundColumn key={i} title={roundLabel(roundPrefix, i, rounds.length)} matches={round} teams={teams} playerTeamId={playerTeamId} />
+        ))}
+      </div>
+    );
+  }
+  const preRounds = rounds.slice(0, rounds.length - 1);
+  const leftRounds = preRounds.map((round) => round.slice(0, round.length / 2));
+  const rightRounds = preRounds.map((round) => round.slice(round.length / 2));
+  return (
+    <div className="bracket-scroll-row bracket-two-sided">
+      <div className="bracket-side">
+        {leftRounds.map((round, i) => (
+          <RoundColumn key={`l${i}`} title={roundLabel(roundPrefix, i, rounds.length)} matches={round} teams={teams} playerTeamId={playerTeamId} />
+        ))}
+      </div>
+      <RoundColumn title={centerLabel} matches={finalRound} teams={teams} playerTeamId={playerTeamId} />
+      <div className="bracket-side bracket-side-right">
+        {[...rightRounds].reverse().map((round, revIdx) => {
+          const roundIdx = rightRounds.length - 1 - revIdx;
+          return <RoundColumn key={`r${roundIdx}`} title={roundLabel(roundPrefix, roundIdx, rounds.length)} matches={round} teams={teams} playerTeamId={playerTeamId} />;
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function TournamentBracket({ bracket, playerTeamId }: { bracket: BracketTree; playerTeamId: string | null }) {
   if (bracket.format === "single_elim") {
     return (
       <div className="bracket-view">
-        <div className="bracket-scroll-row">
-          {bracket.rounds.map((round, i) => (
-            <RoundColumn key={i} title={roundLabel("", i, bracket.rounds.length)} matches={round} teams={bracket.teams} playerTeamId={playerTeamId} />
-          ))}
-        </div>
+        <SplitOrPlainBracket rounds={bracket.rounds} teams={bracket.teams} playerTeamId={playerTeamId} roundPrefix="" centerLabel="Final" />
         <style>{BRACKET_STYLES}</style>
       </div>
     );
@@ -107,12 +143,12 @@ export function TournamentBracket({ bracket, playerTeamId }: { bracket: BracketT
   return (
     <div className="bracket-view">
       <div className="bracket-section-label">{hasLosers ? "Winners Bracket" : ""}</div>
-      <div className="bracket-scroll-row">
-        {bracket.winnersRounds.map((round, i) => (
-          <RoundColumn key={`w${i}`} title={roundLabel("Winners", i, bracket.winnersRounds.length)} matches={round} teams={bracket.teams} playerTeamId={playerTeamId} />
-        ))}
-        {bracket.grandFinal && <RoundColumn title="Grand Final" matches={[bracket.grandFinal]} teams={bracket.teams} playerTeamId={playerTeamId} />}
-      </div>
+      <SplitOrPlainBracket rounds={bracket.winnersRounds} teams={bracket.teams} playerTeamId={playerTeamId} roundPrefix="Winners" centerLabel="Winners Final" />
+      {bracket.grandFinal && (
+        <div className="bracket-scroll-row" style={{ justifyContent: "center" }}>
+          <RoundColumn title="Grand Final" matches={[bracket.grandFinal]} teams={bracket.teams} playerTeamId={playerTeamId} />
+        </div>
+      )}
       {hasLosers && (
         <>
           <div className="bracket-section-label" style={{ marginTop: "var(--space-4)" }}>Losers Bracket</div>
@@ -146,6 +182,14 @@ const BRACKET_STYLES = `
     gap: var(--space-4);
     overflow-x: auto;
     padding-bottom: var(--space-2);
+  }
+  .bracket-two-sided {
+    align-items: center;
+    justify-content: center;
+  }
+  .bracket-side {
+    display: flex;
+    gap: var(--space-4);
   }
   .bracket-round-column {
     display: flex;

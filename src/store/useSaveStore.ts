@@ -671,7 +671,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       pendingOrgTryout: null,
       orgContract: null,
     });
-    useTournamentStore.getState().resetAllInstances();
+    useTournamentStore.getState().resetAllInstances(state.currentDate);
   },
   setEquippedTitleId: (id) => set({ equippedTitleId: id }),
   dismissSeasonAnnouncement: () => set({ pendingSeasonAnnouncement: null }),

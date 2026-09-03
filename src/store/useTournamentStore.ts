@@ -56,6 +56,16 @@ const STORAGE_KEY_PREFIX = "rl-sim:tournament-instances-v2";
 // AppRoot alongside `initFromSave`) is what actually switches which save's data this store is reading from.
 let activeSaveId: string | null = null;
 
+/** Set only by the dev "Restart RLCS Season" tool (see resetAllInstances) — when non-null and its RLCS
+ *  season number still matches the current one, `ensureProgress` builds this season's schedule from
+ *  `addDays(seasonRestartAnchor, RLCS_RESTART_DELAY_DAYS)` instead of the real Jan-1 anchor, so every
+ *  region's regional (and majors/Worlds downstream of them) reopens with a fresh on-ramp from the moment of
+ *  the restart, the same way a brand-new save's first season gets one, rather than recomputing the exact
+ *  same already-stale Jan-1-anchored schedule the reset was trying to escape. Reverts to the real Jan-1
+ *  anchor on its own once the calendar actually reaches next season, no explicit clearing needed. */
+let seasonRestartAnchor: SimDate | null = null;
+const RLCS_RESTART_DELAY_DAYS = 7;
+
 function tournamentStorageKeyFor(saveId: string | null): string {
   return `${STORAGE_KEY_PREFIX}:${saveId ?? "unsaved"}`;
 }
@@ -65,8 +75,30 @@ function tournamentStorageKeyFor(saveId: string | null): string {
 export function clearTournamentDataForSave(saveId: string): void {
   try {
     localStorage.removeItem(tournamentStorageKeyFor(saveId));
+    localStorage.removeItem(restartAnchorStorageKeyFor(saveId));
   } catch {
     // Storage unavailable, nothing to clear.
+  }
+}
+
+const RESTART_ANCHOR_KEY_PREFIX = "rl-sim:tournament-restart-anchor";
+function restartAnchorStorageKeyFor(saveId: string | null): string {
+  return `${RESTART_ANCHOR_KEY_PREFIX}:${saveId ?? "unsaved"}`;
+}
+function loadRestartAnchor(): SimDate | null {
+  try {
+    const raw = localStorage.getItem(restartAnchorStorageKeyFor(activeSaveId));
+    return raw ? (JSON.parse(raw) as SimDate) : null;
+  } catch {
+    return null;
+  }
+}
+function persistRestartAnchor(anchor: SimDate | null) {
+  try {
+    if (anchor) localStorage.setItem(restartAnchorStorageKeyFor(activeSaveId), JSON.stringify(anchor));
+    else localStorage.removeItem(restartAnchorStorageKeyFor(activeSaveId));
+  } catch {
+    // Storage full/unavailable, the dev restart buffer just won't survive a reload this session.
   }
 }
 
@@ -686,8 +718,11 @@ interface TournamentStoreState {
   loadForSave: (saveId: string) => void;
   /** Dev-only: wipes every tracked instance for the current save so the next `ensureProgress` call
    *  regenerates a completely fresh RLCS season from scratch (a brand-new regional field, no player
-   *  registration carried over), see SettingsScreen's Developer Tools. */
-  resetAllInstances: () => void;
+   *  registration carried over), see SettingsScreen's Developer Tools. Also anchors a fresh
+   *  RLCS_RESTART_DELAY_DAYS on-ramp from `currentDate` (see `seasonRestartAnchor`) so the restarted
+   *  season's regions reopen on a real delay instead of instantly recreating whatever was already
+   *  scheduled (and likely already stale) for the current real calendar date. */
+  resetAllInstances: (currentDate: SimDate) => void;
 }
 
 export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
@@ -697,7 +732,13 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
     const state = get();
     // RLCS runs on its own year-long calendar, entirely independent of the player's ranked ladder season
     // (which can reset on its own unrelated cadence) — see rlcsSeasonForDate's doc comment.
-    const { seasonNumber, seasonStartDate } = rlcsSeasonForDate(currentDate);
+    const { seasonNumber, seasonStartDate: realSeasonStartDate } = rlcsSeasonForDate(currentDate);
+    // The dev "Restart RLCS Season" tool anchors a fresh on-ramp from whenever it was pressed (see
+    // seasonRestartAnchor's doc comment) rather than recomputing the exact same already-stale Jan-1
+    // schedule the reset was trying to escape — only takes effect for the season it was set in, a real
+    // season rollover (seasonNumber changing) makes this comparison false on its own.
+    const restartAppliesThisSeason = seasonRestartAnchor !== null && rlcsSeasonForDate(seasonRestartAnchor).seasonNumber === seasonNumber;
+    const seasonStartDate = restartAppliesThisSeason ? addDays(seasonRestartAnchor!, RLCS_RESTART_DELAY_DAYS) : realSeasonStartDate;
     const scheduled = buildSeasonSchedule(seasonNumber, seasonStartDate);
     let changed = false;
     const next: InstanceTable = { ...state.instances };
@@ -790,8 +831,14 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
     const stage = instance.stages[instance.stageIndex];
 
     if (stage.format === "double_elim" || stage.format === "single_elim") {
-      const tree = instance.stageBrackets[instance.stageIndex];
-      if (!tree) return; // shouldn't happen, ensureStageBracketBuilt already ran when the stage started
+      // Normally already built the moment the stage became current (instance creation, advanceInstance,
+      // resolvePlayerMatch) — but advanceInstance skips a live-player instance entirely, so a save from
+      // before this bracket system existed (already mid-registration in a bracket-shaped stage) would
+      // otherwise never get one built at all. Building it here too, on demand, means the player's match
+      // always works regardless of which code path they arrived from.
+      const builtInstance = ensureStageBracketBuilt(instance);
+      const tree = builtInstance.stageBrackets[instance.stageIndex];
+      if (!tree) return; // genuinely no teams to build from (shouldn't happen)
       const playerNode = findNodeForTeam(tree, instance.playerTeamId!);
       if (!playerNode || playerNode.resolved) return; // no match currently waiting on the player
       const isPlayerA = playerNode.slotA?.teamId === instance.playerTeamId;
@@ -970,10 +1017,13 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
 
   loadForSave: (saveId) => {
     activeSaveId = saveId;
+    seasonRestartAnchor = loadRestartAnchor();
     set({ instances: loadStored() });
   },
 
-  resetAllInstances: () => {
+  resetAllInstances: (currentDate) => {
+    seasonRestartAnchor = currentDate;
+    persistRestartAnchor(currentDate);
     set({ instances: {} });
     persist({});
   },
