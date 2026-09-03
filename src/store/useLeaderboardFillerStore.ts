@@ -12,7 +12,7 @@ import { estimateGameSenseForMmr, eloExpectedScore, eloKFactor } from "@/data/ma
 import { LB_NAMES, type QueueMode } from "@/data/mockSave";
 import { withNameFlourish } from "@/data/nameFlourish";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
-import { softResetMmr, seasonActivityMultiplier, AI_PLACEMENT_GAMES_REQUIRED } from "@/data/seasons";
+import { softResetMmr, seasonActivityMultiplier, AI_PLACEMENT_GAMES_REQUIRED, PLACEMENT_MMR_AMPLIFIER } from "@/data/seasons";
 
 const STORAGE_KEY = "rl-sim:leaderboard-filler-mmr-v2";
 
@@ -263,7 +263,11 @@ export const useLeaderboardFillerStore = create<LeaderboardFillerState>((set, ge
     const key = seasonKey(seasonStartDate);
     const existing = state.mmr[name]?.[queue];
     const entry = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, queue, era, currentYear, seasonStartDate, existing);
-    const nextEntry: FillerMmrEntry = { ...entry, mmr: Math.max(0, entry.mmr + mmrDelta) };
+    // Still mid-placement this season — a real match played directly against this name should swing them
+    // the same amplified way a real placement result would, not the flat few-point delta an ordinary
+    // ranked result gets.
+    const effectiveDelta = entry.gamesPlayedThisSeason < PLACEMENT_GAMES ? Math.round(mmrDelta * PLACEMENT_MMR_AMPLIFIER) : mmrDelta;
+    const nextEntry: FillerMmrEntry = { ...entry, mmr: Math.max(0, entry.mmr + effectiveDelta) };
     const nextTable = { ...state.mmr, [name]: { ...state.mmr[name], [queue]: nextEntry } };
     set({ mmr: nextTable });
     persist(nextTable);

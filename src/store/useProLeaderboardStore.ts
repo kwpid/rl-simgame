@@ -15,7 +15,7 @@ import { rlcsTitleMmrBonus } from "@/data/tournaments";
 import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
 import type { QueueMode } from "@/data/mockSave";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
-import { softResetMmr, seasonActivityMultiplier, AI_PLACEMENT_GAMES_REQUIRED } from "@/data/seasons";
+import { softResetMmr, seasonActivityMultiplier, AI_PLACEMENT_GAMES_REQUIRED, PLACEMENT_MMR_AMPLIFIER } from "@/data/seasons";
 
 const STORAGE_KEY = "rl-sim:pro-leaderboard-mmr-v3";
 
@@ -281,7 +281,11 @@ export const useProLeaderboardStore = create<ProLeaderboardState>((set, get) => 
     const existing = state.mmr[proName]?.[queue];
     const rawEntry = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, seasonStartDate, existing);
     const entry = typeof rawEntry.peakMmr === "number" ? rawEntry : { ...rawEntry, peakMmr: rawEntry.mmr };
-    const nextMmr = Math.max(0, entry.mmr + mmrDelta);
+    // Still mid-placement this season (same PLACEMENT_GAMES threshold simulateForward's own background
+    // games use) — a real match played directly against this pro should swing them the same amplified way
+    // a real placement result would, not the flat few-point delta an ordinary ranked result gets.
+    const effectiveDelta = entry.gamesPlayedThisSeason < PLACEMENT_GAMES ? Math.round(mmrDelta * PLACEMENT_MMR_AMPLIFIER) : mmrDelta;
+    const nextMmr = Math.max(0, entry.mmr + effectiveDelta);
     const nextEntry: ProMmrEntry = { ...entry, mmr: nextMmr, peakMmr: Math.max(entry.peakMmr, nextMmr) };
     const nextTable = { ...state.mmr, [proName]: { ...state.mmr[proName], [queue]: nextEntry } };
     set({ mmr: nextTable });

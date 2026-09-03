@@ -13,7 +13,7 @@ import type { QueueMode } from "@/data/mockSave";
 import type { ProRegion } from "@/data/proPlayers";
 import { regionalGrinderRoster, type RosterBand } from "@/data/regionalGrinders";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
-import { softResetMmr, seasonActivityMultiplier, AI_PLACEMENT_GAMES_REQUIRED } from "@/data/seasons";
+import { softResetMmr, seasonActivityMultiplier, AI_PLACEMENT_GAMES_REQUIRED, PLACEMENT_MMR_AMPLIFIER } from "@/data/seasons";
 
 const STORAGE_KEY_PREFIX = "rl-sim:regional-roster-v1";
 
@@ -304,7 +304,11 @@ export const useRegionalRosterStore = create<RegionalRosterState>((set, get) => 
     const existing = state.mmr[region]?.[name]?.[queue];
     const rawEntry = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, region, grinder.band, queue, era, currentYear, seasonStartDate, existing);
     const entry = typeof rawEntry.peakMmr === "number" ? rawEntry : { ...rawEntry, peakMmr: rawEntry.mmr };
-    const nextMmr = Math.max(0, entry.mmr + mmrDelta);
+    // Still mid-placement this season — a real match played directly against this grinder should swing them
+    // the same amplified way a real placement result would, not the flat few-point delta an ordinary ranked
+    // result gets.
+    const effectiveDelta = entry.gamesPlayedThisSeason < PLACEMENT_GAMES ? Math.round(mmrDelta * PLACEMENT_MMR_AMPLIFIER) : mmrDelta;
+    const nextMmr = Math.max(0, entry.mmr + effectiveDelta);
     const nextEntry: RosterMmrEntry = { ...entry, mmr: nextMmr, peakMmr: Math.max(entry.peakMmr, nextMmr) };
     const nextTable: RosterMmrTable = { ...state.mmr, [region]: { ...state.mmr[region], [name]: { ...state.mmr[region]?.[name], [queue]: nextEntry } } };
     set({ mmr: nextTable });

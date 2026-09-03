@@ -24,6 +24,14 @@ export const SEASON_LENGTH_DAYS = 84; // 12 weeks, "a few months" per the origin
 // re-ranked the moment a season resets.
 export const AI_PLACEMENT_GAMES_REQUIRED = 10;
 
+// Placement matches swing MMR harder than normal ranked ones, same idea as real RL — shared by the player's
+// own placements (useSaveStore.ts) and, for the exact same reason ("AI go through placements too, same as
+// the player"), tracked AI applying a REAL match result while still under AI_PLACEMENT_GAMES_REQUIRED (see
+// useProLeaderboardStore.ts/useRegionalRosterStore.ts/useLeaderboardFillerStore.ts's own applyResult) —
+// without this, a match played directly against an AI who's mid-placement moved their MMR by the same flat
+// few points an ordinary match does, when it should swing like a real placement result.
+export const PLACEMENT_MMR_AMPLIFIER = 2.5;
+
 export function seasonEndDate(seasonStartDate: SimDate): SimDate {
   return addDays(seasonStartDate, SEASON_LENGTH_DAYS);
 }

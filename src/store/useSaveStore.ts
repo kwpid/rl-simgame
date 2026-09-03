@@ -17,7 +17,9 @@ import {
 import { TACTICAL_FOUNDATION_CATEGORIES, type FoundationCategory } from "@/data/mechanics";
 import { addDays, daysBetween, type SimDate } from "@/data/dateUtils";
 import { eraForDate, deriveRankFromMmr, divisionProgressFromMmr, tierRank, type RankTierId, type RankEra } from "@/data/rankSystem";
-import { SEASON_LENGTH_DAYS, seasonEndDate, seasonTitlesFor, softResetMmr, applyRewardProgress, rewardTierSequence, REWARD_WINS_REQUIRED, type TitleEntry } from "@/data/seasons";
+import { SEASON_LENGTH_DAYS, seasonEndDate, seasonTitlesFor, softResetMmr, applyRewardProgress, rewardTierSequence, REWARD_WINS_REQUIRED, PLACEMENT_MMR_AMPLIFIER, type TitleEntry } from "@/data/seasons";
+
+export { PLACEMENT_MMR_AMPLIFIER };
 import { STREAMERS, eligibleStreamers, pickShowmatchOpponent } from "@/data/showmatches";
 import {
   meetsOrgRankRequirement,
@@ -75,7 +77,6 @@ const WIN_XP = 180;
 const LOSS_XP = 70;
 const QUEUE_XP_MULTIPLIER: Record<QueueMode, number> = { "1v1": 1.3, "2v2": 1.0, "3v3": 0.85 };
 const XP_CURVE_GROWTH = 1.12; // each level requires ~12% more XP than the last
-export const PLACEMENT_MMR_AMPLIFIER = 2.5; // placement matches swing MMR harder, same idea as real RL
 const RECENT_MATCHES_LIMIT = 10;
 
 // Skill Points come from two sources: a small flat award for just playing ranked (win pays more than a
