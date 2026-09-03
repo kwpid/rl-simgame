@@ -381,11 +381,17 @@ function generateRoster(
   const bringParty = partyMemberNames.length > 0 && perTeam > 1 && partyMemberNames.length < perTeam;
   const partyNames = bringParty ? partyMemberNames : [];
   const selfPartyId = bringParty ? `self+${partyNames.join("+")}` : undefined;
+  // The player isn't always blue — a real 50/50 coinflip per match (see finalizeFoundMatch/
+  // startTournamentSeries for the other match-start paths), the opposing team is always whichever side
+  // this isn't. Rolled once here and never touched again for the rest of this match/series (continueSeries
+  // reuses the same `players` array untouched), so team colors stay consistent across every game.
+  const selfTeam: "blue" | "orange" = Math.random() < 0.5 ? "blue" : "orange";
+  const oppTeam: "blue" | "orange" = selfTeam === "blue" ? "orange" : "blue";
 
   const players: MatchPlayer[] = [
     {
       name: self.name,
-      team: "blue",
+      team: selfTeam,
       isSelf: true,
       gameSense: self.gameSense,
       mechanicalConsistency: self.mechanicalConsistency,
@@ -400,7 +406,7 @@ function generateRoster(
     },
   ];
 
-  let blueSlotsRemaining = perTeam - 1;
+  let selfSlotsRemaining = perTeam - 1;
   for (const partyName of partyNames) {
     used.add(partyName);
     const pro = PRO_PLAYERS.find((p) => p.name === partyName);
@@ -414,12 +420,12 @@ function generateRoster(
           ? useLeaderboardFillerStore.getState().getMmr(partyName, queue, era, currentYear, currentDate, seasonStartDate)
           : undefined;
     const friendOverride = !pro && !grinderRegion && !isFiller ? friendStatsForQueue[partyName] : undefined;
-    const friendPlayer = buildOpponent(partyName, "blue", queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, leaderboardMmr, friendOverride, grinderRegion, rlcsTeamsResetSeed);
+    const friendPlayer = buildOpponent(partyName, selfTeam, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, leaderboardMmr, friendOverride, grinderRegion, rlcsTeamsResetSeed);
     players.push({ ...friendPlayer, partyId: selfPartyId });
-    blueSlotsRemaining--;
+    selfSlotsRemaining--;
   }
-  fillTeamSlots("blue", blueSlotsRemaining, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier, rlcsTeamsResetSeed);
-  fillTeamSlots("orange", perTeam, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier, rlcsTeamsResetSeed);
+  fillTeamSlots(selfTeam, selfSlotsRemaining, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier, rlcsTeamsResetSeed);
+  fillTeamSlots(oppTeam, perTeam, players, used, queue, rankTier, era, seasonNumber, currentYear, playerMmr, currentDate, seasonStartDate, regions, hourOfDay, bandMultiplier, rlcsTeamsResetSeed);
   return applyPartyFlavor(players);
 }
 
@@ -563,11 +569,15 @@ function tryRematchRoster(
     shuffled.push(picked.name);
   }
 
+  // Same 50/50 team-color coinflip as a normal fresh roster (see generateRoster) — a rematched lobby is
+  // still a brand-new match/series as far as color assignment goes.
+  const selfTeam: "blue" | "orange" = Math.random() < 0.5 ? "blue" : "orange";
+  const oppTeam: "blue" | "orange" = selfTeam === "blue" ? "orange" : "blue";
   const players: MatchPlayer[] = [
-    { name: self.name, team: "blue", isSelf: true, gameSense: self.gameSense, mechanicalConsistency: self.mechanicalConsistency, foundationStats: self.foundationStats, title: self.title, mmr: playerMmr, points: 0, duelMastery: self.duelMastery, orgTag: self.orgTag, region: self.region },
+    { name: self.name, team: selfTeam, isSelf: true, gameSense: self.gameSense, mechanicalConsistency: self.mechanicalConsistency, foundationStats: self.foundationStats, title: self.title, mmr: playerMmr, points: 0, duelMastery: self.duelMastery, orgTag: self.orgTag, region: self.region },
   ];
   shuffled.slice(0, totalSlots).forEach((name, i) => {
-    const team = i < perTeam - 1 ? "blue" : "orange";
+    const team = i < perTeam - 1 ? selfTeam : oppTeam;
     const pro = PRO_PLAYERS.find((p) => p.name === name);
     const grinderRegion = pro ? undefined : findGrinderRegion(name, currentYear);
     const leaderboardMmr = pro
@@ -1155,10 +1165,14 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       if (grinderRegion) return useRegionalRosterStore.getState().getStats(name, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate);
       return undefined;
     }
+    // Same 50/50 team-color coinflip as ranked (see generateRoster) — rolled once for the whole series,
+    // continueSeries never rebuilds `players` between games, so this stays consistent start to finish.
+    const selfTeam: "blue" | "orange" = Math.random() < 0.5 ? "blue" : "orange";
+    const oppTeam: "blue" | "orange" = selfTeam === "blue" ? "orange" : "blue";
     const players: MatchPlayer[] = [
       {
         name: self.name,
-        team: "blue",
+        team: selfTeam,
         isSelf: true,
         gameSense: self.gameSense,
         mechanicalConsistency: self.mechanicalConsistency,
@@ -1170,12 +1184,12 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         orgTag: self.orgTag,
         teamChemistry: self.teamChemistry,
       },
-      // Real named teammates (org scrims/tryouts) fill out the rest of the blue side at the same flat
+      // Real named teammates (org scrims/tryouts) fill out the rest of the player's side at the same flat
       // elite/competitive strength as the opponents below, rather than the player standing in alone. They're
       // signed to the exact same org as the player, so they always carry the player's own tag (and the same
       // team's chemistry) rather than whatever generateOpponentStats would have randomly assigned.
       ...teammateNames.map((name) => ({
-        ...generateOpponentStats(name, "blue" as const, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, tournamentPersistentStats(name), stageProgress),
+        ...generateOpponentStats(name, selfTeam, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, tournamentPersistentStats(name), stageProgress),
         points: 0,
         orgTag: self.orgTag,
         teamChemistry: self.teamChemistry,
@@ -1185,7 +1199,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       // Their team's chemistry (see aiTeamChemistryForDate) ramps with how far into the RLCS season it is,
       // not tracked per-team — no per-team scrim history exists for every generated AI team.
       ...opponentNames.map((name) => ({
-        ...generateOpponentStats(name, "orange" as const, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, tournamentPersistentStats(name), stageProgress),
+        ...generateOpponentStats(name, oppTeam, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, tournamentPersistentStats(name), stageProgress),
         points: 0,
         ...(opponentOrgTag ? { orgTag: opponentOrgTag } : {}),
         teamChemistry: queue === "3v3" ? aiTeamChemistryForDate(currentDate, seasonStartDate) : undefined,

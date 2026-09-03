@@ -542,9 +542,14 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
         }
         .roster {
           display: grid;
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: 1fr;
           gap: var(--space-3);
           margin-bottom: var(--space-4);
+        }
+        @media (min-width: 640px) {
+          .roster {
+            grid-template-columns: 1fr 1fr;
+          }
         }
         .roster-col {
           display: flex;
