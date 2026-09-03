@@ -625,6 +625,45 @@ function pickChallengeType(defender: MatchParticipantStats, teammateAvailable: b
   return "hard";
 }
 
+/** Weighted random pick shared by every "who actually wins the loose ball" contest in this engine (a
+ *  contested kickoff 50, a contested hard-challenge 50 mid-chain) — same shape each time: a handful of
+ *  candidates, each with a plain positive weight. */
+function weightedPick<T extends { weight: number }>(candidates: T[]): T {
+  const total = candidates.reduce((sum, c) => sum + c.weight, 0);
+  let roll = Math.random() * total;
+  for (const c of candidates) {
+    roll -= c.weight;
+    if (roll <= 0) return c;
+  }
+  return candidates[candidates.length - 1];
+}
+
+/** After winning a challenge/stall, the attacker doesn't always keep dribbling solo — real 2v2/3v3 at this
+ *  level constantly looks for the pass to set a teammate up, exactly the "second man finishes what the
+ *  first man started" pattern real high-level play lives on. Returns the new ball-carrier (unchanged if no
+ *  pass happens, or no teammate exists) plus whatever flavor line goes with it. A defender gets one shot at
+ *  reading/demoing the pass right as it arrives — if they land it, the receiver still comes away with the
+ *  ball (a real turnover here would be a bit much) but visibly worse for it, same "awkward touch" softening
+ *  a defended finish already gets elsewhere in this engine. */
+function maybePassToTeammate(
+  attacker: MatchParticipantStats,
+  attackingTeam: MatchParticipantStats[],
+  defender: MatchParticipantStats,
+  passChance: number
+): { attacker: MatchParticipantStats; lines: PossessionLogLine[]; awkward: boolean } {
+  const teammates = attackingTeam.filter((p) => p !== attacker);
+  if (teammates.length === 0 || Math.random() > passChance) return { attacker, lines: [], awkward: false };
+  const receiver = teammates[Math.floor(Math.random() * teammates.length)];
+  const lines: PossessionLogLine[] = [{ text: `${attacker.name} finds ${receiver.name} with a pass.` }];
+  const demoOnReceive = attemptDemo(defender, receiver, "reads the pass and demos");
+  if (demoOnReceive.demoed) {
+    lines.push(...demoOnReceive.lines);
+    lines.push({ text: `${receiver.name} still gets a touch, but it's an awkward one.` });
+    return { attacker: receiver, lines, awkward: true };
+  }
+  return { attacker: receiver, lines, awkward: false };
+}
+
 const DEMO_BASE_CHANCE = 0.05;
 
 /** A demo is "somewhat rare, not super uncommon" per the design brief — driven by aggression (a bolder
@@ -770,6 +809,12 @@ export function simulateTeamChain(
     // coinflip entirely — a team under siege can still snatch it back, this just makes it less likely.
     const blueChance = Math.max(0.12, Math.min(0.88, 0.5 + currentPressure / 400));
     attackingSide = Math.random() < blueChance ? "blue" : "orange";
+    // Neither side's actually been under any real pressure recently — a calm, neutral moment, real play
+    // at this point is mostly rotation/boost management, not a live challenge. Pure flavor, doesn't change
+    // who ends up attacking or any of the odds below.
+    if (Math.abs(currentPressure) < 12 && Math.random() < 0.2) {
+      lines.push({ text: "Both teams rotate and collect boost." });
+    }
   }
 
   const attackingTeam = attackingSide === "blue" ? blueTeam : orangeTeam;
@@ -803,7 +848,14 @@ export function simulateTeamChain(
     const challengeType = pickChallengeType(roles.challenger, teammateAvailable);
 
     if (challengeType === "stall") {
-      lines.push({ text: `${roles.challenger.name} holds off, backing toward goal and waiting for ${roles.cover[0]?.name ?? "support"} to rotate in.` });
+      // Pure flavor half the time — a covering teammate on either side using the lull to actually go
+      // collect a pad reads as real background texture (this is what a stall's slower pace is FOR), never
+      // changes the odds below.
+      const attackingCover = attackingTeam.find((p) => p !== attacker);
+      const padLine = attackingCover && Math.random() < 0.5
+        ? `${attackingCover.name} peels wide to collect pads while ${roles.challenger.name} shadows.`
+        : `${roles.challenger.name} holds off, backing toward goal and waiting for ${roles.cover[0]?.name ?? "support"} to rotate in.`;
+      lines.push({ text: padLine });
       pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 14);
       // A stall buys the attacker a free look but doesn't hand them the ball outright — decide fast
       // whether they cash in now or the chain keeps going (another beat, possibly a different attacker).
@@ -844,6 +896,9 @@ export function simulateTeamChain(
       }
       lines.push({ text: `${attacker.name} works around the shadow and keeps possession.` });
       pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 12);
+      const passed = maybePassToTeammate(attacker, attackingTeam, roles.challenger, 0.3);
+      lines.push(...passed.lines);
+      attacker = passed.attacker;
       continue;
     }
 
@@ -862,6 +917,28 @@ export function simulateTeamChain(
       attacker.foundationStats.carControl + attacker.gameSense * 0.15,
       roles.challenger.foundationStats.defense + roles.challenger.gameSense * 0.1 + defBoost
     );
+    // A genuinely close 50 doesn't just get handed to one side outright — the ball pops up loose and
+    // ANYONE nearby (either side's covering teammate included) gets a real crack at it, same shape as a
+    // contested kickoff (see simulateKickoffBeat). A clean, lopsided result skips straight to the plain
+    // win/lose below, matching how decisive a real mismatch actually reads.
+    if (Math.abs(contest - 0.5) < 0.12) {
+      lines.push({ text: `Contested 50 — the ball pops up loose.` });
+      const loose = weightedPick([
+        { player: attacker, forAttacker: true, weight: 1 },
+        { player: roles.challenger, forAttacker: false, weight: 1 },
+        ...attackingTeam.filter((p) => p !== attacker).map((p) => ({ player: p, forAttacker: true, weight: 0.55 + (effectivePlaystyle(p).rotationDiscipline - 50) / 150 })),
+        ...roles.cover.map((p) => ({ player: p, forAttacker: false, weight: 0.55 + (effectivePlaystyle(p).rotationDiscipline - 50) / 150 })),
+      ]);
+      if (loose.forAttacker) {
+        lines.push({ text: `${loose.player.name} wins the loose ball and keeps it alive.` });
+        attacker = loose.player;
+        pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 15);
+        continue;
+      }
+      lines.push({ text: `${loose.player.name} wins the loose ball and clears it away.` });
+      award(loose.player.name, 25);
+      return pack({ lines, outcome: "clear", pointsAwarded });
+    }
     if (Math.random() > contest) {
       lines.push({ text: `${roles.challenger.name} wins the challenge and clears it out.` });
       award(roles.challenger.name, 30);
@@ -869,6 +946,9 @@ export function simulateTeamChain(
     }
     lines.push({ text: `${attacker.name} wins the challenge and drives on.` });
     pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 22);
+    const passed = maybePassToTeammate(attacker, attackingTeam, roles.challenger, 0.35);
+    lines.push(...passed.lines);
+    attacker = passed.attacker;
     // A won hard challenge is the most decisive beat — good odds this converts straight into a shot.
     if (Math.random() < 0.3 + beat * 0.15) return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), teammateAvailable ? 1.05 : 1));
   }
