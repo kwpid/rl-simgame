@@ -20,8 +20,7 @@ import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
 import { useSaveStore } from "@/store/useSaveStore";
 import {
   generateOpponentStats,
-  simulatePossession,
-  simulateTeamPossession,
+  simulateTeamChain,
   simulateDuelPossession,
   prefersCounterAttack,
   flattenProgress,
@@ -748,6 +747,19 @@ interface MatchStoreState {
   duelNextAttacker: "blue" | "orange" | null;
   duelIsCounter: boolean;
 
+  /** 2v2/3v3-only: signed momentum, -100..100. Positive = blue is applying sustained pressure (orange
+   *  defending), negative = orange is. Magnitude is how bad the siege is, not just who's attacking — feeds
+   *  both which team is more likely to keep the ball next AND a small real odds nudge (see
+   *  data/matchSim.ts's `simulateTeamChain`), so a prolonged siege reads as genuinely more likely to end in
+   *  a goal, not just narrated that way. Resets to 0 on every goal and whenever a kickoff is next (see
+   *  `needsKickoff`). Unused (stays 0) in 1v1, which has its own separate counter-attack carry-over. */
+  pressure: number;
+  /** 2v2/3v3-only: true when the NEXT possession should open with a real kickoff beat (first touch up for
+   *  grabs) instead of a plain live-ball possession — set at match start, after every goal, and the instant
+   *  overtime begins, matching real RL's actual kickoff rules (saves/clears/whiffs never trigger one).
+   *  Consumed and cleared by the next possession tick. */
+  needsKickoff: boolean;
+
   /** Which real arena is the background for the CURRENT game (see data/maps.ts), or null before a match
    *  has ever started. Ranked rolls a fresh random unlocked map every time it pops (finalizeFoundMatch);
    *  a tournament series picks its whole `seriesMapIds` order up front (startTournamentSeries) and this
@@ -867,6 +879,8 @@ function startTicking(
     let fieldY = state.fieldY;
     let duelNextAttacker: "blue" | "orange" | null = null;
     let duelIsCounter = false;
+    let pressure = state.pressure;
+    let needsKickoff = state.needsKickoff;
 
     if (Math.random() < POSSESSION_CHANCE_PER_TICK) {
       let result: PossessionResult;
@@ -889,16 +903,17 @@ function startTicking(
             duelIsCounter = true;
           }
         }
-      } else if (state.queue === "2v2") {
-        const attackingTeam = Math.random() < 0.5 ? "blue" : "orange";
-        const attackers = players.filter((p) => p.team === attackingTeam);
-        const defenders = players.filter((p) => p.team !== attackingTeam);
-        result = simulateTeamPossession(attackers, defenders);
       } else {
-        const attackingTeam = Math.random() < 0.5 ? "blue" : "orange";
-        const attackers = players.filter((p) => p.team === attackingTeam);
-        const defenders = players.filter((p) => p.team !== attackingTeam);
-        result = simulatePossession(attackers, defenders);
+        // 2v2 and 3v3 both run through the same team-chain engine now — it reads team size straight off
+        // how many players are on each side, no separate branch needed. Pressure carries across
+        // possessions (see useMatchStore.ts's `pressure` doc comment); a kickoff is consumed here and
+        // cleared for every following possession until the next goal/overtime start sets it again.
+        const blueTeam = players.filter((p) => p.team === "blue");
+        const orangeTeam = players.filter((p) => p.team === "orange");
+        const chainResult = simulateTeamChain(blueTeam, orangeTeam, pressure, needsKickoff);
+        result = chainResult;
+        pressure = chainResult.pressure;
+        needsKickoff = false;
       }
 
       const clockText = state.overtime ? `OT ${clockLabel(nextOtSeconds)}` : clockLabel(nextClock);
@@ -920,6 +935,9 @@ function startTicking(
         if (result.scoringTeam === "blue") scoreBlue += 1;
         else scoreOrange += 1;
         if (result.actorName === selfName) selfGoals += 1;
+        // Every goal resets to a real kickoff — pressure means nothing once the ball's back on the dot.
+        pressure = 0;
+        needsKickoff = true;
       }
       if (result.outcome === "save" && result.actorName === selfName) {
         selfSaves += 1;
@@ -972,7 +990,8 @@ function startTicking(
       if (scoreBlue === scoreOrange) {
         // Regulation ends level: real RL goes to unlimited sudden-death overtime, not a shootout.
         log = [...log, { id: logIdCounter++, clockLabel: "OT", text: "Overtime! Next goal wins.", emphasis: true }].slice(-60);
-        set({ clockSeconds: 0, overtime: true, otSeconds: 0, players, scoreBlue, scoreOrange, log, selfGoals, selfSaves, fieldX, fieldY, duelNextAttacker, duelIsCounter });
+        // Ball resets on overtime same as after a goal — the next possession opens with a real kickoff.
+        set({ clockSeconds: 0, overtime: true, otSeconds: 0, players, scoreBlue, scoreOrange, log, selfGoals, selfSaves, fieldX, fieldY, duelNextAttacker, duelIsCounter, pressure: 0, needsKickoff: true });
         return;
       }
       clearAllTimers();
@@ -980,7 +999,7 @@ function startTicking(
       return;
     }
 
-    set({ clockSeconds: nextClock, otSeconds: nextOtSeconds, players, scoreBlue, scoreOrange, log, selfGoals, selfSaves, fieldX, fieldY, duelNextAttacker, duelIsCounter });
+    set({ clockSeconds: nextClock, otSeconds: nextOtSeconds, players, scoreBlue, scoreOrange, log, selfGoals, selfSaves, fieldX, fieldY, duelNextAttacker, duelIsCounter, pressure, needsKickoff });
   }, TICK_MS);
 }
 
@@ -1012,6 +1031,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   fieldY: 50,
   duelNextAttacker: null,
   duelIsCounter: false,
+  pressure: 0,
+  needsKickoff: true,
   mapId: null,
   seriesMapIds: [],
   matchVenue: "online",
@@ -1036,6 +1057,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       fieldY: 50,
       duelNextAttacker: null,
       duelIsCounter: false,
+      pressure: 0,
+      needsKickoff: true,
       estimatedQueueDurationsMs,
       searchStartedAt: Date.now(),
     });
@@ -1237,6 +1260,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       fieldY: 50,
       duelNextAttacker: null,
       duelIsCounter: false,
+      pressure: 0,
+      needsKickoff: true,
       seriesMapIds,
       mapId: seriesMapIds[0] ?? null,
       matchVenue: venue,
@@ -1275,6 +1300,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         fieldY: 50,
         duelNextAttacker: null,
         duelIsCounter: false,
+        pressure: 0,
+        needsKickoff: true,
       });
       onComplete?.(wonSeries);
       return;
@@ -1298,6 +1325,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       fieldY: 50,
       duelNextAttacker: null,
       duelIsCounter: false,
+      pressure: 0,
+      needsKickoff: true,
       mapId: state.seriesMapIds[state.seriesGameNumber] ?? state.mapId,
     });
     startTicking(set, get);
@@ -1329,6 +1358,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       fieldY: 50,
       duelNextAttacker: null,
       duelIsCounter: false,
+      pressure: 0,
+      needsKickoff: true,
     });
 
     // Auto-queue: immediately re-search the same queue(s), built fresh off the live save (rank/stats/party

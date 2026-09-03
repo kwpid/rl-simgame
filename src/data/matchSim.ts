@@ -447,10 +447,9 @@ function pickAttacker(attackers: MatchParticipantStats[]): MatchParticipantStats
   return attackers[attackers.length - 1];
 }
 
-// 3v3-only now: 2v2 moved to the team-chain engine (simulateTeamPossession) below, 1v1 has its own duel
-// engine further down. 3v3 stays on this single stat-checked step per possession for now, a third
-// teammate's rotation makes the "who's out of position" question different enough not to reuse the 2v2
-// last-man model as-is.
+// Shot "kind" for the finishing beat of a team chain (see simulateTeamChain below) — purely flavor/whiff-
+// profile at this point (aerial vs ground vs flick each have their own setup line and whiff curve), the
+// actual chain-of-events realism (kickoffs, roles, challenges, demos, pressure) lives in the chain engine.
 type ChainKind = "aerial" | "ground_flick" | "wall_read" | "fifty_fifty";
 
 function pickChainKind(attacker: MatchParticipantStats): ChainKind {
@@ -464,84 +463,10 @@ function pickChainKind(attacker: MatchParticipantStats): ChainKind {
   return "fifty_fifty";
 }
 
-export function simulatePossession(
-  attackingTeam: MatchParticipantStats[],
-  defendingTeam: MatchParticipantStats[]
-): PossessionResult {
-  const attacker = pickAttacker(attackingTeam);
-  const primaryDefender = pickDefender(defendingTeam);
-  const kind = pickChainKind(attacker);
-  const lines: PossessionLogLine[] = [];
-  const pointsAwarded: { name: string; amount: number }[] = [];
-
-  function award(name: string, amount: number) {
-    pointsAwarded.push({ name, amount });
-  }
-
-  if (kind === "aerial") {
-    lines.push({ text: `${attacker.name} goes up for an aerial.` });
-    const whiff = whiffChance(attacker, attacker.foundationStats.aerialControl, 0.4);
-    if (Math.random() < whiff) {
-      lines.push({ text: `${attacker.name} mistimes it and whiffs completely.` });
-      return { lines, outcome: "whiff", pointsAwarded };
-    }
-    lines.push({ text: `${primaryDefender.name} rotates back to challenge in the air.` });
-    const attackerAerialPower = attacker.foundationStats.aerialControl + attacker.foundationStats.offense * 0.3;
-    const defenderAerialPower = primaryDefender.foundationStats.defense + primaryDefender.foundationStats.aerialControl * 0.3;
-    if (Math.random() > statProbability(attackerAerialPower, defenderAerialPower)) {
-      lines.push({ text: `${primaryDefender.name} beats them to it and clears the ball.` });
-      award(primaryDefender.name, 30);
-      return { lines, outcome: "clear", pointsAwarded };
-    }
-    lines.push({ text: `${attacker.name} wins the aerial duel and redirects it on frame.` });
-    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.32);
-  }
-
-  if (kind === "wall_read") {
-    lines.push({ text: `${attacker.name} reads a ball rolling up the wall.` });
-    const whiff = whiffChance(attacker, attacker.foundationStats.carControl, 0.22);
-    if (Math.random() < whiff) {
-      lines.push({ text: `${attacker.name} mistimes the wall read and misses it entirely.` });
-      return { lines, outcome: "whiff", pointsAwarded };
-    }
-    const contest = statProbability(
-      attacker.foundationStats.carControl + attacker.gameSense * 0.2,
-      primaryDefender.foundationStats.defense
-    );
-    if (Math.random() > contest) {
-      lines.push({ text: `${primaryDefender.name} challenges first and knocks it away.` });
-      award(primaryDefender.name, 25);
-      return { lines, outcome: "clear", pointsAwarded };
-    }
-    lines.push({ text: `${attacker.name} controls it off the wall and drives toward goal.` });
-    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.22);
-  }
-
-  if (kind === "ground_flick") {
-    lines.push({ text: `${attacker.name} sets up a flick off the ground.` });
-    const whiff = whiffChance(attacker, attacker.foundationStats.carControl, 0.28);
-    if (Math.random() < whiff) {
-      lines.push({ text: `${attacker.name} fumbles the touch and loses the ball.` });
-      return { lines, outcome: "whiff", pointsAwarded };
-    }
-    lines.push({ text: `${attacker.name} pops it up and dodges into the flick.` });
-    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.28);
-  }
-
-  // fifty_fifty: a neutral ball both teams challenge, pure car control + a sliver of game sense.
-  lines.push({ text: `${attacker.name} and ${primaryDefender.name} challenge the 50/50.` });
-  const p1 = attacker.foundationStats.carControl + attacker.gameSense * 0.15;
-  const p2 = primaryDefender.foundationStats.carControl + primaryDefender.gameSense * 0.15;
-  if (Math.random() > statProbability(p1, p2)) {
-    lines.push({ text: `${primaryDefender.name} wins the challenge and sends it back the other way.` });
-    award(primaryDefender.name, 15);
-  } else {
-    lines.push({ text: `${attacker.name} wins the challenge and pushes forward.` });
-    award(attacker.name, 15);
-  }
-  return { lines, outcome: "clear", pointsAwarded };
-}
-
+/** The finishing beat of a team chain: a setup touch (kind-specific whiff/flavor) followed by the actual
+ *  shot-vs-save resolution. Split out from `simulateTeamChain` so the chain engine can reach this from
+ *  several different points (an early breakaway, a demo leaving the net empty, running out of advance
+ *  beats) without duplicating the setup-then-shoot shape each time. */
 function resolveFinish(
   attacker: MatchParticipantStats,
   defendingTeam: MatchParticipantStats[],
@@ -578,128 +503,311 @@ function resolveFinish(
   return { lines, outcome: "goal", scoringTeam: attacker.team, actorName: attacker.name, pointsAwarded };
 }
 
-// ============================================================================================
-// 2v2 team-chain engine: 2v2 is the main/most-played gamemode, so its possessions get the same short-chain
-// treatment as the 1v1 duel engine below (not the single stat-checked step simulatePossession above still
-// uses for 3v3), plus a team-specific beat that duel and 3v3 alike don't have: a SECOND teammate whose own
-// positioning matters. If they bite on a fake or get caught upfield, the primary defender is left as the
-// "last man" with no help, materially worse odds on the finish than defending with support behind them.
-// How often that actually happens scales off the teammate's own defense/game sense, not a flat chance, a
-// Platinum lobby's rotations are noticeably shakier than an SSL's.
-// ============================================================================================
-
-const TEAM_ROTATION_MISTAKE_BASE = 0.4;
-const TEAM_ROTATION_MISTAKE_MIN = 0.06;
-const TEAM_ROTATION_MISTAKE_MAX = 0.5;
-const TEAM_ROTATION_MISTAKE_SCALE = 11000;
-const LAST_MAN_DEFENSE_PENALTY = 0.72;
-const LAST_MAN_KEEPER_MULTIPLIER = 0.8;
-const SUPPORTED_KEEPER_MULTIPLIER = 1.05;
-
-export function simulateTeamPossession(
-  attackingTeam: MatchParticipantStats[],
-  defendingTeam: MatchParticipantStats[]
+/** Setup touch + finish, kind-specific whiff curve and flavor line, then delegates to `resolveFinish` for
+ *  the actual shot-vs-save. This is the "kind" flavor the old single-step 2v2/3v3 engines had, now just the
+ *  LAST beat of the richer chain in `simulateTeamChain` below instead of the whole possession. */
+function attemptFinish(
+  attacker: MatchParticipantStats,
+  defendingTeam: MatchParticipantStats[],
+  lines: PossessionLogLine[],
+  pointsAwarded: { name: string; amount: number }[],
+  kind: ChainKind,
+  keeperMultiplier: number
 ): PossessionResult {
-  const attacker = pickAttacker(attackingTeam);
-  const primaryDefender = pickDefender(defendingTeam);
-  const teammates = defendingTeam.filter((p) => p.name !== primaryDefender.name);
-  const teammate = teammates.length > 0 ? teammates[Math.floor(Math.random() * teammates.length)] : null;
-  const kind = pickChainKind(attacker);
+  if (kind === "aerial") {
+    lines.push({ text: `${attacker.name} goes up for an aerial finish.` });
+    const whiff = whiffChance(attacker, attacker.foundationStats.aerialControl, 0.32);
+    if (Math.random() < whiff) {
+      lines.push({ text: `${attacker.name} mistimes it and whiffs completely.` });
+      return { lines, outcome: "whiff", pointsAwarded };
+    }
+    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.3, keeperMultiplier);
+  }
+  if (kind === "wall_read") {
+    lines.push({ text: `${attacker.name} reads it off the wall and drives toward goal.` });
+    const whiff = whiffChance(attacker, attacker.foundationStats.carControl, 0.18);
+    if (Math.random() < whiff) {
+      lines.push({ text: `${attacker.name} mistimes the wall read and it skips away.` });
+      return { lines, outcome: "whiff", pointsAwarded };
+    }
+    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.2, keeperMultiplier);
+  }
+  if (kind === "ground_flick") {
+    lines.push({ text: `${attacker.name} pops it up for a flick.` });
+    const whiff = whiffChance(attacker, attacker.foundationStats.carControl, 0.24);
+    if (Math.random() < whiff) {
+      lines.push({ text: `${attacker.name} fumbles the touch and loses the ball.` });
+      return { lines, outcome: "whiff", pointsAwarded };
+    }
+    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.24, keeperMultiplier);
+  }
+  lines.push({ text: `${attacker.name} takes the shot straight on.` });
+  return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.18, keeperMultiplier);
+}
+
+// ============================================================================================
+// Team-chain engine: 2v2 and 3v3 both run through this now (1v1 keeps its own separate duel engine below,
+// a 1-on-1 has no rotation/role concept to model). A possession is a variable-length chain of beats —
+// roles (2v2: pressure+safety pair, 3v3: first/second/third man), a challenge-type decision (shadow/fake/
+// hard/stall) each beat, an occasional demo roll, and sustained PRESSURE that carries across possessions
+// (see useMatchStore.ts's `pressure`/`needsKickoff`) and feeds back into the odds — a prolonged siege
+// nudges the defense toward mistakes and the attack toward confidence, not just the narration. Nothing
+// forces a minimum or fixed length: a quick hard/fake challenge can end a chain in one beat, a team that
+// keeps beating challenges can string several together before the finish, capped only by
+// MAX_ADVANCE_BEATS as a safety valve. Kickoffs (after every goal and at the start of overtime) are their
+// own first beat that decides who actually gets the ball, replacing a blind coin flip.
+// ============================================================================================
+
+export interface TeamChainResult extends PossessionResult {
+  /** Updated signed pressure, -100..100, positive = blue applying it — feed this back in as
+   *  `currentPressure` on the next call. Resets toward 0 on a goal/kickoff, decays gradually otherwise. */
+  pressure: number;
+}
+
+const PRESSURE_CAP = 100;
+const MAX_ADVANCE_BEATS = 4;
+
+type ChallengeType = "shadow" | "fake" | "hard" | "stall";
+
+interface DefenderRoles {
+  /** Whoever's stepping up to contest this beat — "first man" in 3v3, the primary defender in 2v2. */
+  challenger: MatchParticipantStats;
+  /** Remaining teammates in rotation order — "second man"/"third man" in 3v3, the lone covering
+   *  teammate in 2v2. Empty only if this ever ran with a single defender (never happens in 2v2/3v3). */
+  cover: MatchParticipantStats[];
+}
+
+/** Whoever's best-positioned steps up to challenge — weighted toward defense/game sense, same spirit as
+ *  `pickAttacker`'s weighting on the other side of the ball. */
+function defenderRoles(defendingTeam: MatchParticipantStats[]): DefenderRoles {
+  const weights = defendingTeam.map((d) => d.foundationStats.defense + d.gameSense * 0.3 + 150);
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  let roll = Math.random() * total;
+  let idx = defendingTeam.length - 1;
+  for (let i = 0; i < defendingTeam.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) {
+      idx = i;
+      break;
+    }
+  }
+  const challenger = defendingTeam[idx];
+  return { challenger, cover: defendingTeam.filter((_, i) => i !== idx) };
+}
+
+/** Which kind of challenge the stepping-up defender goes for this beat — a real decision, not just "who's
+ *  closer": a disciplined rotator shadows more, an aggressive one goes hard more often, and stalling for a
+ *  teammate to arrive only makes sense when there IS a teammate still rotating in. */
+function pickChallengeType(defender: MatchParticipantStats, teammateAvailable: boolean): ChallengeType {
+  const style = effectivePlaystyle(defender);
+  const stallWeight = teammateAvailable ? Math.max(0, 0.15 + (50 - style.aggression) / 300) : 0;
+  const shadowWeight = Math.max(0.05, 0.3 + (style.rotationDiscipline - 50) / 300);
+  const fakeWeight = Math.max(0.05, 0.2 + (defender.gameSense - 1000) / 8000);
+  const hardWeight = Math.max(0.15, 0.35 + (style.aggression - 50) / 300);
+  const total = stallWeight + shadowWeight + fakeWeight + hardWeight;
+  let roll = Math.random() * total;
+  if ((roll -= stallWeight) <= 0) return "stall";
+  if ((roll -= shadowWeight) <= 0) return "shadow";
+  if ((roll -= fakeWeight) <= 0) return "fake";
+  return "hard";
+}
+
+const DEMO_BASE_CHANCE = 0.05;
+
+/** A demo is "somewhat rare, not super uncommon" per the design brief — driven by aggression (a bolder
+ *  player goes for the hit) and mechanical consistency (actually landing it clean), never a trainable
+ *  mechanic of its own. Whichever side lands one gets to skip straight past that beat's actual challenge. */
+function attemptDemo(actor: MatchParticipantStats, target: MatchParticipantStats, verb: string): { demoed: boolean; lines: PossessionLogLine[] } {
+  const style = effectivePlaystyle(actor);
+  const chance = Math.max(0.01, Math.min(0.12, DEMO_BASE_CHANCE + (style.aggression - 50) / 900 + actor.mechanicalConsistency / 40000));
+  if (Math.random() < chance) {
+    return { demoed: true, lines: [{ text: `${actor.name} ${verb} ${target.name} right as the play develops.` }] };
+  }
+  return { demoed: false, lines: [] };
+}
+
+type KickoffStrat = "standard" | "speed" | "cheat" | "fake";
+const KICKOFF_STRAT_LABEL: Record<KickoffStrat, string> = {
+  standard: "a standard approach",
+  speed: "a speedflip",
+  cheat: "a cheat, hanging back to bait the challenge",
+  fake: "a delayed fake",
+};
+
+/** Decides who gets first touch off a kickoff — occasional strats beyond the standard approach, gated a
+ *  little by mechanical consistency (a speedflip is only worth attempting reliably once you can land it),
+ *  "somewhat rare but not super uncommon" per the design brief. A botched speedflip is a real risk, not
+ *  just flavor: it actually costs that side effective power for the challenge. */
+function simulateKickoffBeat(blueTeam: MatchParticipantStats[], orangeTeam: MatchParticipantStats[]): { lines: PossessionLogLine[]; winnerSide: "blue" | "orange" } {
+  const blueTaker = pickAttacker(blueTeam);
+  const orangeTaker = pickAttacker(orangeTeam);
+
+  function pickStrat(taker: MatchParticipantStats): KickoffStrat {
+    const exoticChance = Math.min(0.3, 0.12 + taker.mechanicalConsistency / 12000);
+    const roll = Math.random();
+    if (roll < exoticChance * 0.3) return "cheat";
+    if (roll < exoticChance * 0.6) return "fake";
+    if (roll < exoticChance) return "speed";
+    return "standard";
+  }
+
+  const blueStrat = pickStrat(blueTaker);
+  const orangeStrat = pickStrat(orangeTaker);
+  const lines: PossessionLogLine[] = [
+    { text: `Kickoff: ${blueTaker.name} goes with ${KICKOFF_STRAT_LABEL[blueStrat]}, ${orangeTaker.name} goes with ${KICKOFF_STRAT_LABEL[orangeStrat]}.` },
+  ];
+
+  function power(taker: MatchParticipantStats, strat: KickoffStrat): number {
+    const base = taker.mechanicalConsistency * 0.5 + taker.foundationStats.carControl * 0.5;
+    if (strat === "speed") {
+      if (Math.random() < whiffChance(taker, taker.foundationStats.carControl, 0.16)) {
+        lines.push({ text: `${taker.name} fumbles the speedflip.` });
+        return base * 0.5;
+      }
+      return base * 1.1;
+    }
+    if (strat === "cheat") return base * 0.85; // hangs back by design, slower to first touch
+    if (strat === "fake") return base * 0.95;
+    return base;
+  }
+
+  const blueEff = power(blueTaker, blueStrat);
+  const orangeEff = power(orangeTaker, orangeStrat);
+  const winnerSide: "blue" | "orange" = Math.random() < statProbability(blueEff, orangeEff, 500) ? "blue" : "orange";
+  const winnerTaker = winnerSide === "blue" ? blueTaker : orangeTaker;
+  lines.push({ text: `${winnerTaker.name} gets there first and takes control off the kickoff.` });
+  return { lines, winnerSide };
+}
+
+/** Resolves one full possession as a variable-length chain of beats for 2v2/3v3, carrying signed pressure
+ *  in and back out. `isKickoff` runs a real kickoff beat first (deciding who even gets the ball) instead of
+ *  a blind coin flip — pass true after every goal and the instant overtime starts, see useMatchStore.ts's
+ *  `needsKickoff`. */
+export function simulateTeamChain(
+  blueTeam: MatchParticipantStats[],
+  orangeTeam: MatchParticipantStats[],
+  currentPressure: number,
+  isKickoff: boolean
+): TeamChainResult {
   const lines: PossessionLogLine[] = [];
   const pointsAwarded: { name: string; amount: number }[] = [];
   function award(name: string, amount: number) {
     pointsAwarded.push({ name, amount });
   }
 
-  let isLastMan = false;
-  let supportBonus = 0;
-  if (teammate) {
-    const rotationPower = teammate.foundationStats.defense * 0.5 + teammate.gameSense * 0.5;
-    // A disciplined rotator earns real relief here on top of raw stats — Rotation Discipline is exactly
-    // the trained tendency that keeps someone from ball-chasing into a bad spot in the first place.
-    const disciplineRelief = (effectivePlaystyle(teammate).rotationDiscipline - 50) / 300;
-    // Team chemistry (org rosters/RLCS teams only, see OrgContract.chemistry) is a SEPARATE axis from any
-    // individual's own discipline — a fresh, unproven roster still miscommunicates rotations even with
-    // individually disciplined players, baseline 70 (an established-but-unremarkable team) reads neutral so
-    // ordinary ranked matches (no team concept, teamChemistry undefined) are byte-for-byte unaffected.
-    const chemistryRelief = ((teammate.teamChemistry ?? 70) - 70) / 300;
-    const mistakeChance = Math.max(
-      TEAM_ROTATION_MISTAKE_MIN,
-      Math.min(TEAM_ROTATION_MISTAKE_MAX, TEAM_ROTATION_MISTAKE_BASE - rotationPower / TEAM_ROTATION_MISTAKE_SCALE - disciplineRelief - chemistryRelief)
-    );
-    isLastMan = Math.random() < mistakeChance;
-    if (isLastMan) {
-      lines.push({ text: `${teammate.name} bites on the fake and gets caught out of position, ${primaryDefender.name} is last man back.` });
-    } else {
-      lines.push({ text: `${teammate.name} rotates back to support ${primaryDefender.name}.` });
-      supportBonus = Math.min(600, 150 + rotationPower * 0.1);
-    }
-  }
-  const defBoost = (stat: number) => (isLastMan ? stat * LAST_MAN_DEFENSE_PENALTY : stat + supportBonus);
-  const keeperMultiplier = isLastMan ? LAST_MAN_KEEPER_MULTIPLIER : teammate ? SUPPORTED_KEEPER_MULTIPLIER : 1;
-
-  if (kind === "aerial") {
-    lines.push({ text: `${attacker.name} goes up for an aerial.` });
-    const whiff = whiffChance(attacker, attacker.foundationStats.aerialControl, 0.4);
-    if (Math.random() < whiff) {
-      lines.push({ text: `${attacker.name} mistimes it and whiffs completely.` });
-      return { lines, outcome: "whiff", pointsAwarded };
-    }
-    lines.push({ text: `${primaryDefender.name} rotates back to challenge in the air.` });
-    const attackerAerialPower = attacker.foundationStats.aerialControl + attacker.foundationStats.offense * 0.3;
-    const defenderAerialPower = defBoost(primaryDefender.foundationStats.defense + primaryDefender.foundationStats.aerialControl * 0.3);
-    if (Math.random() > statProbability(attackerAerialPower, defenderAerialPower)) {
-      lines.push({ text: `${primaryDefender.name} beats them to it and clears the ball.` });
-      award(primaryDefender.name, 30);
-      return { lines, outcome: "clear", pointsAwarded };
-    }
-    lines.push({ text: `${attacker.name} wins the aerial duel and redirects it on frame.` });
-    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.32, keeperMultiplier);
+  let attackingSide: "blue" | "orange";
+  if (isKickoff) {
+    const kickoff = simulateKickoffBeat(blueTeam, orangeTeam);
+    lines.push(...kickoff.lines);
+    attackingSide = kickoff.winnerSide;
+  } else {
+    // Pressure biases who's more likely to have/keep the ball this possession, but never removes the
+    // coinflip entirely — a team under siege can still snatch it back, this just makes it less likely.
+    const blueChance = Math.max(0.12, Math.min(0.88, 0.5 + currentPressure / 400));
+    attackingSide = Math.random() < blueChance ? "blue" : "orange";
   }
 
-  if (kind === "wall_read") {
-    lines.push({ text: `${attacker.name} reads a ball rolling up the wall.` });
-    const whiff = whiffChance(attacker, attacker.foundationStats.carControl, 0.22);
-    if (Math.random() < whiff) {
-      lines.push({ text: `${attacker.name} mistimes the wall read and misses it entirely.` });
-      return { lines, outcome: "whiff", pointsAwarded };
+  const attackingTeam = attackingSide === "blue" ? blueTeam : orangeTeam;
+  const defendingTeam = attackingSide === "blue" ? orangeTeam : blueTeam;
+  // Pressure re-expressed relative to whoever's actually attacking THIS possession — a kickoff always
+  // starts genuinely neutral regardless of what pressure carried over from before the last goal.
+  let pressureForAttacker = isKickoff ? 0 : attackingSide === "blue" ? currentPressure : -currentPressure;
+  function pack(result: PossessionResult): TeamChainResult {
+    const signed = attackingSide === "blue" ? pressureForAttacker : -pressureForAttacker;
+    return { ...result, pressure: Math.max(-PRESSURE_CAP, Math.min(PRESSURE_CAP, signed)) };
+  }
+
+  let attacker = pickAttacker(attackingTeam);
+
+  for (let beat = 0; beat < MAX_ADVANCE_BEATS; beat++) {
+    const roles = defenderRoles(defendingTeam);
+    const teammateAvailable = roles.cover.length > 0;
+
+    // Attacker can demo the stepping-up challenger before the challenge even happens, leaving the net
+    // effectively open (whoever's left covers alone, same worse-odds shape as a 2v2 last-man situation).
+    const attackerDemo = attemptDemo(attacker, roles.challenger, "lines up and demos");
+    if (attackerDemo.demoed) {
+      lines.push(...attackerDemo.lines);
+      pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 25);
+      return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), teammateAvailable ? 0.75 : 0.55));
     }
+
+    const challengeType = pickChallengeType(roles.challenger, teammateAvailable);
+
+    if (challengeType === "stall") {
+      lines.push({ text: `${roles.challenger.name} holds off, backing toward goal and waiting for ${roles.cover[0]?.name ?? "support"} to rotate in.` });
+      pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 14);
+      // A stall buys the attacker a free look but doesn't hand them the ball outright — decide fast
+      // whether they cash in now or the chain keeps going (another beat, possibly a different attacker).
+      if (Math.random() < 0.4) return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), 1));
+      if (teammateAvailable && Math.random() < 0.5) attacker = pickAttacker(attackingTeam);
+      continue;
+    }
+
+    if (challengeType === "fake") {
+      // The exact "opponent throws a quick challenge and messes up possession" case: a real chance this
+      // ends the chain immediately, a smaller chance the attacker reads through it clean for a big look.
+      lines.push({ text: `${roles.challenger.name} throws a soft fake challenge at ${attacker.name}.` });
+      const readThrough = statProbability(
+        attacker.gameSense + attacker.foundationStats.carControl * 0.2,
+        roles.challenger.gameSense + roles.challenger.foundationStats.defense * 0.15,
+        500
+      );
+      if (Math.random() > readThrough) {
+        lines.push({ text: `${attacker.name} bites on it and gives the ball away.` });
+        award(roles.challenger.name, 25);
+        return pack({ lines, outcome: "clear", pointsAwarded });
+      }
+      lines.push({ text: `${attacker.name} sees through the fake and pushes on.` });
+      pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 20);
+      continue;
+    }
+
+    if (challengeType === "shadow") {
+      lines.push({ text: `${roles.challenger.name} shadows, backing toward net instead of committing.` });
+      const contest = statProbability(
+        attacker.foundationStats.carControl + attacker.gameSense * 0.2,
+        roles.challenger.foundationStats.defense + roles.challenger.gameSense * 0.15
+      );
+      if (Math.random() > contest) {
+        lines.push({ text: `${roles.challenger.name} stays patient and forces a bad touch, clearing it away.` });
+        award(roles.challenger.name, 25);
+        return pack({ lines, outcome: "clear", pointsAwarded });
+      }
+      lines.push({ text: `${attacker.name} works around the shadow and keeps possession.` });
+      pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 12);
+      continue;
+    }
+
+    // hard challenge: a full contest, can end the chain outright either way. A small chance the defender
+    // (not the attacker this time) lands the demo instead, an outright turnover.
+    const defenderDemo = attemptDemo(roles.challenger, attacker, "reads the challenge and demos");
+    if (defenderDemo.demoed) {
+      lines.push(...defenderDemo.lines);
+      award(roles.challenger.name, 30);
+      pressureForAttacker = Math.max(-PRESSURE_CAP, pressureForAttacker - 20);
+      return pack({ lines, outcome: "clear", pointsAwarded });
+    }
+    lines.push({ text: `${roles.challenger.name} steps up and challenges ${attacker.name} hard.` });
+    const defBoost = roles.cover.reduce((sum, c) => sum + c.foundationStats.defense * 0.05, 0);
     const contest = statProbability(
-      attacker.foundationStats.carControl + attacker.gameSense * 0.2,
-      defBoost(primaryDefender.foundationStats.defense)
+      attacker.foundationStats.carControl + attacker.gameSense * 0.15,
+      roles.challenger.foundationStats.defense + roles.challenger.gameSense * 0.1 + defBoost
     );
     if (Math.random() > contest) {
-      lines.push({ text: `${primaryDefender.name} challenges first and knocks it away.` });
-      award(primaryDefender.name, 25);
-      return { lines, outcome: "clear", pointsAwarded };
+      lines.push({ text: `${roles.challenger.name} wins the challenge and clears it out.` });
+      award(roles.challenger.name, 30);
+      return pack({ lines, outcome: "clear", pointsAwarded });
     }
-    lines.push({ text: `${attacker.name} controls it off the wall and drives toward goal.` });
-    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.22, keeperMultiplier);
+    lines.push({ text: `${attacker.name} wins the challenge and drives on.` });
+    pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 22);
+    // A won hard challenge is the most decisive beat — good odds this converts straight into a shot.
+    if (Math.random() < 0.3 + beat * 0.15) return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), teammateAvailable ? 1.05 : 1));
   }
 
-  if (kind === "ground_flick") {
-    lines.push({ text: `${attacker.name} sets up a flick off the ground.` });
-    const whiff = whiffChance(attacker, attacker.foundationStats.carControl, 0.28);
-    if (Math.random() < whiff) {
-      lines.push({ text: `${attacker.name} fumbles the touch and loses the ball.` });
-      return { lines, outcome: "whiff", pointsAwarded };
-    }
-    lines.push({ text: `${attacker.name} pops it up and dodges into the flick.` });
-    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.28, keeperMultiplier);
-  }
-
-  // fifty_fifty: a neutral ball both teams challenge, pure car control + a sliver of game sense.
-  lines.push({ text: `${attacker.name} and ${primaryDefender.name} challenge the 50/50.` });
-  const p1 = attacker.foundationStats.carControl + attacker.gameSense * 0.15;
-  const p2 = defBoost(primaryDefender.foundationStats.carControl + primaryDefender.gameSense * 0.15);
-  if (Math.random() > statProbability(p1, p2)) {
-    lines.push({ text: `${primaryDefender.name} wins the challenge and sends it back the other way.` });
-    award(primaryDefender.name, 15);
-  } else {
-    lines.push({ text: `${attacker.name} wins the challenge and pushes forward.` });
-    award(attacker.name, 15);
-  }
-  return { lines, outcome: "clear", pointsAwarded };
+  // Ran out of advance beats without a clean look or a turnover — the attacker cashes in whatever they've
+  // built up rather than looping forever, a supported keeper (still contested, no demo/breakaway bonus).
+  return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), 1));
 }
 
 // ============================================================================================
