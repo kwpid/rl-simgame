@@ -19,15 +19,6 @@ import { softResetMmr, seasonActivityMultiplier } from "@/data/seasons";
 
 const STORAGE_KEY = "rl-sim:pro-leaderboard-mmr-v3";
 
-// How much of a pro's rating/skill survives a season reset, same spirit as the player's own softResetMmr,
-// pros lose real ground each season and have to climb back, they just start closer to the top than a
-// regular player since they never truly left it.
-const RESET_COMPRESSION = 0.45;
-// Skill (Game Sense/Mechanical Consistency) also takes a "rust" hit at season start rather than snapping
-// straight back to full strength, climbing back through simulated games the same way MMR does — this is
-// what stops a fresh-season pro from showing max stats while still sitting at a depressed early rating.
-const STAT_RUST_FLOOR_FRACTION = 0.35;
-
 const GAMES_PER_DAY_MIN = 1.2;
 const GAMES_PER_DAY_SPREAD = 2.0;
 const PLACEMENT_GAMES = 10;
@@ -54,17 +45,6 @@ type ProMmrTable = Record<string, Partial<Record<QueueMode, ProMmrEntry>>>;
 
 function seasonKey(seasonStartDate: SimDate): string {
   return `${seasonStartDate.year}-${seasonStartDate.month}-${seasonStartDate.day}`;
-}
-
-/** This pro ladder's own reseed/catch-up cadence anchors to the RLCS calendar (one season = one calendar
- *  year, see data/tournaments.ts's `rlcsSeasonForDate`), NOT the player's ranked-ladder season (which
- *  resets every 84 days) — a ranked season rollover must never touch a pro's tracked MMR/stats, only the
- *  player's own rank does that. Every caller in this file still threads a `seasonStartDate` parameter
- *  through (kept so every existing call site across the codebase doesn't need touching), but it's
- *  intentionally ignored below in favor of this. Duplicated here (rather than importing
- *  `rlcsSeasonForDate`) to avoid a circular import — data/tournaments.ts itself imports this store. */
-function rlcsSeasonAnchor(year: number): SimDate {
-  return { year, month: 1, day: 1 };
 }
 
 function loadStored(): ProMmrTable {
@@ -106,9 +86,14 @@ function gamesPerDay(name: string): number {
   return GAMES_PER_DAY_MIN + ((hashString(name + "#pace")) % 100) / 100 * GAMES_PER_DAY_SPREAD;
 }
 
-/** Reseeds one pro/queue entry for a new season: their target MMR/skill ceiling is recomputed from
- *  career/experience, and their live MMR and skill both compress back toward a "rusty" starting point
- *  from wherever they ended last season (or start right at the floor if this is the first look-up ever). */
+/** Reseeds one pro/queue entry for a new RANKED season (the same 84-day cadence the player's own rank
+ *  resets on — global, everyone soft-resets together, see seasons.ts's SEASON_LENGTH_DAYS): their target
+ *  MMR/skill ceiling is recomputed from career/experience, and their live MMR soft-resets back toward a
+ *  "climbing back up" starting point from wherever they ended last season (or starts right at the target if
+ *  this is the first look-up ever) — the exact same treatment the player's own MMR gets every season. Game
+ *  Sense/Mechanical Consistency are real, persistent skill, NOT a per-season ladder number — a ranked
+ *  season reset never touches them at all, they just carry forward untouched and keep drifting toward
+ *  whatever the (possibly updated) target is via simulateForward below, same as any other day. */
 function reseedEntry(
   proName: string,
   queue: QueueMode,
@@ -130,23 +115,19 @@ function reseedEntry(
   const targetMechanicalConsistency = targetGameSense * 0.95;
 
   // A real season reset hits everyone's actual rank the same way, pro or not — the same soft reset
-  // (toward baseline 600, keeping 70% of the prior gap) the player's own MMR gets, not a separate, much
-  // milder compression toward a permanently-elite floor. Resetting from `previous.mmr` directly would let a
-  // pro who happened to be caught mid-climb (an entry only reseeds/simulates when actually queried, so it
-  // can be snapshotted anywhere between a past reset and its real target) get soft-reset from that partial,
-  // already-low number — compounding downward every season a pro isn't looked at often enough to fully
-  // catch up first, the "one pro sitting at 995 MMR" bug. Resetting from their best-demonstrated level
-  // instead (their all-time peak, or their current target if that's even higher after a career-growth
-  // re-seed) keeps every reset anchored to how good they actually are, not to catch-up timing luck.
+  // (toward baseline 600, keeping 70% of the prior gap) the player's own MMR gets. Resetting from
+  // `previous.mmr` directly would let a pro who happened to be caught mid-climb (an entry only reseeds/
+  // simulates when actually queried, so it can be snapshotted anywhere between a past reset and its real
+  // target) get soft-reset from that partial, already-low number — compounding downward every season a pro
+  // isn't looked at often enough to fully catch up first, the "one pro sitting at 995 MMR" bug. Resetting
+  // from their best-demonstrated level instead (their all-time peak, or their current target if that's even
+  // higher after a career-growth re-seed) keeps every reset anchored to how good they actually are, not to
+  // catch-up timing luck.
   const priorMmr = previous ? Math.max(previous.mmr, previous.peakMmr ?? previous.mmr, targetMmr) : targetMmr;
   const mmr = previous ? softResetMmr(priorMmr) : targetMmr;
 
-  const statFloor = targetGameSense * STAT_RUST_FLOOR_FRACTION;
-  const mechFloor = targetMechanicalConsistency * STAT_RUST_FLOOR_FRACTION;
-  const priorGameSense = previous ? previous.gameSense : targetGameSense;
-  const priorMech = previous ? previous.mechanicalConsistency : targetMechanicalConsistency;
-  const gameSense = Math.max(statFloor, Math.round(statFloor + (priorGameSense - statFloor) * RESET_COMPRESSION));
-  const mechanicalConsistency = Math.max(mechFloor, Math.round(mechFloor + (priorMech - mechFloor) * RESET_COMPRESSION));
+  const gameSense = previous ? previous.gameSense : targetGameSense;
+  const mechanicalConsistency = previous ? previous.mechanicalConsistency : targetMechanicalConsistency;
 
   return {
     mmr,
@@ -166,8 +147,8 @@ function reseedEntry(
  *  opponent near their own current rating, nudging MMR and letting skill close the gap toward their
  *  season target a little at a time — this is what makes the ladder feel like real people grinding rather
  *  than a smooth formula or a fresh random roll. */
-function simulateForward(entry: ProMmrEntry, proName: string, currentDate: SimDate): ProMmrEntry {
-  const daysIn = Math.max(0, daysBetween(rlcsSeasonAnchor(currentDate.year), currentDate));
+function simulateForward(entry: ProMmrEntry, proName: string, currentDate: SimDate, seasonStartDate: SimDate): ProMmrEntry {
+  const daysIn = Math.max(0, daysBetween(seasonStartDate, currentDate));
   // Real pros no-life ranked right after a reset to reclaim their rank, and again near season's end
   // grinding for rewards — see seasonActivityMultiplier's doc comment.
   const expectedGames = Math.floor(daysIn * gamesPerDay(proName) * seasonActivityMultiplier(daysIn));
@@ -222,14 +203,13 @@ function catchUp(
   era: RankEra,
   currentYear: number,
   currentDate: SimDate,
-  _seasonStartDate: SimDate
+  seasonStartDate: SimDate
 ): ProMmrEntry {
-  const anchor = rlcsSeasonAnchor(currentDate.year);
-  const key = seasonKey(anchor);
-  const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, anchor, existing);
+  const key = seasonKey(seasonStartDate);
+  const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, seasonStartDate, existing);
   // Guards against a pre-existing localStorage entry saved before `peakMmr` was tracked at all.
   const safeBase = typeof base.peakMmr === "number" ? base : { ...base, peakMmr: base.mmr };
-  return simulateForward(safeBase, proName, currentDate);
+  return simulateForward(safeBase, proName, currentDate, seasonStartDate);
 }
 
 interface ProLeaderboardState {
@@ -295,12 +275,11 @@ export const useProLeaderboardStore = create<ProLeaderboardState>((set, get) => 
     persist(nextTable);
   },
 
-  applyResult: (proName, queue, mmrDelta, era, currentYear, _seasonStartDate) => {
+  applyResult: (proName, queue, mmrDelta, era, currentYear, seasonStartDate) => {
     const state = get();
-    const anchor = rlcsSeasonAnchor(currentYear);
-    const key = seasonKey(anchor);
+    const key = seasonKey(seasonStartDate);
     const existing = state.mmr[proName]?.[queue];
-    const rawEntry = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, anchor, existing);
+    const rawEntry = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, seasonStartDate, existing);
     const entry = typeof rawEntry.peakMmr === "number" ? rawEntry : { ...rawEntry, peakMmr: rawEntry.mmr };
     const nextMmr = Math.max(0, entry.mmr + mmrDelta);
     const nextEntry: ProMmrEntry = { ...entry, mmr: nextMmr, peakMmr: Math.max(entry.peakMmr, nextMmr) };
@@ -309,14 +288,13 @@ export const useProLeaderboardStore = create<ProLeaderboardState>((set, get) => 
     persist(nextTable);
   },
 
-  resetAll: (era, currentYear, _seasonStartDate) => {
-    const anchor = rlcsSeasonAnchor(currentYear);
+  resetAll: (era, currentYear, seasonStartDate) => {
     const nextTable: ProMmrTable = {};
     for (const pro of PRO_PLAYERS) {
       if (pro.debutYear > currentYear) continue;
       const perQueue: Partial<Record<QueueMode, ProMmrEntry>> = {};
       (["1v1", "2v2", "3v3"] as QueueMode[]).forEach((queue) => {
-        perQueue[queue] = reseedEntry(pro.name, queue, era, currentYear, anchor, undefined);
+        perQueue[queue] = reseedEntry(pro.name, queue, era, currentYear, seasonStartDate, undefined);
       });
       nextTable[pro.name] = perQueue;
     }

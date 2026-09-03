@@ -275,7 +275,15 @@ export function RankedScreen() {
           </span>
           {(() => {
             const sequence = rewardTierSequence(era);
-            const nextTier = sequence[sequence.indexOf(s.rewardTierUnlocked) + 1];
+            // Every win credits every reward tier at-or-below the player's CURRENT live rank at once (see
+            // seasons.ts's applyRewardProgress), so a player who's already ranked well above the next
+            // sequential tier is really working toward THAT rank's own reward tier, not the lowest one
+            // still technically unclaimed — showing "toward Bronze" the whole way up to SSL just reads as a
+            // confusing jump once everything unlocks simultaneously. Whichever is further along wins.
+            const sequentialNextIdx = sequence.indexOf(s.rewardTierUnlocked) + 1;
+            const liveRankIdx = sequence.indexOf(profile.rankTier);
+            const nextTierIdx = Math.max(sequentialNextIdx, liveRankIdx);
+            const nextTier = nextTierIdx >= 0 && nextTierIdx < sequence.length ? sequence[nextTierIdx] : undefined;
             if (!nextTier) return <span className="reward-progress-count">Maxed out for this era</span>;
             const winsTowardNext = s.rewardProgressByTier[nextTier] ?? 0;
             return (

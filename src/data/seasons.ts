@@ -60,7 +60,12 @@ export interface TitleEntry {
 }
 
 /** Only Grand Champion and Supersonic Legend grant a season title, everything below gets nothing,
- *  same as real RL. Returns null if the peak tier this season didn't qualify. */
+ *  same as real RL. Returns null if the peak tier this season didn't qualify. Modern-era SSL is the ONE
+ *  exception `seasonTitlesFor` (below) cares about — reaching SSL necessarily means passing through GC that
+ *  same season, so that season's GC title belongs to you too, not just the SSL one. This single-title
+ *  function stays as the plain "what does THIS peak tier alone earn" building block (also used to look up
+ *  one specific title by id elsewhere), `seasonTitlesFor` is what callers granting/checking a season's
+ *  actual earned titles should use instead. */
 export function seasonTitleFor(seasonNumber: number, era: RankEra, peakTier: RankTierId): TitleEntry | null {
   if (era === "legacy") {
     if (peakTier === "grand_champion") {
@@ -75,6 +80,21 @@ export function seasonTitleFor(seasonNumber: number, era: RankEra, peakTier: Ran
     return { id: `season_modern_${seasonNumber}_gc`, label: `S${seasonNumber} GRAND CHAMPION`, glow: "red" };
   }
   return null;
+}
+
+/** Every title a given season's peak tier actually earns — modern-era SSL earns BOTH the SSL title and
+ *  that season's GC title (you can't reach SSL without passing through GC first), everything else earns at
+ *  most the one `seasonTitleFor` itself would return. Use this (not `seasonTitleFor` directly) anywhere a
+ *  season's real earned title inventory is being granted or built. */
+export function seasonTitlesFor(seasonNumber: number, era: RankEra, peakTier: RankTierId): TitleEntry[] {
+  const titles: TitleEntry[] = [];
+  if (era === "modern" && peakTier === "ssl") {
+    const gc = seasonTitleFor(seasonNumber, era, "grand_champion");
+    if (gc) titles.push(gc);
+  }
+  const own = seasonTitleFor(seasonNumber, era, peakTier);
+  if (own) titles.push(own);
+  return titles;
 }
 
 /** A soft reset compresses MMR toward the starting baseline rather than wiping it, a Champion doesn't
@@ -188,8 +208,11 @@ export function pickFictionalSeasonTitles(name: string, currentSeasonNumber: num
     const pastSeason = 1 + (hashString(`${name}#season_history_${i}`) % pastSeasonsAvailable);
     const tierRoll = hashString(`${name}#season_history_tier_${i}`) % 1000 / 1000;
     const peakTier: RankTierId = tierRoll < sslChance ? "ssl" : "grand_champion";
-    const title = seasonTitleFor(pastSeason, era, peakTier);
-    if (title) titles.push(title);
+    // A peak of SSL earns that season's GC title too (see seasonTitlesFor) — dedup'd since two different
+    // rolled seasons could otherwise coincidentally land on the same season number.
+    for (const title of seasonTitlesFor(pastSeason, era, peakTier)) {
+      if (!titles.some((t) => t.id === title.id)) titles.push(title);
+    }
   }
   return titles;
 }

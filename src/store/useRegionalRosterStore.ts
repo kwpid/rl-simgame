@@ -41,9 +41,6 @@ export function importRegionalRosterDataForSave(saveId: string, data: string | n
   }
 }
 
-const RESET_COMPRESSION = 0.45;
-const STAT_RUST_FLOOR_FRACTION = 0.35;
-
 const GAMES_PER_DAY_MIN = 1.0;
 const GAMES_PER_DAY_SPREAD = 1.6;
 const PLACEMENT_GAMES = 10;
@@ -84,18 +81,6 @@ type RosterMmrTable = Partial<Record<ProRegion, RegionMmrTable>>;
 
 function seasonKey(seasonStartDate: SimDate): string {
   return `${seasonStartDate.year}-${seasonStartDate.month}-${seasonStartDate.day}`;
-}
-
-/** This grinder roster's own reseed/catch-up cadence anchors to the RLCS calendar (one season = one
- *  calendar year, see data/tournaments.ts's `rlcsSeasonForDate`), NOT the player's ranked-ladder season
- *  (which resets every 84 days) — a ranked season rollover must never touch a grinder's tracked MMR/stats
- *  or, downstream, which real org roster they land on (see tournaments.ts's `eligibleRealPlayersForRegion`,
- *  which reads straight off this). Every caller in this file still threads a `seasonStartDate` parameter
- *  through (kept so every existing call site across the codebase doesn't need touching), but it's
- *  intentionally ignored below in favor of this. Duplicated here (rather than importing
- *  `rlcsSeasonForDate`) to avoid a circular import — data/tournaments.ts itself imports this store. */
-function rlcsSeasonAnchor(year: number): SimDate {
-  return { year, month: 1, day: 1 };
 }
 
 function gamesPerDay(name: string, region: ProRegion): number {
@@ -139,12 +124,11 @@ function reseedEntry(
   const priorMmr = previous ? Math.max(previous.mmr, previous.peakMmr ?? previous.mmr, targetMmr) : targetMmr;
   const mmr = previous ? softResetMmr(priorMmr) : targetMmr;
 
-  const statFloor = targetGameSense * STAT_RUST_FLOOR_FRACTION;
-  const mechFloor = targetMechanicalConsistency * STAT_RUST_FLOOR_FRACTION;
-  const priorGameSense = previous ? previous.gameSense : targetGameSense;
-  const priorMech = previous ? previous.mechanicalConsistency : targetMechanicalConsistency;
-  const gameSense = Math.max(statFloor, Math.round(statFloor + (priorGameSense - statFloor) * RESET_COMPRESSION));
-  const mechanicalConsistency = Math.max(mechFloor, Math.round(mechFloor + (priorMech - mechFloor) * RESET_COMPRESSION));
+  // Only MMR gets soft-reset each ranked season (the same global, everyone-at-once 84-day cadence the
+  // player's own rank resets on) — Game Sense/Mechanical Consistency are real persistent skill, not a
+  // per-season ladder number, so a season boundary never touches them, they just carry forward untouched.
+  const gameSense = previous ? previous.gameSense : targetGameSense;
+  const mechanicalConsistency = previous ? previous.mechanicalConsistency : targetMechanicalConsistency;
 
   return {
     mmr,
@@ -160,8 +144,8 @@ function reseedEntry(
   };
 }
 
-function simulateForward(entry: RosterMmrEntry, name: string, region: ProRegion, currentDate: SimDate): RosterMmrEntry {
-  const daysIn = Math.max(0, daysBetween(rlcsSeasonAnchor(currentDate.year), currentDate));
+function simulateForward(entry: RosterMmrEntry, name: string, region: ProRegion, currentDate: SimDate, seasonStartDate: SimDate): RosterMmrEntry {
+  const daysIn = Math.max(0, daysBetween(seasonStartDate, currentDate));
   // Real grinders no-life ranked right after a reset to reclaim their rank, and again near season's end
   // grinding for rewards — see seasonActivityMultiplier's doc comment.
   const expectedGames = Math.floor(daysIn * gamesPerDay(name, region) * seasonActivityMultiplier(daysIn));
@@ -214,14 +198,13 @@ function catchUp(
   era: RankEra,
   currentYear: number,
   currentDate: SimDate,
-  _seasonStartDate: SimDate
+  seasonStartDate: SimDate
 ): RosterMmrEntry {
-  const anchor = rlcsSeasonAnchor(currentDate.year);
-  const key = seasonKey(anchor);
-  const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, region, band, queue, era, currentYear, anchor, existing);
+  const key = seasonKey(seasonStartDate);
+  const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, region, band, queue, era, currentYear, seasonStartDate, existing);
   // Guards against a pre-existing localStorage entry saved before `peakMmr` was tracked at all.
   const safeBase = typeof base.peakMmr === "number" ? base : { ...base, peakMmr: base.mmr };
-  return simulateForward(safeBase, name, region, currentDate);
+  return simulateForward(safeBase, name, region, currentDate, seasonStartDate);
 }
 
 function loadStored(): RosterMmrTable {
@@ -313,14 +296,13 @@ export const useRegionalRosterStore = create<RegionalRosterState>((set, get) => 
     persist(nextTable);
   },
 
-  applyResult: (name, region, queue, mmrDelta, era, currentYear, _seasonStartDate) => {
+  applyResult: (name, region, queue, mmrDelta, era, currentYear, seasonStartDate) => {
     const grinder = findGrinder(name, region, currentYear);
     if (!grinder) return;
     const state = get();
-    const anchor = rlcsSeasonAnchor(currentYear);
-    const key = seasonKey(anchor);
+    const key = seasonKey(seasonStartDate);
     const existing = state.mmr[region]?.[name]?.[queue];
-    const rawEntry = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, region, grinder.band, queue, era, currentYear, anchor, existing);
+    const rawEntry = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, region, grinder.band, queue, era, currentYear, seasonStartDate, existing);
     const entry = typeof rawEntry.peakMmr === "number" ? rawEntry : { ...rawEntry, peakMmr: rawEntry.mmr };
     const nextMmr = Math.max(0, entry.mmr + mmrDelta);
     const nextEntry: RosterMmrEntry = { ...entry, mmr: nextMmr, peakMmr: Math.max(entry.peakMmr, nextMmr) };
@@ -329,8 +311,7 @@ export const useRegionalRosterStore = create<RegionalRosterState>((set, get) => 
     persist(nextTable);
   },
 
-  resetAll: (era, currentYear, _seasonStartDate) => {
-    const anchor = rlcsSeasonAnchor(currentYear);
+  resetAll: (era, currentYear, seasonStartDate) => {
     const nextTable: RosterMmrTable = {};
     const regions: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
     for (const region of regions) {
@@ -338,7 +319,7 @@ export const useRegionalRosterStore = create<RegionalRosterState>((set, get) => 
       for (const grinder of regionalGrinderRoster(region, currentYear)) {
         const perQueue: Partial<Record<QueueMode, RosterMmrEntry>> = {};
         (["1v1", "2v2", "3v3"] as QueueMode[]).forEach((queue) => {
-          perQueue[queue] = reseedEntry(grinder.name, region, grinder.band, queue, era, currentYear, anchor, undefined);
+          perQueue[queue] = reseedEntry(grinder.name, region, grinder.band, queue, era, currentYear, seasonStartDate, undefined);
         });
         regionTable[grinder.name] = perQueue;
       }

@@ -17,7 +17,7 @@ import {
 import { TACTICAL_FOUNDATION_CATEGORIES, type FoundationCategory } from "@/data/mechanics";
 import { addDays, daysBetween, type SimDate } from "@/data/dateUtils";
 import { eraForDate, deriveRankFromMmr, divisionProgressFromMmr, tierRank, type RankTierId, type RankEra } from "@/data/rankSystem";
-import { SEASON_LENGTH_DAYS, seasonEndDate, seasonTitleFor, softResetMmr, applyRewardProgress, rewardTierSequence, REWARD_WINS_REQUIRED, type TitleEntry } from "@/data/seasons";
+import { SEASON_LENGTH_DAYS, seasonEndDate, seasonTitlesFor, softResetMmr, applyRewardProgress, rewardTierSequence, REWARD_WINS_REQUIRED, type TitleEntry } from "@/data/seasons";
 import { STREAMERS, eligibleStreamers, pickShowmatchOpponent } from "@/data/showmatches";
 import {
   meetsOrgRankRequirement,
@@ -492,9 +492,13 @@ function processSeasonRollover(state: SaveData, newDate: SimDate): Partial<SaveD
     (Object.keys(rankedProfiles) as QueueMode[]).forEach((q) => {
       const p = rankedProfiles[q];
       seasonPeaks[q] = { tier: p.peakRankTier, division: p.peakDivision };
-      const earned = seasonTitleFor(seasonNumber, era, p.peakRankTier);
-      if (earned && !titles.some((t) => t.id === earned.id) && !newTitles.some((t) => t.id === earned.id)) {
-        newTitles.push(earned);
+      // Reaching SSL this season earns that season's GC title too (see seasonTitlesFor) — you can't reach
+      // SSL without passing through GC first, so a queue that peaked SSL grants both, one that peaked "only"
+      // GC still just grants the one.
+      for (const earned of seasonTitlesFor(seasonNumber, era, p.peakRankTier)) {
+        if (!titles.some((t) => t.id === earned.id) && !newTitles.some((t) => t.id === earned.id)) {
+          newTitles.push(earned);
+        }
       }
       nextProfiles[q] = {
         ...p,
