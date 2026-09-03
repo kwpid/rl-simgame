@@ -132,10 +132,15 @@ function pickRealOrgTeam(
   currentYear: number,
   era: RankEra,
   currentDate: SimDate,
-  resetSeed: number
+  resetSeed: number,
+  rankedSeasonStartDate: SimDate
 ): { orgName: string; teammates: [string, string] } | null {
-  const { seasonNumber, seasonStartDate } = rlcsSeasonForDate(currentDate);
-  const teams = generateTeamsForRegion(proRegion, currentYear, seasonNumber, resetSeed, "orginvite", era, currentDate, seasonStartDate);
+  // `seasonNumber` still comes from the RLCS schedule (it only seeds the team-lock jitter order), but the
+  // date fed into generateTeamsForRegion for its real pro/grinder MMR lookups must be the player's own
+  // ranked-ladder season anchor, matching every other caller of that shared leaderboard — see
+  // useTournamentStore.ts's createInstance doc comment for why mixing the two thrashes everyone's MMR.
+  const { seasonNumber } = rlcsSeasonForDate(currentDate);
+  const teams = generateTeamsForRegion(proRegion, currentYear, seasonNumber, resetSeed, "orginvite", era, currentDate, rankedSeasonStartDate);
   if (teams.length === 0) return null;
   const sorted = [...teams].sort((a, b) => b.power - a.power);
   const bucketSize = Math.max(1, Math.ceil(sorted.length / 3));
@@ -884,7 +889,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
 
     const tier = orgTierForTalent(talent.overallScore);
     const proRegion = saveRegionToProRegion(state.region);
-    const picked = pickRealOrgTeam(proRegion, tier, currentYear, era, currentDate, state.rlcsTeamsResetSeed);
+    const picked = pickRealOrgTeam(proRegion, tier, currentYear, era, currentDate, state.rlcsTeamsResetSeed, state.seasonStartDate);
     if (!picked) {
       set({ lastOrgScoutCheckDate: currentDate });
       return;
@@ -905,7 +910,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const talent = orgTalentDetail(era, currentYear, state.foundationStats, state.player.mechanicalConsistency["2v2"], state.player.gameSense["2v2"]);
     const tier = orgTierForTalent(talent.overallScore);
     const proRegion = saveRegionToProRegion(state.region);
-    const picked = pickRealOrgTeam(proRegion, tier, currentYear, era, currentDate, state.rlcsTeamsResetSeed);
+    const picked = pickRealOrgTeam(proRegion, tier, currentYear, era, currentDate, state.rlcsTeamsResetSeed, state.seasonStartDate);
     if (!picked) return; // no real team in this region yet (too early in a fresh save), nothing to force
     const invite: OrgInvite = {
       id: `org_${picked.orgName.replace(/\s+/g, "_")}_${currentDate.year}${currentDate.month}${currentDate.day}`,

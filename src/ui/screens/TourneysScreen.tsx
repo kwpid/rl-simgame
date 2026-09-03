@@ -132,7 +132,7 @@ export function TourneysScreen() {
   const addTitle = useSaveStore((st) => st.addTitle);
 
   useEffect(() => {
-    ensureProgress(currentDate, currentYear, s.startDate.year, s.rlcsTeamsResetSeed);
+    ensureProgress(currentDate, currentYear, s.startDate.year, s.rlcsTeamsResetSeed, s.seasonStartDate);
     Object.keys(instances).forEach((id) => {
       if (instances[id].playerTeamId) queuePlayerMatch(id, currentDate);
     });

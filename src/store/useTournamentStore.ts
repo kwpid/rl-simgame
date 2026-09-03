@@ -327,16 +327,26 @@ function resolveStage(instance: TournamentInstance, currentDate: SimDate): Stage
   return runGslGroupStage(instance.currentTeams, stage.advanceCount);
 }
 
-function createInstance(scheduled: ScheduledTournament, currentYear: number, seasonNumber: number, teamsResetSeed: number, currentDate: SimDate, seasonStartDate: SimDate): TournamentInstance {
+/** `aiSeasonStartDate` here is deliberately the player's own RANKED-LADDER season anchor, not the RLCS
+ *  schedule's own season start date, even though this function otherwise deals entirely in RLCS terms
+ *  (`seasonNumber`, `scheduled.startDate`, etc). The real pro/grinder MMR entries this reads via
+ *  `generateTeamsForRegion`/`generateGlobalTeams` (see tournaments.ts's `eligibleRealPlayersForRegion`) are
+ *  a single shared table keyed by `seasonStartKey` — every other caller of that same table (ranked
+ *  matchmaking, org invites) already keys off the ranked ladder's season, so feeding it the RLCS schedule's
+ *  differently-timed date here instead would make the SAME entries constantly reseed back and forth
+ *  between two disagreeing season anchors every time a different subsystem queried them, each reseed
+ *  landing near the fresh-reset floor — this was the actual cause of a thin region like MENA sometimes
+ *  fielding almost no real teams (everyone eligible kept getting caught below the org rank floor). */
+function createInstance(scheduled: ScheduledTournament, currentYear: number, seasonNumber: number, teamsResetSeed: number, currentDate: SimDate, aiSeasonStartDate: SimDate): TournamentInstance {
   const era = eraForDate(currentDate);
   const teams =
     scheduled.region === null
-      ? generateGlobalTeams(currentYear, seasonNumber, teamsResetSeed, scheduled.id, era, currentDate, seasonStartDate)
+      ? generateGlobalTeams(currentYear, seasonNumber, teamsResetSeed, scheduled.id, era, currentDate, aiSeasonStartDate)
       : scheduled.kind === "rlcs_1v1_regional"
         ? generateSoloEntrantsForRegion(scheduled.region, currentYear, scheduled.fieldSize, scheduled.id)
         : scheduled.kind === "rlrs_regional"
           ? generateRivalSeriesTeamsForRegion(scheduled.region, scheduled.fieldSize, scheduled.id)
-          : generateTeamsForRegion(scheduled.region, currentYear, seasonNumber, teamsResetSeed, scheduled.id, era, currentDate, seasonStartDate);
+          : generateTeamsForRegion(scheduled.region, currentYear, seasonNumber, teamsResetSeed, scheduled.id, era, currentDate, aiSeasonStartDate);
   const instance: TournamentInstance = {
     id: scheduled.id,
     kind: scheduled.kind,
@@ -722,8 +732,10 @@ interface TournamentStoreState {
   /** `saveStartYear` gates the very first RLCS season a fresh save reaches — see RLCS_FIRST_SEASON_DELAY_DAYS,
    *  every later season is unaffected. `teamsResetSeed` (see SaveData.rlcsTeamsResetSeed) feeds real team
    *  roster generation (see data/tournaments.ts's generateTeamsForRegion), bumped by the dev "Reset Teams"
-   *  tool to force a fresh deterministic roster shuffle. */
-  ensureProgress: (currentDate: SimDate, currentYear: number, saveStartYear: number, teamsResetSeed: number) => void;
+   *  tool to force a fresh deterministic roster shuffle. `rankedSeasonStartDate` is the player's own ranked-
+   *  ladder season anchor (useSaveStore's `seasonStartDate`) — deliberately NOT the RLCS schedule's own
+   *  season start date, see createInstance's doc comment for why the two must never be conflated. */
+  ensureProgress: (currentDate: SimDate, currentYear: number, saveStartYear: number, teamsResetSeed: number, rankedSeasonStartDate: SimDate) => void;
   /** Registers the player into an open instance, replacing a generic filler entrant with their own. */
   /** Registers the player into an open instance. `teammateNames` (org-signed 3v3 only) fills out the rest
    *  of the roster with the player's real org teammates instead of a lone entrant, replacing a same-size
@@ -763,7 +775,7 @@ interface TournamentStoreState {
 export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
   instances: loadStored(),
 
-  ensureProgress: (currentDate, currentYear, saveStartYear, teamsResetSeed) => {
+  ensureProgress: (currentDate, currentYear, saveStartYear, teamsResetSeed, rankedSeasonStartDate) => {
     const state = get();
     // effectiveRlcsSeason folds in both the fresh-save first-season on-ramp and a dev restart's on-ramp by
     // shifting the WHOLE anchor buildSeasonSchedule staggers regions from (see its own doc comment) — so
@@ -779,7 +791,7 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
       // (daysBetween(stageStartDate, currentDate) stays negative until then, see advanceInstance).
       if (daysBetween(item.startDate, currentDate) < -REGISTRATION_WINDOW_DAYS) continue;
       if (!next[item.id]) {
-        next[item.id] = createInstance(item, currentYear, seasonNumber, teamsResetSeed, currentDate, seasonStartDate);
+        next[item.id] = createInstance(item, currentYear, seasonNumber, teamsResetSeed, currentDate, rankedSeasonStartDate);
         changed = true;
         continue;
       }
