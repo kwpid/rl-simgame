@@ -13,7 +13,7 @@ import { PRO_PLAYERS, seedProMmr, hashString } from "@/data/proPlayers";
 import { proQueueStatCeiling, eloExpectedScore, eloKFactor } from "@/data/matchSim";
 import type { QueueMode } from "@/data/mockSave";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
-import { softResetMmr } from "@/data/seasons";
+import { softResetMmr, seasonActivityMultiplier } from "@/data/seasons";
 
 const STORAGE_KEY = "rl-sim:pro-leaderboard-mmr-v3";
 
@@ -126,7 +126,9 @@ function reseedEntry(
  *  than a smooth formula or a fresh random roll. */
 function simulateForward(entry: ProMmrEntry, proName: string, currentDate: SimDate, seasonStartDate: SimDate): ProMmrEntry {
   const daysIn = Math.max(0, daysBetween(seasonStartDate, currentDate));
-  const expectedGames = Math.floor(daysIn * gamesPerDay(proName));
+  // Real pros no-life ranked right after a reset to reclaim their rank, and again near season's end
+  // grinding for rewards — see seasonActivityMultiplier's doc comment.
+  const expectedGames = Math.floor(daysIn * gamesPerDay(proName) * seasonActivityMultiplier(daysIn));
   const gamesBehind = expectedGames - entry.gamesPlayedThisSeason;
   if (gamesBehind <= 0) return entry;
 

@@ -82,6 +82,19 @@ export function softResetMmr(mmr: number, baseline = 600, compressionFactor = 0.
   return Math.max(0, Math.round(baseline + (mmr - baseline) * compressionFactor));
 }
 
+/** How much faster than usual AI (pros, regional grinders, leaderboard names — see the simulateForward in
+ *  each of those stores) plays right now, as a multiplier on their normal games-per-day pace. Real ranked
+ *  activity is U-shaped across a season: a rush right after the reset to reclaim rank (real top players
+ *  no-life ranked for days to climb back to SSL), a calmer middle stretch, then another rush near the end
+ *  grinding for season rewards before they lock in. Without this, a season reset (see `softResetMmr`) drops
+ *  everyone — pro or not — well below the Top 50 leaderboard's rank floor, and the ordinary catch-up pace
+ *  alone leaves the board looking sparse/broken for weeks until they gradually climb back. */
+export function seasonActivityMultiplier(daysIntoSeason: number, seasonLengthDays: number = SEASON_LENGTH_DAYS): number {
+  const fraction = Math.max(0, Math.min(1, daysIntoSeason / seasonLengthDays));
+  const distanceFromMidpoint = Math.abs(fraction - 0.5) * 2; // 0 at the midpoint, 1 at either end
+  return 1 + distanceFromMidpoint * 3; // 1x at the calm midpoint, up to 4x right at the start/end
+}
+
 const REWARD_WINS_REQUIRED = 10;
 
 /** Reward tiers, Bronze through Champion always available, Grand Champion always available, SSL only

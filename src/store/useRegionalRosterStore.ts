@@ -13,7 +13,7 @@ import type { QueueMode } from "@/data/mockSave";
 import type { ProRegion } from "@/data/proPlayers";
 import { regionalGrinderRoster, type RosterBand } from "@/data/regionalGrinders";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
-import { softResetMmr } from "@/data/seasons";
+import { softResetMmr, seasonActivityMultiplier } from "@/data/seasons";
 
 const STORAGE_KEY_PREFIX = "rl-sim:regional-roster-v1";
 
@@ -117,7 +117,9 @@ function reseedEntry(
 
 function simulateForward(entry: RosterMmrEntry, name: string, region: ProRegion, currentDate: SimDate, seasonStartDate: SimDate): RosterMmrEntry {
   const daysIn = Math.max(0, daysBetween(seasonStartDate, currentDate));
-  const expectedGames = Math.floor(daysIn * gamesPerDay(name, region));
+  // Real grinders no-life ranked right after a reset to reclaim their rank, and again near season's end
+  // grinding for rewards — see seasonActivityMultiplier's doc comment.
+  const expectedGames = Math.floor(daysIn * gamesPerDay(name, region) * seasonActivityMultiplier(daysIn));
   const gamesBehind = expectedGames - entry.gamesPlayedThisSeason;
   if (gamesBehind <= 0) return entry;
 

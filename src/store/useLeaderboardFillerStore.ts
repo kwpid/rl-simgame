@@ -11,7 +11,7 @@ import { hashString } from "@/data/proPlayers";
 import { estimateGameSenseForMmr, eloExpectedScore, eloKFactor } from "@/data/matchSim";
 import { LB_NAMES, type QueueMode } from "@/data/mockSave";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
-import { softResetMmr } from "@/data/seasons";
+import { softResetMmr, seasonActivityMultiplier } from "@/data/seasons";
 
 const STORAGE_KEY = "rl-sim:leaderboard-filler-mmr-v2";
 
@@ -103,7 +103,9 @@ function reseedEntry(
 
 function simulateForward(entry: FillerMmrEntry, name: string, currentDate: SimDate, seasonStartDate: SimDate): FillerMmrEntry {
   const daysIn = Math.max(0, daysBetween(seasonStartDate, currentDate));
-  const expectedGames = Math.floor(daysIn * gamesPerDay(name));
+  // Real leaderboard names no-life ranked right after a reset to reclaim their rank, and again near
+  // season's end grinding for rewards — see seasonActivityMultiplier's doc comment.
+  const expectedGames = Math.floor(daysIn * gamesPerDay(name) * seasonActivityMultiplier(daysIn));
   const gamesBehind = expectedGames - entry.gamesPlayedThisSeason;
   if (gamesBehind <= 0) return entry;
 
