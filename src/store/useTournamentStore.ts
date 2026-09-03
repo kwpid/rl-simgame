@@ -1086,7 +1086,12 @@ export function findRealRlcsTitlesForPlayer(playerName: string, currentYear?: nu
   const titles: TitleEntry[] = [];
   for (const inst of Object.values(instances)) {
     if (!inst.completed) continue;
-    const entry = inst.lastStandings.find((e) => e.team.name === playerName);
+    // Team-based formats (2v2/3v3) name the team after its ORG, not any one player — matching only
+    // `team.name` meant an individual pro who genuinely won a 3v3 regional/major/Worlds in THIS save's own
+    // completed history was never credited for it here, only 1v1's solo-entrant teams (named after the
+    // player themselves) ever matched. Checking the roster too is what actually makes a past win traceable
+    // back to the real players who earned it.
+    const entry = inst.lastStandings.find((e) => e.team.name === playerName || e.team.players.includes(playerName));
     if (!entry || entry.placement === null) continue;
     const majorLocation = inst.kind === "rlcs_major" ? MAJOR_GROUPS.find((g) => inst.id.includes(`_${g.id}_`))?.location ?? null : null;
     const discipline: "1v1" | "3v3" = inst.currentTeams[0]?.players.length === 1 ? "1v1" : "3v3";

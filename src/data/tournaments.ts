@@ -504,25 +504,49 @@ export function rlcsSeasonPhase(date: SimDate): RlcsSeasonPhase {
  *  won, RLCS years the save itself never simulated. Only ever called for a real PRO_PLAYERS entry (never
  *  filler names), and follows the same "not guaranteed, just plausible" pattern as `pickAiTitle`: a roll
  *  for whether anything shows at all, then a roll for how big that past result was, both weighted toward
- *  more experienced/generational-talent pros getting better results more often. */
+ *  more experienced/generational-talent pros getting better results more often.
+ *
+ *  Fully deterministic (seeded off the pro's own name, never `Math.random()`) — this is meant to BE that
+ *  pro's real career history for every purpose that reads it (their shown title, and the MMR bonus in
+ *  `useProLeaderboardStore.ts`'s `reseedEntry` that makes a genuine past champion's ranked MMR actually
+ *  reflect that), so it has to come back identical every time it's asked, not re-roll a different past
+ *  for the same name from one query to the next. */
 export function pickFictionalPastRlcsTitle(pro: { name: string; debutYear: number }, currentRlcsYear: number): TitleEntry[] {
   const pastYearsAvailable = currentRlcsYear - pro.debutYear;
   if (pastYearsAvailable < 1) return [];
 
   const talentBonus = isGenerationalTalent(pro.name) ? 0.25 : 0;
   const showChance = 0.35 + talentBonus;
-  if (Math.random() > showChance) return [];
+  if (hashString(pro.name + "#history_show") % 1000 / 1000 > showChance) return [];
 
-  const pastYear = pro.debutYear + Math.floor(Math.random() * pastYearsAvailable);
-  const roll = Math.random();
+  const pastYear = pro.debutYear + (hashString(pro.name + "#history_year") % pastYearsAvailable);
+  const roll = hashString(pro.name + "#history_roll") % 1000 / 1000;
   if (roll < 0.05 + talentBonus * 0.1) return worldsTitlesEarned(pastYear, 1);
   if (roll < 0.15 + talentBonus * 0.15) return worldsTitlesEarned(pastYear, 4);
   if (roll < 0.3 + talentBonus * 0.15) {
-    const group = MAJOR_GROUPS[Math.floor(Math.random() * MAJOR_GROUPS.length)];
+    const group = MAJOR_GROUPS[hashString(pro.name + "#history_major") % MAJOR_GROUPS.length];
     return majorTitlesEarned(pastYear, 1, group.location);
   }
   if (roll < 0.55) return regionalTitlesEarned(pastYear, 1);
   return regionalTitlesEarned(pastYear, 8);
+}
+
+/** Numeric weight of a title cascade for feeding a real MMR bonus — highest tier actually earned wins,
+ *  nothing stacks (a Worlds champion's cascade also contains lesser Contender entries from the same run,
+ *  those shouldn't add on top of the champion bonus itself). Used by `useProLeaderboardStore.ts`'s
+ *  `reseedEntry` to make a pro's 3v3 MMR (their real competitive queue, unlike the 1v1/2v2 ranked grind
+ *  the rest of `seedProMmr` models) actually track whether they've genuinely won anything, instead of
+ *  a title being pure cosmetic flavor completely disconnected from how "good" their ranked numbers look. */
+export function rlcsTitleMmrBonus(titles: TitleEntry[]): number {
+  let best = 0;
+  for (const t of titles) {
+    if (t.id.includes("_worlds_champ")) best = Math.max(best, 260);
+    else if (t.id.includes("_major_") && t.id.endsWith("_champ")) best = Math.max(best, 170);
+    else if (t.id.includes("_worlds_elite")) best = Math.max(best, 110);
+    else if (t.id.includes("_regional_champ")) best = Math.max(best, 90);
+    else if (t.id.includes("_regional_contender") || (t.id.includes("_major_") && t.id.endsWith("_contender"))) best = Math.max(best, 40);
+  }
+  return best;
 }
 
 /** Builds the full schedule of tournaments for one RLCS season: a qualifier per region staggered across

@@ -15,6 +15,7 @@ import { useLeaderboardFillerStore } from "@/store/useLeaderboardFillerStore";
 import { useTournamentStore } from "@/store/useTournamentStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 import { rlcsSeasonForDate } from "@/data/tournaments";
+import { seasonTitleFor } from "@/data/seasons";
 
 const DEV_MODE_KEY = "rl-sim:dev-mode";
 const REWARD_TIER_OPTIONS: RankTierId[] = [
@@ -322,6 +323,7 @@ function DeveloperToolsSection() {
   const releaseOrgContract = useSaveStore((store) => store.releaseOrgContract);
   const recordOrgTryoutScrim = useSaveStore((store) => store.recordOrgTryoutScrim);
   const recordOrgScrimResult = useSaveStore((store) => store.recordOrgScrimResult);
+  const addTitle = useSaveStore((store) => store.addTitle);
 
   const [mmrQueue, setMmrQueue] = useState<QueueMode>("2v2");
   const [mmrValue, setMmrValue] = useState(String(s.rankedProfiles["2v2"].mmr));
@@ -331,6 +333,8 @@ function DeveloperToolsSection() {
   const [rewardTier, setRewardTier] = useState<RankTierId>(s.rewardTierUnlocked);
   const [rewardWins, setRewardWins] = useState("0");
   const [seasonNumberValue, setSeasonNumberValue] = useState(String(s.seasonNumber));
+  const [titleSeasonValue, setTitleSeasonValue] = useState(String(s.seasonNumber));
+  const [titleTier, setTitleTier] = useState<"grand_champion" | "ssl">("ssl");
   const [careerStatsQueue, setCareerStatsQueue] = useState<QueueMode>("2v2");
   const [careerWinsValue, setCareerWinsValue] = useState(String(s.careerStats["2v2"].wins));
   const [careerLossesValue, setCareerLossesValue] = useState(String(s.careerStats["2v2"].losses));
@@ -651,6 +655,38 @@ function DeveloperToolsSection() {
               />
               <button className="dev-btn" onClick={() => devSetSeasonNumber(Number(seasonNumberValue) || 1)}>
                 Set (AI titles from earlier seasons show up automatically)
+              </button>
+            </div>
+          </div>
+
+          <div className="dev-tools-group">
+            <span className="dev-tools-label">Give Yourself a Title</span>
+            <div className="dev-tools-row">
+              <input
+                className="dev-input"
+                type="number"
+                min={1}
+                value={titleSeasonValue}
+                onChange={(e) => setTitleSeasonValue(e.target.value)}
+                title="Which season number this title is for"
+              />
+              <select className="dev-select" value={titleTier} onChange={(e) => setTitleTier(e.target.value as "grand_champion" | "ssl")}>
+                <option value="grand_champion">Grand Champion</option>
+                <option value="ssl">Supersonic Legend</option>
+              </select>
+              <button
+                className="dev-btn"
+                onClick={() => {
+                  const seasonNum = Math.max(1, Math.round(Number(titleSeasonValue) || 1));
+                  const era = eraForDate(s.currentDate);
+                  // Legacy has no SSL, granting one there just falls back to the legacy GC title instead of
+                  // silently producing a title that couldn't have existed yet.
+                  const tier = era === "legacy" ? "grand_champion" : titleTier;
+                  const title = seasonTitleFor(seasonNum, era, tier);
+                  if (title) addTitle(title);
+                }}
+              >
+                Grant Season Title
               </button>
             </div>
           </div>

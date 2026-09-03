@@ -3,10 +3,12 @@ import { useAiProfileStore } from "@/store/useAiProfileStore";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
+import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
 import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { regionalGrinderRoster } from "@/data/regionalGrinders";
 import { QUEUES, QUEUE_LABELS } from "@/data/queues";
 import { eraForDate, deriveRankFromMmr, TIER_LABELS } from "@/data/rankSystem";
+import { glowColor } from "@/data/seasons";
 import { REGION_LABELS as PRO_REGION_LABELS } from "@/data/tournaments";
 import { RankBadge } from "./RankBadge";
 import { Card } from "./Card";
@@ -45,6 +47,14 @@ export function AiProfileModal() {
 
   const region = pro?.region ?? grinderRegion;
   const isKnown = !!pro || !!grinderRegion;
+  // Real earned RLCS history (scanned from this save's own completed tournaments) falling back to a
+  // plausible-but-fictional past career for a veteran pro on a save that started mid-timeline — see
+  // findRealRlcsTitlesForPlayer's own doc comment. Only pros have any RLCS history at all; regional
+  // grinders never enter RLCS itself. Deduped by id since a cascade (e.g. Contender + Champion from the
+  // same run) can otherwise repeat across scanned instances/seasons.
+  const careerTitles = pro
+    ? Array.from(new Map(findRealRlcsTitlesForPlayer(viewingName, currentYear).map((t) => [t.id, t])).values())
+    : [];
 
   return (
     <div className="ai-profile-backdrop" onClick={close}>
@@ -63,6 +73,17 @@ export function AiProfileModal() {
         {!isKnown ? (
           <div className="ai-profile-empty">No tracked stats for this player — just a name that showed up that match.</div>
         ) : (
+          <>
+          {careerTitles.length > 0 && (
+            <div className="ai-profile-career">
+              <div className="ai-profile-career-label">RLCS Career</div>
+              <div className="ai-profile-career-titles">
+                {careerTitles.map((t) => (
+                  <span key={t.id} className="ai-profile-career-title" style={{ color: glowColor(t.glow) }}>{t.label}</span>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="ai-profile-grid">
             {QUEUES.map((q) => {
               const entry = pro ? proMmrTable[viewingName]?.[q] : grinderRegion ? rosterMmrTable[grinderRegion]?.[viewingName]?.[q] : undefined;
@@ -86,6 +107,7 @@ export function AiProfileModal() {
               );
             })}
           </div>
+          </>
         )}
       </div>
 
@@ -137,6 +159,25 @@ export function AiProfileModal() {
         .ai-profile-empty {
           font-size: 13px;
           color: var(--text-tertiary);
+        }
+        .ai-profile-career {
+          margin-bottom: var(--space-4);
+        }
+        .ai-profile-career-label {
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          color: var(--text-tertiary);
+          margin-bottom: var(--space-2);
+        }
+        .ai-profile-career-titles {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+        .ai-profile-career-title {
+          font-size: 13px;
+          font-weight: 700;
         }
         .ai-profile-grid {
           display: grid;

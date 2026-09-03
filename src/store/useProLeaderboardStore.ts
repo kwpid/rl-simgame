@@ -11,6 +11,8 @@ import { create } from "zustand";
 import type { RankEra } from "@/data/rankSystem";
 import { PRO_PLAYERS, seedProMmr, hashString } from "@/data/proPlayers";
 import { proQueueStatCeiling, eloExpectedScore, eloKFactor } from "@/data/matchSim";
+import { rlcsTitleMmrBonus } from "@/data/tournaments";
+import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
 import type { QueueMode } from "@/data/mockSave";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
 import { softResetMmr, seasonActivityMultiplier } from "@/data/seasons";
@@ -87,7 +89,14 @@ function reseedEntry(
   previous: ProMmrEntry | undefined
 ): ProMmrEntry {
   const pro = PRO_PLAYERS.find((p) => p.name === proName)!;
-  const targetMmr = seedProMmr(pro, era, currentYear)[queue];
+  // 3v3 is the one queue this pro's target MMR should actually reflect real RLCS results in — it's their
+  // literal competitive queue, unlike the 1v1/2v2 ranked grind the rest of `seedProMmr` models. Without
+  // this, a genuine Worlds/Major champion (real completed history this save produced, or a plausible
+  // fictional past career for a veteran on a save that started mid-timeline — see
+  // `findRealRlcsTitlesForPlayer`) could still show a perfectly ordinary 3v3 MMR with zero connection to
+  // having actually won anything, which is exactly backwards for the one format that's supposed to prove it.
+  const rlcsTitleBonus = queue === "3v3" ? rlcsTitleMmrBonus(findRealRlcsTitlesForPlayer(proName, currentYear)) : 0;
+  const targetMmr = seedProMmr(pro, era, currentYear)[queue] + rlcsTitleBonus;
   const targetGameSense = proQueueStatCeiling(pro, currentYear, targetMmr, era, queue);
   const targetMechanicalConsistency = targetGameSense * 0.95;
 
