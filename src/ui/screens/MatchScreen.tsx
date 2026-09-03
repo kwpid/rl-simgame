@@ -17,6 +17,7 @@ import { OrgTag } from "@/ui/components/OrgTag";
 import { ARENA_MAPS, mapImagePath } from "@/data/maps";
 import { livePingMs } from "@/data/pingModel";
 import { displayNameFor, applyAltNameDisplay } from "@/data/altNames";
+import { Avatar } from "@/ui/components/Avatar";
 
 const ALL_MATCHMAKING_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
 
@@ -160,6 +161,7 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
   const recordMatchResult = useSaveStore((s) => s.recordMatchResult);
   const advanceMinutes = useSaveStore((s) => s.advanceMinutes);
   const currentDate = useSaveStore((s) => s.currentDate);
+  const playerPfp = useSaveStore((s) => s.playerPfp);
   const clockHour = useSaveStore((s) => s.clockHour);
   const seasonStartDate = useSaveStore((s) => s.seasonStartDate);
   const inPlacements = useSaveStore((s) => (queue ? s.rankedProfiles[queue].placementMatchesRemaining > 0 : false));
@@ -181,6 +183,28 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
   const blueTeam = players.filter((p) => p.team === "blue");
   const orangeTeam = players.filter((p) => p.team === "orange");
   const selfRegion = players.find((p) => p.isSelf)?.region;
+  // The lobby doesn't necessarily land on the player's OWN region's server — queueing across multiple
+  // selected regions (see RankedScreen's region multi-select) can match into someone else's. Approximated
+  // here as wherever most of the actual roster is from, since nothing upstream tracks a real "this match's
+  // server" field. Every row's ping (including the player's own) reads as THAT player's distance to this
+  // shared region, not a pairwise "distance to each other player" — a real lobby has one shared server
+  // everyone pings, not a different number for every pair of people in it.
+  const serverRegion = (() => {
+    const counts = new Map<ProRegion, number>();
+    for (const p of players) {
+      if (!p.region) continue;
+      counts.set(p.region, (counts.get(p.region) ?? 0) + 1);
+    }
+    let best: ProRegion | undefined;
+    let bestCount = 0;
+    for (const [region, count] of counts) {
+      if (count > bestCount) {
+        best = region;
+        bestCount = count;
+      }
+    }
+    return best ?? selfRegion;
+  })();
   // Only AI names are ever eligible for the alt-name display swap (see data/altNames.ts) — the player's
   // own name is never substituted.
   const aiNames = players.filter((p) => !p.isSelf).map((p) => p.name);
@@ -343,31 +367,41 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
         <div className="roster-col">
           {blueTeam.map((p) => (
             <div key={p.name} className={"roster-row roster-blue" + (p.isSelf ? " roster-self" : "")}>
-              <div className="roster-identity">
-                <span>
-                  {p.partyId && <PartyIcon />}
-                  {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} <OrgTag tag={p.orgTag} />
-                  {p.isSelf ? p.name : displayNameFor(p.name, currentDate, clockHour)}
-                </span>
-                {p.title && (
-                  <span
-                    className="roster-title"
-                    style={{ color: glowColor(p.title.glow) }}
-                  >
-                    {p.title.label}
+              <Avatar
+                name={p.name}
+                currentDate={currentDate}
+                size={40}
+                overrideUrl={p.isSelf ? playerPfp : undefined}
+                notable={p.isSelf}
+              />
+              <div className="roster-main">
+                <div className="roster-identity">
+                  <span>
+                    {p.partyId && <PartyIcon />}
+                    {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} <OrgTag tag={p.orgTag} />
+                    {p.isSelf ? p.name : displayNameFor(p.name, currentDate, clockHour)}
+                  </span>
+                  {p.title && (
+                    <span
+                      className="roster-title"
+                      style={{ color: glowColor(p.title.glow) }}
+                    >
+                      {p.title.label}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="roster-stats">
+                {!isSeriesMatch && serverRegion && (
+                  <span className="roster-ping">
+                    <Icon name="signal" size={11} />
+                    {livePingMs(p.region ?? serverRegion, serverRegion, p.name, clockSeconds)}
                   </span>
                 )}
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {!isSeriesMatch && !p.isSelf && selfRegion && (
-                  <span className="roster-ping">{livePingMs(selfRegion, p.region, p.name, clockSeconds)}ms</span>
-                )}
-                {phase === "post_match" && !isSeriesMatch ? (
+                {phase === "post_match" && !isSeriesMatch && (
                   <span className={"roster-mmr-delta" + (deltaForPlayer(p, blueDelta) > 0 ? " mmr-delta-up" : " mmr-delta-down")}>
                     {deltaForPlayer(p, blueDelta) > 0 ? `+${deltaForPlayer(p, blueDelta)}` : deltaForPlayer(p, blueDelta)}
                   </span>
-                ) : (
-                  <span className="roster-points">{p.points}</span>
                 )}
               </div>
             </div>
@@ -376,31 +410,41 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
         <div className="roster-col">
           {orangeTeam.map((p) => (
             <div key={p.name} className={"roster-row roster-orange" + (p.isSelf ? " roster-self" : "")}>
-              <div className="roster-identity">
-                <span>
-                  {p.partyId && <PartyIcon />}
-                  {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} <OrgTag tag={p.orgTag} />
-                  {p.isSelf ? p.name : displayNameFor(p.name, currentDate, clockHour)}
-                </span>
-                {p.title && (
-                  <span
-                    className="roster-title"
-                    style={{ color: glowColor(p.title.glow) }}
-                  >
-                    {p.title.label}
+              <Avatar
+                name={p.name}
+                currentDate={currentDate}
+                size={40}
+                overrideUrl={p.isSelf ? playerPfp : undefined}
+                notable={p.isSelf}
+              />
+              <div className="roster-main">
+                <div className="roster-identity">
+                  <span>
+                    {p.partyId && <PartyIcon />}
+                    {!isSeriesMatch && <span className="roster-mmr">[{p.mmr}]</span>} <OrgTag tag={p.orgTag} />
+                    {p.isSelf ? p.name : displayNameFor(p.name, currentDate, clockHour)}
+                  </span>
+                  {p.title && (
+                    <span
+                      className="roster-title"
+                      style={{ color: glowColor(p.title.glow) }}
+                    >
+                      {p.title.label}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="roster-stats">
+                {!isSeriesMatch && serverRegion && (
+                  <span className="roster-ping">
+                    <Icon name="signal" size={11} />
+                    {livePingMs(p.region ?? serverRegion, serverRegion, p.name, clockSeconds)}
                   </span>
                 )}
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {!isSeriesMatch && !p.isSelf && selfRegion && (
-                  <span className="roster-ping">{livePingMs(selfRegion, p.region, p.name, clockSeconds)}ms</span>
-                )}
-                {phase === "post_match" && !isSeriesMatch ? (
+                {phase === "post_match" && !isSeriesMatch && (
                   <span className={"roster-mmr-delta" + (deltaForPlayer(p, orangeDelta) > 0 ? " mmr-delta-up" : " mmr-delta-down")}>
                     {deltaForPlayer(p, orangeDelta) > 0 ? `+${deltaForPlayer(p, orangeDelta)}` : deltaForPlayer(p, orangeDelta)}
                   </span>
-                ) : (
-                  <span className="roster-points">{p.points}</span>
                 )}
               </div>
             </div>
@@ -585,18 +629,28 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
         .roster-row {
           display: flex;
           align-items: center;
-          justify-content: space-between;
+          gap: 8px;
           font-size: 13px;
-          padding: 6px 10px;
+          padding: 4px 10px;
           border-radius: var(--radius-sm);
           background: var(--bg-surface);
           border-left: 3px solid transparent;
+        }
+        .roster-main {
+          flex: 1;
+          min-width: 0;
         }
         .roster-identity {
           display: flex;
           flex-direction: column;
           gap: 1px;
           min-width: 0;
+        }
+        .roster-stats {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-shrink: 0;
         }
         .roster-title {
           font-size: 10px;
@@ -607,8 +661,10 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
         .roster-blue { border-left-color: var(--team-blue); }
         .roster-orange { border-left-color: var(--team-orange); }
         .roster-self { font-weight: 700; color: var(--text-primary); }
-        .roster-points { color: var(--text-tertiary); }
         .roster-ping {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
           font-size: 11px;
           color: var(--text-tertiary);
           font-variant-numeric: tabular-nums;

@@ -223,27 +223,57 @@ function fillWithAmateurTeams(teams: TournamentTeam[], region: ProRegion, fieldS
 
 const ALL_PRO_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
 
+// Real org rosters are supposed to be genuinely "locked for the season" (see generateTeamsForRegion's own
+// doc comment below) — but before this cache existed, that was only true of the jitter SHUFFLE's seed, not
+// of its INPUT: `eligibleRealPlayersForRegion`'s power numbers come from the live pro/grinder leaderboard
+// stores, which keep gradually catching a name up to its target MMR via simulateForward as in-game days
+// pass, even with no season reset involved at all. Two names near a team-boundary in the power sort could
+// swap places purely from that ordinary day-to-day drift, which read as an AI randomly changing orgs for no
+// reason. Caching the fully-built team list the FIRST time a given (region, season, resetSeed) is asked for
+// — and never recomputing it again until the season/resetSeed actually changes — makes the roster literally
+// frozen for the rest of the season, matching what was already documented/intended.
+//
+// Scoped per active save (see `setActiveSaveIdForTeamsCache`, called from AppRoot.tsx alongside every other
+// per-save store reset) so two different saves that happen to be in the same numbered RLCS season never
+// leak each other's cached rosters — this cache has no other awareness of which save is open.
+const teamsCache = new Map<string, TournamentTeam[]>();
+let activeSaveIdForTeamsCache: string | null = null;
+
+/** Clears the cached real-team rosters — call whenever the active save changes (a fresh save's own AI
+ *  leaderboard progress starts from scratch, so its region rosters must be recomputed from scratch too,
+ *  never inherited from whichever save was open before it). */
+export function setActiveSaveIdForTeamsCache(saveId: string | null): void {
+  if (saveId === activeSaveIdForTeamsCache) return;
+  activeSaveIdForTeamsCache = saveId;
+  teamsCache.clear();
+}
+
 /** Builds a region's real, season-locked RLCS field: every team is real active pros and/or mid-band ranked
  *  grinders from that region, grouped into teams of 3 and named after real-flavor orgs (`ORG_NAMES`) — no
  *  amateur/filler padding at all, a thin region just fields fewer teams. Deterministic per
- *  `(region, seasonNumber, resetSeed)` (see `seededShuffle`) — call this again for the same three inputs
- *  any time this season and the SAME roster comes back, which is what "locked for the season" means at the
- *  data layer: nothing has to actively enforce the lock, there's just nothing that would change it. */
+ *  `(region, seasonNumber, resetSeed)` (see `seededShuffle`) AND cached on exactly that key (see
+ *  `teamsCache` above) — call this again for the same three inputs any time this season and the SAME
+ *  roster comes back, which is what "locked for the season" means at the data layer. */
 export function generateTeamsForRegion(region: ProRegion, currentYear: number, seasonNumber: number, resetSeed: number, idPrefix: string, era: RankEra, currentDate: SimDate, seasonStartDate: SimDate): TournamentTeam[] {
-  const byPower = eligibleRealPlayersForRegion(region, currentYear, era, currentDate, seasonStartDate).sort((a, b) => b.power - a.power);
-  const eligible = jitterRankOrder(byPower, `${region}-${seasonNumber}-${resetSeed}`);
-  // Org names are used in their listed order (not shuffled) — ORG_NAMES already lists each region's most
-  // recognizable org first, so team 0 (which gets the top of the power-sorted roster) is consistently that
-  // region's real premier org, exactly the "top AI typically land on the top team" realism this is for.
-  const orgNames = ORG_NAMES[region] ?? [];
-  const teamCount = Math.min(Math.floor(eligible.length / 3), orgNames.length);
-  const teams: TournamentTeam[] = [];
-  for (let i = 0; i < teamCount; i++) {
-    const roster = eligible.slice(i * 3, i * 3 + 3);
-    const power = Math.round(roster.reduce((sum, p) => sum + p.power, 0) / roster.length);
-    teams.push({ id: `${idPrefix}_${i}`, name: orgNames[i], region, power, players: roster.map((p) => p.name) });
+  const cacheKey = `${region}-${seasonNumber}-${resetSeed}`;
+  let cached = teamsCache.get(cacheKey);
+  if (!cached) {
+    const byPower = eligibleRealPlayersForRegion(region, currentYear, era, currentDate, seasonStartDate).sort((a, b) => b.power - a.power);
+    const eligible = jitterRankOrder(byPower, cacheKey);
+    // Org names are used in their listed order (not shuffled) — ORG_NAMES already lists each region's most
+    // recognizable org first, so team 0 (which gets the top of the power-sorted roster) is consistently
+    // that region's real premier org, exactly the "top AI typically land on the top team" realism this is for.
+    const orgNames = ORG_NAMES[region] ?? [];
+    const teamCount = Math.min(Math.floor(eligible.length / 3), orgNames.length);
+    cached = [];
+    for (let i = 0; i < teamCount; i++) {
+      const roster = eligible.slice(i * 3, i * 3 + 3);
+      const power = Math.round(roster.reduce((sum, p) => sum + p.power, 0) / roster.length);
+      cached.push({ id: `${i}`, name: orgNames[i], region, power, players: roster.map((p) => p.name) });
+    }
+    teamsCache.set(cacheKey, cached);
   }
-  return teams;
+  return cached.map((t) => ({ ...t, id: `${idPrefix}_${t.id}` }));
 }
 
 /** Builds a shared field for a GROUPED 3v3 regional (see RLCS_REGION_GROUPS): generates each member region's

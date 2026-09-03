@@ -17,6 +17,9 @@ import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 import { rlcsSeasonForDate } from "@/data/tournaments";
 import { seasonTitleFor } from "@/data/seasons";
 import { activeProPlayers, type ProRegion } from "@/data/proPlayers";
+import { usePfpStore } from "@/store/usePfpStore";
+import { PFP_POOL, hasPfpPool } from "@/data/pfps";
+import { Avatar } from "@/ui/components/Avatar";
 
 const DEV_MODE_KEY = "rl-sim:dev-mode";
 const REWARD_TIER_OPTIONS: RankTierId[] = [
@@ -33,10 +36,22 @@ export function SettingsScreen() {
   const [importError, setImportError] = useState<string | null>(null);
   const [importedSave, setImportedSave] = useState<SaveSummary | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const setPlayerPfp = useSaveStore((store) => store.setPlayerPfp);
+  const [pfpPickerOpen, setPfpPickerOpen] = useState(false);
+  const [pfpError, setPfpError] = useState<string | null>(null);
+  const [pfpResetMessage, setPfpResetMessage] = useState<string | null>(null);
+  const pfpFileInputRef = useRef<HTMLInputElement>(null);
+  const pfpResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     localStorage.setItem(DEV_MODE_KEY, devMode ? "1" : "0");
   }, [devMode]);
+
+  useEffect(() => {
+    return () => {
+      if (pfpResetTimerRef.current) clearTimeout(pfpResetTimerRef.current);
+    };
+  }, []);
 
   async function handleSignOut() {
     await setActiveSaveId(null);
@@ -92,6 +107,33 @@ export function SettingsScreen() {
     } catch (e) {
       setImportError(e instanceof Error ? e.message : "Couldn't import that file.");
     }
+  }
+
+  const PFP_MAX_BYTES = 1_500_000; // ~1.5MB — this gets stored as a base64 data URL in localStorage, keep it modest
+
+  function handlePfpFile(file: File) {
+    setPfpError(null);
+    if (!file.type.startsWith("image/")) {
+      setPfpError("That's not an image file.");
+      return;
+    }
+    if (file.size > PFP_MAX_BYTES) {
+      setPfpError("That image is too large — pick something under 1.5MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setPlayerPfp(reader.result);
+    };
+    reader.onerror = () => setPfpError("Couldn't read that file.");
+    reader.readAsDataURL(file);
+  }
+
+  function handleResetPfps() {
+    usePfpStore.getState().resetAll();
+    setPfpResetMessage("Done — every AI (and friend) will reassign from the current picture pool.");
+    if (pfpResetTimerRef.current) clearTimeout(pfpResetTimerRef.current);
+    pfpResetTimerRef.current = setTimeout(() => setPfpResetMessage(null), 4000);
   }
 
   async function handleSwitchToImported() {
@@ -201,6 +243,73 @@ export function SettingsScreen() {
         </Card>
       </SectionShell>
 
+      <SectionShell title="Profile Picture">
+        <Card>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <Avatar name={s.displayName} currentDate={s.currentDate} size={56} overrideUrl={s.playerPfp} notable />
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="settings-name-btn" onClick={() => pfpFileInputRef.current?.click()}>
+                  Upload Image
+                </button>
+                <button className="settings-name-btn" onClick={() => setPfpPickerOpen((v) => !v)} disabled={!hasPfpPool()}>
+                  Choose from Pool
+                </button>
+                {s.playerPfp && (
+                  <button className="settings-name-btn settings-name-btn-secondary" onClick={() => setPlayerPfp(null)}>
+                    Clear
+                  </button>
+                )}
+                <input
+                  ref={pfpFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handlePfpFile(file);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+            </div>
+            {pfpError && <div style={{ fontSize: 12, color: "var(--danger)" }}>{pfpError}</div>}
+            {pfpPickerOpen && (
+              <div className="pfp-pool-grid">
+                {PFP_POOL.map((url) => (
+                  <button
+                    key={url}
+                    type="button"
+                    className="pfp-pool-item"
+                    onClick={() => {
+                      setPlayerPfp(url);
+                      setPfpPickerOpen(false);
+                    }}
+                  >
+                    <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 6 }} />
+                  </button>
+                ))}
+              </div>
+            )}
+            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Every tracked AI (and friend) gets a picture assigned automatically from{" "}
+              <code>src/assets/pfps/</code> too — drop image files in there and, if you add or remove any,
+              reset below so everyone reassigns against the current set right away instead of only whenever
+              they'd naturally change.
+              {!hasPfpPool() && " No pictures found in that folder yet — everyone shows the default avatar instead."}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <button className="settings-name-btn" onClick={handleResetPfps}>
+                Reset AI Profile Pictures
+              </button>
+              {pfpResetMessage && (
+                <span style={{ fontSize: 12, color: "var(--success)" }}>{pfpResetMessage}</span>
+              )}
+            </div>
+          </div>
+        </Card>
+      </SectionShell>
+
       <SectionShell title="Account">
         <Card>
           {!confirming ? (
@@ -265,6 +374,29 @@ export function SettingsScreen() {
         }
         .settings-name-btn-secondary {
           background: none;
+        }
+        .pfp-pool-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+          gap: 8px;
+          max-height: 220px;
+          overflow-y: auto;
+          padding: 8px;
+          background: var(--bg-surface);
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--radius-md);
+        }
+        .pfp-pool-item {
+          width: 48px;
+          height: 48px;
+          padding: 0;
+          background: none;
+          border: 1px solid transparent;
+          border-radius: 8px;
+          cursor: pointer;
+        }
+        .pfp-pool-item:hover {
+          border-color: var(--accent);
         }
         .dev-toggle-row {
           display: flex;

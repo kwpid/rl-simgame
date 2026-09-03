@@ -6,6 +6,7 @@ import { useSaveStore } from "@/store/useSaveStore";
 import { useTournamentStore } from "@/store/useTournamentStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 import { useAiTitleStore } from "@/store/useAiTitleStore";
+import { setActiveSaveIdForTeamsCache } from "@/data/tournaments";
 import {
   listSaves,
   loadSave,
@@ -38,6 +39,7 @@ export default function AppRoot() {
           useTournamentStore.getState().loadForSave(activeId);
           useRegionalRosterStore.getState().loadForSave(activeId);
           useAiTitleStore.getState().loadForSave(activeId);
+          setActiveSaveIdForTeamsCache(activeId);
           setPhase("ready");
           return;
         }
@@ -58,6 +60,7 @@ export default function AppRoot() {
     useTournamentStore.getState().loadForSave(id);
     useRegionalRosterStore.getState().loadForSave(id);
     useAiTitleStore.getState().loadForSave(id);
+    setActiveSaveIdForTeamsCache(id);
     await setActiveSaveId(id);
     setPhase("ready");
   }

@@ -16,6 +16,8 @@ import type { FriendRecord, QueueMode } from "@/data/mockSave";
 import { orgTagForOrgName, saveRegionToProRegion } from "@/data/tournaments";
 import { isOnlineNow } from "@/data/aiActivity";
 import { RankBadge } from "@/ui/components/RankBadge";
+import { Icon } from "@/ui/components/Icon";
+import { Avatar } from "@/ui/components/Avatar";
 
 // --- Accept chance logic ---
 // Similar-rank (same tier/MMR range) friends will almost always accept. A real pro or leaderboard regular
@@ -188,6 +190,11 @@ export function SocialScreen() {
           margin-bottom: var(--space-2);
           transition: border-color 150ms ease;
         }
+        .friend-card-compact {
+          align-items: center;
+          padding: 8px var(--space-3);
+          margin-bottom: 6px;
+        }
         .friend-card:hover {
           border-color: var(--border-strong);
         }
@@ -210,41 +217,46 @@ export function SocialScreen() {
         .friend-record {
           font-size: 12px;
           color: var(--text-secondary);
-          margin-top: 4px;
         }
         .friend-moment {
           font-size: 11px;
           color: var(--text-tertiary);
           margin-top: 2px;
         }
-        .friend-remove-btn {
-          background: none;
-          border: 1px solid var(--border-subtle);
-          border-radius: var(--radius-sm);
-          color: var(--text-tertiary);
-          font-size: 11px;
-          padding: 4px 10px;
-          cursor: pointer;
-          white-space: nowrap;
+        .friend-icon-actions {
+          display: flex;
+          gap: 6px;
+          flex-shrink: 0;
         }
-        .friend-remove-btn:hover {
-          color: var(--danger);
-          border-color: var(--danger);
-        }
-        .friend-view-btn {
+        .friend-icon-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 30px;
+          height: 30px;
           background: none;
           border: 1px solid var(--border-subtle);
           border-radius: var(--radius-sm);
           color: var(--text-secondary);
-          font-size: 11px;
-          padding: 4px 10px;
           cursor: pointer;
-          white-space: nowrap;
-          transition: border-color 150ms, color 150ms;
+          transition: border-color 150ms, color 150ms, background 150ms;
         }
-        .friend-view-btn:hover {
+        .friend-icon-btn:hover {
           color: var(--accent);
           border-color: var(--accent);
+        }
+        .friend-icon-btn:disabled {
+          opacity: 0.35;
+          cursor: not-allowed;
+        }
+        .friend-icon-btn-active {
+          background: var(--accent-muted);
+          color: var(--accent);
+          border-color: var(--accent);
+        }
+        .friend-icon-btn-danger:hover {
+          color: var(--danger);
+          border-color: var(--danger);
         }
         .add-friend-row {
           display: flex;
@@ -767,35 +779,34 @@ function FriendsTab() {
         const inParty = s.partyMembers.includes(f.name);
         const status = friendStatus(f, s.currentDate, simulatedHour, inParty);
         return (
-          <div key={f.name} className="friend-card">
+          <div key={f.name} className="friend-card friend-card-compact">
+            <Avatar name={f.name} currentDate={s.currentDate} size={34} notable />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <span className="friend-name">{f.name}</span>
                 {f.isPro && <span className="friend-pro-badge">PRO</span>}
                 <StatusDot status={status} />
               </div>
-              <div className="friend-region">{f.region}</div>
-              <div className="friend-record">{friendRecordLabel(f)}</div>
-              {f.moments[0] && <div className="friend-moment">"{f.moments[0]}"</div>}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span className="friend-region">{f.region}</span>
+                <span className="friend-record">{friendRecordLabel(f)}</span>
+              </div>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", flexShrink: 0 }}>
-              <button
-                className="friend-view-btn"
-                onClick={() => setViewingStats(f)}
-              >
-                View Stats
+            <div className="friend-icon-actions">
+              <button className="friend-icon-btn" title="View Stats" aria-label="View Stats" onClick={() => setViewingStats(f)}>
+                <Icon name="eye" size={16} />
               </button>
-              {inParty ? (
-                <button className="add-friend-btn" onClick={() => removePartyMember(f.name)}>
-                  In Party
-                </button>
-              ) : (
-                <button className="add-friend-btn" disabled={partyFull} onClick={() => tryInviteParty(f)}>
-                  Invite to Party
-                </button>
-              )}
-              <button className="friend-remove-btn" onClick={() => removeFriend(f.name)}>
-                Remove
+              <button
+                className={"friend-icon-btn" + (inParty ? " friend-icon-btn-active" : "")}
+                title={inParty ? "Remove from Party" : "Invite to Party"}
+                aria-label={inParty ? "Remove from Party" : "Invite to Party"}
+                disabled={!inParty && partyFull}
+                onClick={() => (inParty ? removePartyMember(f.name) : tryInviteParty(f))}
+              >
+                <Icon name="duos" size={16} />
+              </button>
+              <button className="friend-icon-btn friend-icon-btn-danger" title="Unfriend" aria-label="Unfriend" onClick={() => removeFriend(f.name)}>
+                <Icon name="trash" size={16} />
               </button>
             </div>
           </div>

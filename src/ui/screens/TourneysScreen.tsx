@@ -263,6 +263,13 @@ export function TourneysScreen() {
     // Majors/Worlds are the only events that can ever be LAN (see isLanEvent); everything else the player
     // personally plays (regionals, Rival Series, 1v1 regionals) always stays online.
     const venue: "online" | "lan" = pendingInstance && isLanEvent(pendingInstance.kind, rlcsSeasonNumber) ? "lan" : "online";
+    // A 3v3 stage's `pendingMatch.opponentName` IS the opposing org's own name (see useTournamentStore.ts's
+    // resolvePlayerMatch, which sets it from the bracket TEAM object, not a player) — without this, the
+    // opponent fell through to generateOpponentStats's `orgTagForOpponent`, an unrelated per-name pseudo-
+    // random pick that has nothing to do with which org they're actually on, so the same-looking bracket
+    // opponent could show a completely different (and wrong) [TAG] every round. 1v1 entrants are real
+    // individual players (see tournaments.ts's entrantsFromNames), never an org, so this never applies there.
+    const opponentOrgTag = pendingDiscipline === "3v3" ? orgTagForOrgName(pendingMatch.opponentName) : undefined;
     startTournamentSeries(self, [pendingMatch.opponentName], pendingMatch.seriesFormat, era, rankedSeasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
       const before = useTournamentStore.getState().instances[pendingInstanceId];
       const stageLabelBefore = before?.stages[before.stageIndex]?.label;
@@ -288,7 +295,7 @@ export function TourneysScreen() {
       } else {
         setResultMessage(wonSeries ? `Series won (${stageLabelBefore}), more matches to come in this stage.` : "Series lost, but you're still alive in this stage.");
       }
-    }, stageProgress, undefined, undefined, venue);
+    }, stageProgress, undefined, opponentOrgTag, venue);
   }
 
   return (

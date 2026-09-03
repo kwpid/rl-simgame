@@ -9,6 +9,7 @@
 // Every name here is also checked against proPlayers.ts to guarantee it never collides with a real pro.
 
 import { hashString, activeProPlayers, type ProRegion } from "./proPlayers";
+import { withNameFlourish } from "./nameFlourish";
 
 export type RosterBand = "low" | "mid" | "high" | "super_high";
 
@@ -128,9 +129,10 @@ export function regionalGrinderRoster(region: ProRegion, currentYear: number): G
   const pool = NAME_POOL[region];
   const roster: GrinderIdentity[] = [];
   for (let i = 0; i < count; i++) {
-    const seed = hashString(`${region}#grinder#${i}`);
+    const seedKey = `${region}#grinder#${i}`;
+    const seed = hashString(seedKey);
     const band: RosterBand = (seed % 100) < LOW_BAND_SHARE * 100 ? "low" : "mid";
-    roster.push({ name: pool[i], region, band });
+    roster.push({ name: withNameFlourish(pool[i], seedKey), region, band });
   }
   return roster;
 }

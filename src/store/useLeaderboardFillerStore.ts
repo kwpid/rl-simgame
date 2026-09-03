@@ -10,6 +10,7 @@ import { tierMinMmr, type RankEra } from "@/data/rankSystem";
 import { hashString } from "@/data/proPlayers";
 import { estimateGameSenseForMmr, eloExpectedScore, eloKFactor } from "@/data/matchSim";
 import { LB_NAMES, type QueueMode } from "@/data/mockSave";
+import { withNameFlourish } from "@/data/nameFlourish";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
 import { softResetMmr, seasonActivityMultiplier } from "@/data/seasons";
 
@@ -48,7 +49,10 @@ type FillerMmrTable = Record<string, Partial<Record<QueueMode, FillerMmrEntry>>>
 /** The fixed pool of filler leaderboard names, same order every time so a name (and its persisted history)
  *  always refers to the same "person" across sessions. */
 export function fillerLeaderboardNames(): string[] {
-  return Array.from({ length: LEADERBOARD_FILLER_COUNT }, (_, i) => `${LB_NAMES[i % LB_NAMES.length]}${i >= LB_NAMES.length ? i : ""}`);
+  return Array.from({ length: LEADERBOARD_FILLER_COUNT }, (_, i) => {
+    const base = `${LB_NAMES[i % LB_NAMES.length]}${i >= LB_NAMES.length ? i : ""}`;
+    return withNameFlourish(base, `fillerlb#${i}`);
+  });
 }
 
 function seasonKey(seasonStartDate: SimDate): string {

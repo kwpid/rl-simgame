@@ -298,6 +298,7 @@ interface SaveStoreState extends SaveData {
   acceptPartyInvite: () => void;
   /** Dismisses the current invite without partying up, no penalty. */
   declinePartyInvite: () => void;
+  setPlayerPfp: (url: string | null) => void;
   /** Real, live chance for a TEAMMATE who isn't already a friend to friend the player first, after a match
    *  they won together — separate from the player's own manual addFriend, this is the AI-initiated
    *  direction. No-op if `name` is already a friend. */
@@ -900,6 +901,8 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   },
 
   declinePartyInvite: () => set({ pendingPartyInvite: null }),
+
+  setPlayerPfp: (url) => set({ playerPfp: url }),
 
   maybeAiInitiatedFriendRequest: (name, region, isPro, currentDate) => {
     const state = get();

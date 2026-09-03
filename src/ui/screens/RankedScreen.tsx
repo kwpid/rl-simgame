@@ -9,13 +9,13 @@ import { useMatchStore } from "@/store/useMatchStore";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
-import { fillerLeaderboardNames, useLeaderboardFillerStore } from "@/store/useLeaderboardFillerStore";
 import { regionalGrinderRoster } from "@/data/regionalGrinders";
 import { activeProPlayers, PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { flattenProgress } from "@/data/matchSim";
 import { orgTagForOrgName, saveRegionToProRegion, REGION_LABELS as PRO_REGION_LABELS } from "@/data/tournaments";
 import { seasonEndDate, rewardTierSequence, REWARD_WINS_REQUIRED } from "@/data/seasons";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
+import { Avatar } from "@/ui/components/Avatar";
 
 const LEADERBOARD_SIZE = 100;
 
@@ -23,26 +23,34 @@ const TEAM_SIZE: Record<QueueMode, number> = { "1v1": 1, "2v2": 2, "3v3": 3 };
 
 const ALL_MATCHMAKING_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
 
-/** A friend's live MMR/region for the current queue on the leaderboard's "Friends" filter — same
- *  pro/grinder/filler-then-plain resolution order SocialScreen's own resolveFriendStats uses, just
- *  single-queue and MMR-only (this only needs to sort/rank rows, not the full stats block). */
-function resolveFriendLeaderboardRow(
+/** A friend's live MMR/region for the current queue on the leaderboard's "Friends" filter — pro/grinder,
+ *  then falls back to the friend's own persisted MMR (same source "plain" friends always use, see
+ *  FriendRecord.mmr) for anyone else, including a filler-leaderboard-tracked friend — that one live table
+ *  isn't worth a dedicated subscription+seeding effect just for this filter, the persisted value is close
+ *  enough and updates itself after every match anyway (see useSaveStore's recordFriendMatch).
+ *
+ *  Deliberately a PURE read off already-subscribed store snapshots (`proMmrTable`/`regionalRosterMmrTable`,
+ *  the same tables `proRows`/`grinderRows` below already read directly, already unconditionally kept warm
+ *  by this screen's own seeding effect regardless of the friends list) rather than calling a store's
+ *  `getMmr` here — `getMmr` both reads AND writes (it catches the entry up and `set()`s the table back),
+ *  and calling that from a render body while ALSO being subscribed to that same table is a feedback loop:
+ *  the write triggers a re-render, which calls `getMmr` again, which writes again, forever — this is
+ *  exactly what made the leaderboard's Friends filter hang/crash the tab. */
+function friendLeaderboardRow(
   name: string,
   friendRegion: string,
+  friendFallbackMmr: number,
   queue: QueueMode,
-  era: ReturnType<typeof eraForDate>,
   currentYear: number,
-  currentDate: SimDate,
-  seasonStartDate: SimDate,
-  fallbackMmr: number
+  proMmrTable: Record<string, Partial<Record<QueueMode, { mmr: number }>>>,
+  regionalRosterMmrTable: Partial<Record<ProRegion, Record<string, Partial<Record<QueueMode, { mmr: number }>>>>>
 ): { mmr: number; region: ProRegion } {
   const pro = PRO_PLAYERS.find((p) => p.name === name);
-  if (pro) return { mmr: useProLeaderboardStore.getState().getMmr(name, queue, era, currentYear, currentDate, seasonStartDate), region: pro.region };
+  if (pro) return { mmr: proMmrTable[name]?.[queue]?.mmr ?? 0, region: pro.region };
   const grinderRegion = ALL_MATCHMAKING_REGIONS.find((region) => regionalGrinderRoster(region, currentYear).some((g) => g.name === name));
-  if (grinderRegion) return { mmr: useRegionalRosterStore.getState().getMmr(name, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate), region: grinderRegion };
   const fallbackRegion = (ALL_MATCHMAKING_REGIONS as string[]).includes(friendRegion) ? (friendRegion as ProRegion) : "NA";
-  if (fillerLeaderboardNames().includes(name)) return { mmr: useLeaderboardFillerStore.getState().getMmr(name, queue, era, currentYear, currentDate, seasonStartDate), region: fallbackRegion };
-  return { mmr: fallbackMmr, region: fallbackRegion };
+  if (grinderRegion) return { mmr: regionalRosterMmrTable[grinderRegion]?.[name]?.[queue]?.mmr ?? 0, region: grinderRegion };
+  return { mmr: friendFallbackMmr, region: fallbackRegion };
 }
 
 function formatMmSs(ms: number): string {
@@ -76,6 +84,7 @@ export function RankedScreen() {
   const ensureRegionalRosterSeeded = useRegionalRosterStore((store) => store.ensureSeeded);
   const currentYear = s.currentDate.year;
   const activePros = activeProPlayers(currentYear);
+  const friendList = Object.values(s.friends);
 
   useEffect(() => {
     ensureProsSeeded(activePros.map((p) => p.name), queue, era, currentYear, s.currentDate, s.seasonStartDate);
@@ -121,13 +130,13 @@ export function RankedScreen() {
   const playerProRegion = saveRegionToProRegion(s.region);
   const selfRow = { rank: 0, name: s.displayName, mmr: profile.mmr, rankTier: profile.rankTier, division: profile.division, region: playerProRegion, isPlayer: true };
   // "Friends" pulls live MMR straight off each friend's own tracked source (pro/grinder/filler/plain, see
-  // resolveFriendLeaderboardRow) rather than filtering the global pool — a friend who isn't Top 100 caliber
+  // friendLeaderboardRow) rather than filtering the global pool — a friend who isn't Top 100 caliber
   // (most "plain" friends aren't) should still show up here, this is "how do my queue buddies stack up",
   // not "which of my friends happen to also be globally elite".
   const friendRows =
     leaderboardFilter === "friends"
-      ? Object.values(s.friends).map((friend) => {
-          const resolved = resolveFriendLeaderboardRow(friend.name, friend.region, queue, era, currentYear, s.currentDate, s.seasonStartDate, friend.mmr[queue] ?? 0);
+      ? friendList.map((friend) => {
+          const resolved = friendLeaderboardRow(friend.name, friend.region, friend.mmr[queue] ?? 0, queue, currentYear, proMmrTable, regionalRosterMmrTable);
           const derived = deriveRankFromMmr(resolved.mmr, era, queue);
           return { rank: 0, name: friend.name, mmr: resolved.mmr, rankTier: derived.tier, division: derived.division, region: resolved.region, isPlayer: false };
         })
@@ -450,7 +459,6 @@ export function RankedScreen() {
                   <tr>
                     <th>#</th>
                     <th>Player</th>
-                    <th>Region</th>
                     <th style={{ textAlign: "right" }}>MMR</th>
                   </tr>
                 </thead>
@@ -458,8 +466,18 @@ export function RankedScreen() {
                   {leaderboard.map((row) => (
                     <tr key={row.isPlayer ? "self" : row.name} className={row.isPlayer ? "leaderboard-row-self" : undefined}>
                       <td>{row.rank}</td>
-                      <td>{row.name}</td>
-                      <td style={{ color: "var(--text-tertiary)" }}>{PRO_REGION_LABELS[row.region]}</td>
+                      <td>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <Avatar
+                            name={row.name}
+                            currentDate={s.currentDate}
+                            size={22}
+                            overrideUrl={row.isPlayer ? s.playerPfp : undefined}
+                            notable={row.isPlayer}
+                          />
+                          {row.name}
+                        </div>
+                      </td>
                       <td style={{ textAlign: "right", fontWeight: 600 }}>{row.mmr}</td>
                     </tr>
                   ))}

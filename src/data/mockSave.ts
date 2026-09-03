@@ -449,6 +449,10 @@ export const mockSave = {
   // A friend proactively inviting the player to party up, see PartyInvite's own doc comment.
   pendingPartyInvite: null as PartyInvite | null,
   lastPartyInviteCheckDate: DEMO_CURRENT_DATE,
+  // The player's own chosen profile picture (a data: URL from an uploaded file, or one of the bundled pool
+  // pictures in src/assets/pfps — see usePfpStore.ts), null if they've never set one. Unlike every AI's own
+  // pfp (shared/global, assigned automatically), this is per-save and never auto-reassigned.
+  playerPfp: null as string | null,
   // Names encountered in recent matches (opponents and teammates alike), most recent first, capped short.
   // Adding a friend is done from this list rather than an open search of every name in the sim.
   recentlyPlayedWith: [] as string[],

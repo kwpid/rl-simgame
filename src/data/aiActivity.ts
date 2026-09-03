@@ -29,12 +29,28 @@ export interface ActivityProfile {
   sessionSpreadHours: number;
 }
 
+// Real ranked activity isn't flat across the clock — it clusters hard in the after-school/after-work
+// evening stretch (region-local). Most identities' peak hour lands somewhere in this window; a minority
+// still peak outside it (the genuine night-owl or early-morning grinder), for real variety rather than
+// every single AI sharing an identical evening spike.
+const PEAK_HOUR_WINDOW_START = 14; // 2pm
+const PEAK_HOUR_WINDOW_END = 21; // 9pm
+const PEAK_HOUR_WINDOW_CHANCE = 0.78;
+
+function pickPeakHour(name: string, region: ProRegion): number {
+  const inWindow = hashString(name + region + "#peak_window") % 100 < PEAK_HOUR_WINDOW_CHANCE * 100;
+  const span = PEAK_HOUR_WINDOW_END - PEAK_HOUR_WINDOW_START;
+  return inWindow
+    ? PEAK_HOUR_WINDOW_START + (hashString(name + region + "#peak") % (span + 1))
+    : hashString(name + region + "#peak") % 24;
+}
+
 /** Deterministic per name+region so the same identity always has the same habits match to match and
  *  session to session, same "hash the name for a consistent flavor" pattern already used throughout this
  *  codebase (see matchSim.ts's effectivePlaystyle, orgTagForOpponent). */
 export function activityProfileFor(name: string, region: ProRegion): ActivityProfile {
   const dayActiveRate = 0.35 + (hashString(name + region + "#day") % 100) / 100 * 0.6;
-  const peakHour = hashString(name + region + "#peak") % 24;
+  const peakHour = pickPeakHour(name, region);
   const sessionSpreadHours = 1.5 + (hashString(name + region + "#spread") % 100) / 100 * 5;
   return { dayActiveRate, peakHour, sessionSpreadHours };
 }
