@@ -30,15 +30,21 @@ import {
 } from "@/data/tournaments";
 import type { TitleEntry } from "@/data/seasons";
 import {
-  runDoubleElimStage,
   runSwissStage,
   runGslGroupStage,
-  runSingleElimStage,
+  buildDoubleElimBracket,
+  buildSingleElimBracket,
+  resolveRemainingBracket,
+  resolveNodeAndAncestors,
+  resolvePlayerNode,
+  bracketStageResult,
+  feederFor,
   type StageConfig,
   type TournamentTeam,
   type StandingEntry,
   type StageResult,
 } from "@/data/tournamentFormats";
+import { allNodes, findNodeForTeam, type BracketTree } from "@/data/bracketTypes";
 
 const STORAGE_KEY_PREFIX = "rl-sim:tournament-instances-v2";
 
@@ -98,6 +104,14 @@ export interface TournamentInstance {
   playerBracket: PlayerBracketProgress | null;
   pendingMatch: PendingPlayerMatch | null;
   playerFinalPlacement: number | null;
+  /** Real bracket trees (see data/bracketTypes.ts) for `double_elim`/`single_elim` stages, keyed by
+   *  `stageIndex` — `swiss`/`gsl_group` stages never get an entry, they stay a plain standings table.
+   *  Retention: only the CURRENT stage's tree is kept while the instance isn't completed (a superseded
+   *  stage's entry is deleted the moment the instance advances past it — its outcome already lives in
+   *  `lastStandings`); once `completed`, the FINAL stage's tree is kept permanently as the "how the
+   *  champion was crowned" bracket, every earlier stage stays standings-only. Keeps storage bounded — a
+   *  full Stage-1 tree runs ~70-85KB, everything else is a few KB. */
+  stageBrackets: Record<number, BracketTree>;
 }
 
 /** How many days before an instance's scheduled start date registration opens (and its field is
@@ -197,8 +211,13 @@ function loadStored(): InstanceTable {
     const clean: InstanceTable = {};
     let droppedAny = false;
     for (const [id, instance] of Object.entries(parsed)) {
-      if (isInstanceValid(instance)) clean[id] = instance;
-      else droppedAny = true;
+      if (!isInstanceValid(instance)) {
+        droppedAny = true;
+        continue;
+      }
+      // stageBrackets didn't exist before this feature — an instance saved before it is missing the field
+      // entirely, default to empty (its stages just rebuild a fresh tree the next time one's needed).
+      clean[id] = (instance as TournamentInstance).stageBrackets ? instance : { ...instance, stageBrackets: {} };
     }
     if (sanitizeMajorsAndWorlds(clean)) droppedAny = true;
     if (droppedAny) persist(clean); // overwrite the corrupted blob on disk, not just in memory
@@ -216,12 +235,39 @@ function persist(table: InstanceTable) {
   }
 }
 
-function resolveStage(format: StageConfig["format"], teams: TournamentTeam[], advanceCount: number): StageResult {
-  if (teams.length === 0) return { advanced: [], standings: [] };
-  if (format === "double_elim") return runDoubleElimStage(teams, advanceCount);
-  if (format === "swiss") return runSwissStage(teams, advanceCount);
-  if (format === "gsl_group") return runGslGroupStage(teams, advanceCount);
-  return runSingleElimStage(teams);
+function bestOfForFormat(format: StageConfig["format"]): number {
+  return format === "single_elim" ? 5 : 3;
+}
+
+/** Builds the real bracket tree for the instance's CURRENT stage if it's a bracket-shaped format
+ *  (`double_elim`/`single_elim`) and doesn't already have one — no-op for `swiss`/`gsl_group` (they never
+ *  get a tree) and no-op if a tree already exists for this stageIndex. Called whenever a stage becomes
+ *  current (instance creation, advancing into a new stage) so the bracket is browsable — seeded and
+ *  showing "who's playing who" — the moment the stage starts, even before any match has actually resolved. */
+function ensureStageBracketBuilt(instance: TournamentInstance): TournamentInstance {
+  const stage = instance.stages[instance.stageIndex];
+  if (!stage || (stage.format !== "double_elim" && stage.format !== "single_elim")) return instance;
+  if (instance.stageBrackets[instance.stageIndex]) return instance;
+  const tree = stage.format === "double_elim" ? buildDoubleElimBracket(instance.currentTeams, stage.advanceCount) : buildSingleElimBracket(instance.currentTeams);
+  return { ...instance, stageBrackets: { ...instance.stageBrackets, [instance.stageIndex]: tree } };
+}
+
+/** Resolves the instance's CURRENT stage in full (bulk AI simulation, no player involved) and returns the
+ *  usual `{ advanced, standings }` shape — dispatches to the real bracket-tree path for `double_elim`/
+ *  `single_elim` (resolving whatever the tree hasn't already had resolved lazily, e.g. by a player who was
+ *  eliminated partway through and left the rest of the field to finish on its own) or straight to the
+ *  unchanged Swiss/GSL simulators otherwise. */
+function resolveStage(instance: TournamentInstance, currentDate: SimDate): StageResult {
+  const stage = instance.stages[instance.stageIndex];
+  if (instance.currentTeams.length === 0) return { advanced: [], standings: [] };
+  if (stage.format === "double_elim" || stage.format === "single_elim") {
+    const tree = instance.stageBrackets[instance.stageIndex];
+    if (!tree) return { advanced: [], standings: [] }; // shouldn't happen, ensureStageBracketBuilt always runs first
+    resolveRemainingBracket(tree, currentDate, bestOfForFormat(stage.format));
+    return bracketStageResult(tree, stage.advanceCount);
+  }
+  if (stage.format === "swiss") return runSwissStage(instance.currentTeams, stage.advanceCount);
+  return runGslGroupStage(instance.currentTeams, stage.advanceCount);
 }
 
 function createInstance(scheduled: ScheduledTournament, currentYear: number, seasonNumber: number, teamsResetSeed: number, currentDate: SimDate, seasonStartDate: SimDate): TournamentInstance {
@@ -234,7 +280,7 @@ function createInstance(scheduled: ScheduledTournament, currentYear: number, sea
         : scheduled.kind === "rlrs_regional"
           ? generateRivalSeriesTeamsForRegion(scheduled.region, scheduled.fieldSize, scheduled.id)
           : generateTeamsForRegion(scheduled.region, currentYear, seasonNumber, teamsResetSeed, scheduled.id, era, currentDate, seasonStartDate);
-  return {
+  const instance: TournamentInstance = {
     id: scheduled.id,
     kind: scheduled.kind,
     label: scheduled.label,
@@ -251,7 +297,9 @@ function createInstance(scheduled: ScheduledTournament, currentYear: number, sea
     playerBracket: null,
     pendingMatch: null,
     playerFinalPlacement: null,
+    stageBrackets: {},
   };
+  return ensureStageBracketBuilt(instance);
 }
 
 function advanceInstance(instance: TournamentInstance, currentDate: SimDate): TournamentInstance {
@@ -260,15 +308,22 @@ function advanceInstance(instance: TournamentInstance, currentDate: SimDate): To
   // the calendar. Once they're eliminated (or crowned champion), normal day-based auto-resolution resumes.
   if (instance.playerTeamId && instance.playerFinalPlacement === null) return instance;
 
-  let current = instance;
+  let current = ensureStageBracketBuilt(instance);
   let guard = 0;
   while (!current.completed && guard < current.stages.length + 1) {
     guard++;
     const stage = current.stages[current.stageIndex];
     if (daysBetween(current.stageStartDate, currentDate) < stage.days) break;
 
-    const result = resolveStage(stage.format, current.currentTeams, stage.advanceCount);
+    const result = resolveStage(current, currentDate);
     const isLastStage = current.stageIndex + 1 >= current.stages.length;
+    const hadTree = stage.format === "double_elim" || stage.format === "single_elim";
+    const nextStageBrackets = { ...current.stageBrackets };
+    // A superseded stage's tree is dropped (its outcome already lives in lastStandings) unless this was
+    // the FINAL stage of a now-completed instance, in which case it's kept permanently as the "how the
+    // champion was crowned" bracket.
+    if (hadTree && !isLastStage) delete nextStageBrackets[current.stageIndex];
+
     current = {
       ...current,
       stageIndex: current.stageIndex + 1,
@@ -277,7 +332,9 @@ function advanceInstance(instance: TournamentInstance, currentDate: SimDate): To
       lastStandings: result.standings,
       completed: isLastStage,
       championName: isLastStage ? result.standings.find((s) => s.placement === 1)?.team.name ?? null : null,
+      stageBrackets: nextStageBrackets,
     };
+    if (!isLastStage) current = ensureStageBracketBuilt(current);
   }
   return current;
 }
@@ -491,7 +548,7 @@ function ensureMajorsAndWorldsForDiscipline(table: InstanceTable, currentDate: S
 
       const startDate = readiness.scheduledStart;
       const playerChamp = champs.find((c) => c.isPlayerChampion) ?? null;
-      table[id] = {
+      table[id] = ensureStageBracketBuilt({
         id,
         kind: "rlcs_major",
         label: `RLCS ${startDate.year} ${group.location} Major${discipline === "1v1" ? " (1v1)" : ""}`,
@@ -508,7 +565,8 @@ function ensureMajorsAndWorldsForDiscipline(table: InstanceTable, currentDate: S
         playerBracket: playerChamp ? { teamId: playerChamp.team.id, wins: 0, losses: 0, eliminated: false } : null,
         pendingMatch: null,
         playerFinalPlacement: null,
-      };
+        stageBrackets: {},
+      });
       changed = true;
     }
   }
@@ -566,7 +624,7 @@ function ensureMajorsAndWorldsForDiscipline(table: InstanceTable, currentDate: S
   }
 
   const playerChamp = entrants.find((c) => c.isPlayerChampion) ?? null;
-  table[worldsId] = {
+  table[worldsId] = ensureStageBracketBuilt({
     id: worldsId,
     kind: "rlcs_worlds",
     label: `RLCS ${startDate.year} World Championship${discipline === "1v1" ? " (1v1)" : ""}`,
@@ -583,7 +641,8 @@ function ensureMajorsAndWorldsForDiscipline(table: InstanceTable, currentDate: S
     playerBracket: playerChamp ? { teamId: playerChamp.team.id, wins: 0, losses: 0, eliminated: false } : null,
     pendingMatch: null,
     playerFinalPlacement: null,
-  };
+    stageBrackets: {},
+  });
   return true;
 }
 
@@ -614,10 +673,14 @@ interface TournamentStoreState {
    *  pending match, picks their next live opponent for this round. No-op otherwise. Call from a
    *  `useEffect`, not render-time (same rule as `ensureProgress`). */
   queuePlayerMatch: (instanceId: string, currentDate: SimDate) => void;
-  /** Applies the result of the player's just-finished live series: updates their win/loss count, and
-   *  once their run through this stage is decided (advanced or eliminated), resolves the rest of the
-   *  stage's field and merges the player back into the standings at the right spot. */
-  resolvePlayerMatch: (instanceId: string, wonSeries: boolean, currentDate: SimDate) => void;
+  /** Applies the result of the player's just-finished live series. For `swiss`/`gsl_group` stages: updates
+   *  their win/loss count, and once their run through the stage is decided (advanced or eliminated),
+   *  resolves the rest of the stage's field and merges the player back into the standings (unchanged from
+   *  before the bracket rework). For `double_elim`/`single_elim` stages: writes the real per-game result
+   *  (`gameLog`, from useMatchStore's seriesGameLog) into the player's own bracket node and follows the
+   *  real winners/losers routing — no separate win/loss counter, the tree topology itself decides whether
+   *  the player advances, drops to the losers bracket, or is eliminated. */
+  resolvePlayerMatch: (instanceId: string, wonSeries: boolean, currentDate: SimDate, gameLog?: { won: boolean; mapId: string | null }[]) => void;
   /** Switches this store over to a different save's tournament progress, called from AppRoot right
    *  alongside `useSaveStore`'s `initFromSave` whenever a save is loaded or switched to. */
   loadForSave: (saveId: string) => void;
@@ -695,13 +758,21 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
         ? instance.currentTeams.map((t, i) => (i === fillerIdx ? playerTeam : t))
         : [...instance.currentTeams, playerTeam];
 
-    const nextInstance: TournamentInstance = {
+    let nextInstance: TournamentInstance = {
       ...instance,
       currentTeams: nextTeams,
       playerTeamId: playerTeam.id,
       playerBracket: { teamId: playerTeam.id, wins: 0, losses: 0, eliminated: false },
       pendingMatch: null,
     };
+    // Nothing's resolved yet at stageIndex 0 (registerPlayer only ever fires there), so it's always safe to
+    // rebuild the tree fresh from the updated roster — the player gets seeded by their real power like any
+    // other team, rather than inheriting whatever seed the filler entrant they replaced would have had.
+    const stage = nextInstance.stages[nextInstance.stageIndex];
+    if (stage.format === "double_elim" || stage.format === "single_elim") {
+      const tree = stage.format === "double_elim" ? buildDoubleElimBracket(nextTeams, stage.advanceCount) : buildSingleElimBracket(nextTeams);
+      nextInstance = { ...nextInstance, stageBrackets: { ...nextInstance.stageBrackets, [nextInstance.stageIndex]: tree } };
+    }
     const nextTable = { ...state.instances, [instanceId]: nextInstance };
     set({ instances: nextTable });
     persist(nextTable);
@@ -717,27 +788,128 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
     if (daysBetween(instance.stageStartDate, currentDate) < 0) return; // stage hasn't actually started yet
 
     const stage = instance.stages[instance.stageIndex];
+
+    if (stage.format === "double_elim" || stage.format === "single_elim") {
+      const tree = instance.stageBrackets[instance.stageIndex];
+      if (!tree) return; // shouldn't happen, ensureStageBracketBuilt already ran when the stage started
+      const playerNode = findNodeForTeam(tree, instance.playerTeamId!);
+      if (!playerNode || playerNode.resolved) return; // no match currently waiting on the player
+      const isPlayerA = playerNode.slotA?.teamId === instance.playerTeamId;
+      const opponentSlot = isPlayerA ? playerNode.slotB : playerNode.slotA;
+      const bestOf = bestOfForFormat(stage.format);
+      if (!opponentSlot) {
+        // Lazily resolve ONLY the specific feeder match blocking the opponent slot (never the player's own
+        // node) so the player's opponent is a real bracket dependency, not a random pick.
+        const feeder = feederFor(allNodes(tree), playerNode.id, isPlayerA ? "B" : "A");
+        if (feeder) resolveNodeAndAncestors(tree, feeder, currentDate, bestOf);
+      }
+      const resolvedOpponentId = (isPlayerA ? playerNode.slotB : playerNode.slotA)?.teamId;
+      if (!resolvedOpponentId) return; // genuinely nothing to resolve yet (shouldn't happen in practice)
+      const opponent = tree.teams[resolvedOpponentId];
+      const nextInstance: TournamentInstance = {
+        ...instance,
+        stageBrackets: { ...instance.stageBrackets, [instance.stageIndex]: tree },
+        pendingMatch: { opponentId: opponent.id, opponentName: opponent.name, seriesFormat: bestOf },
+      };
+      const nextTable = { ...state.instances, [instanceId]: nextInstance };
+      set({ instances: nextTable });
+      persist(nextTable);
+      return;
+    }
+
+    // swiss/gsl_group: unchanged, no bracket tree exists for these formats — a plain random pick from
+    // whoever's still alive in the stage, matching the always-fair, format-agnostic player experience.
     const opponents = instance.currentTeams.filter((t) => t.id !== instance.playerTeamId);
     if (opponents.length === 0) return;
     const opponent = opponents[Math.floor(Math.random() * opponents.length)];
-    const seriesFormat = stage.format === "single_elim" ? 5 : 3;
 
     const nextInstance: TournamentInstance = {
       ...instance,
-      pendingMatch: { opponentId: opponent.id, opponentName: opponent.name, seriesFormat },
+      pendingMatch: { opponentId: opponent.id, opponentName: opponent.name, seriesFormat: 3 },
     };
     const nextTable = { ...state.instances, [instanceId]: nextInstance };
     set({ instances: nextTable });
     persist(nextTable);
   },
 
-  resolvePlayerMatch: (instanceId, wonSeries, currentDate) => {
+  resolvePlayerMatch: (instanceId, wonSeries, currentDate, gameLog) => {
     const state = get();
     const instance = state.instances[instanceId];
     if (!instance || !instance.playerBracket || !instance.pendingMatch) return;
 
     const stage = instance.stages[instance.stageIndex];
     const opponentId = instance.pendingMatch.opponentId;
+
+    if (stage.format === "double_elim" || stage.format === "single_elim") {
+      const tree = instance.stageBrackets[instance.stageIndex];
+      const playerNode = tree ? findNodeForTeam(tree, instance.playerTeamId!) : null;
+      if (!tree || !playerNode) return;
+
+      const winnerId = wonSeries ? instance.playerTeamId! : opponentId;
+      const loserId = wonSeries ? opponentId : instance.playerTeamId!;
+      const games = (gameLog ?? []).map((g, i) => ({ gameNumber: i + 1, winnerId: g.won ? instance.playerTeamId! : opponentId, mapId: g.mapId ?? "" }));
+      resolvePlayerNode(tree, playerNode, winnerId, loserId, games.length > 0 ? games : [{ gameNumber: 1, winnerId, mapId: "" }]);
+
+      // Real bracket topology decides the outcome, no separate win/loss counter: a loss with nowhere to
+      // drop (already in the losers bracket, or single-elim which has no losers bracket at all) is
+      // eliminated; a loss in the winners bracket with a real losers-bracket target just continues there.
+      const eliminated = !wonSeries && (playerNode.bracket !== "winners" || !playerNode.loserDropsTo);
+      const nextNode = eliminated ? null : findNodeForTeam(tree, instance.playerTeamId!);
+
+      if (!eliminated && nextNode) {
+        // Still alive with another match to play in this same stage (either the next round, or — after a
+        // winners-bracket loss — their new losers-bracket match).
+        const nextInstance: TournamentInstance = {
+          ...instance,
+          stageBrackets: { ...instance.stageBrackets, [instance.stageIndex]: tree },
+          playerBracket: { ...instance.playerBracket, wins: instance.playerBracket.wins + (wonSeries ? 1 : 0), losses: instance.playerBracket.losses + (wonSeries ? 0 : 1) },
+          pendingMatch: null,
+        };
+        const nextTable = { ...state.instances, [instanceId]: nextInstance };
+        set({ instances: nextTable });
+        persist(nextTable);
+        return;
+      }
+
+      // The player's run through this stage is decided (eliminated, or nothing further to play — a
+      // survivor/champion). Resolve whatever's left of the SAME tree the player was just a node in, then
+      // read final standings straight off it — the player's own result already lives in those nodes, no
+      // separate merge logic needed the way the old flat counter system required.
+      const bestOf = bestOfForFormat(stage.format);
+      resolveRemainingBracket(tree, currentDate, bestOf);
+      const result = bracketStageResult(tree, stage.advanceCount);
+      const isLastStage = instance.stageIndex + 1 >= instance.stages.length;
+      const playerAdvanced = result.advanced.some((t) => t.id === instance.playerTeamId);
+      const playerEntry = result.standings.find((s) => s.team.id === instance.playerTeamId);
+
+      const nextStageBrackets = { ...instance.stageBrackets };
+      if (!isLastStage) delete nextStageBrackets[instance.stageIndex]; // superseded, outcome now lives in lastStandings
+
+      let nextInstance: TournamentInstance = {
+        ...instance,
+        stageIndex: instance.stageIndex + 1,
+        stageStartDate: currentDate,
+        currentTeams: result.advanced,
+        lastStandings: result.standings,
+        completed: isLastStage,
+        championName: isLastStage ? result.standings.find((s) => s.placement === 1)?.team.name ?? null : null,
+        playerBracket: playerAdvanced ? { teamId: instance.playerTeamId!, wins: 0, losses: 0, eliminated: false } : { ...instance.playerBracket, eliminated: true },
+        pendingMatch: null,
+        playerFinalPlacement: playerAdvanced ? (isLastStage ? 1 : null) : (playerEntry?.placement ?? null),
+        stageBrackets: nextStageBrackets,
+      };
+      // The player is still alive going into a new stage — advanceInstance won't touch this instance again
+      // while that's true, so the new stage's tree has to be built here instead of waiting for the next
+      // calendar tick, otherwise the player would have nothing to browse/queue a match against.
+      if (!isLastStage && playerAdvanced) nextInstance = ensureStageBracketBuilt(nextInstance);
+      const nextTable = { ...state.instances, [instanceId]: nextInstance };
+      set({ instances: nextTable });
+      persist(nextTable);
+      return;
+    }
+
+    // swiss/gsl_group: unchanged from before the bracket rework — a plain win/loss counter with a uniform
+    // "2 losses always ends your run" rule regardless of the stage's real format, no bracket tree involved.
     const wins = instance.playerBracket.wins + (wonSeries ? 1 : 0);
     const losses = instance.playerBracket.losses + (wonSeries ? 0 : 1);
     const winsNeeded = stageWinsNeeded(stage, instance.currentTeams.length);
@@ -767,7 +939,7 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
     // one fewer spot, so every placement it hands out for teams below that cutoff needs to shift down by
     // one to account for the player occupying a slot above them.
     const aiAdvanceCount = advanced ? Math.max(0, stage.advanceCount - 1) : stage.advanceCount;
-    const result = resolveStage(stage.format, aiField, aiAdvanceCount);
+    const result = stage.format === "swiss" ? runSwissStage(aiField, aiAdvanceCount) : runGslGroupStage(aiField, aiAdvanceCount);
     const aiStandings = advanced
       ? result.standings.map((entry) => ({ ...entry, placement: entry.placement === null ? null : entry.placement + 1 }))
       : result.standings;

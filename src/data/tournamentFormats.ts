@@ -2,9 +2,18 @@
 // playoffs) is just four of these chained together with different entrant/advance counts, see
 // data/tournaments.ts for the stage list itself. None of this simulates individual matches point-by-
 // point (that's the live match-sim engine, reserved for matches the human player is actually in), it
-// resolves a best-of-N series probabilistically from each team's aggregate `power` rating, real RL's
+// resolves each GAME of a series probabilistically from each team's aggregate `power` rating, real RL's
 // actual RLCS brackets involve hundreds of teams, simulating every single game tick-by-tick isn't
-// feasible or meaningful for teams the player never sees play.
+// feasible or meaningful for teams the player never sees play. `double_elim`/`single_elim` DO get a real,
+// seeded winners(+losers) bracket tree with a real per-game score and map for every match (see
+// buildDoubleElimBracket/buildSingleElimBracket below) — `swiss`/`gsl_group` stay a plain probabilistic
+// round simulation with no bracket tree, matching how real RLCS broadcasts show those as standings tables
+// too, not bracket diagrams.
+
+import type { SimDate } from "./dateUtils";
+import { mapsForSeries } from "./maps";
+import { seedTeams } from "./bracketSeeding";
+import { allNodes, type MatchNode, type DoubleElimBracket, type SingleElimBracket, type BracketTree, type GameResult } from "./bracketTypes";
 
 export type BracketFormat = "double_elim" | "swiss" | "gsl_group" | "single_elim";
 
@@ -58,6 +67,35 @@ function simulateSeries(a: TournamentTeam, b: TournamentTeam, bestOf: number): {
     : { winner: b, loser: a, winnerGames: gamesB, loserGames: gamesA };
 }
 
+/** Same probabilistic game-win model as `simulateSeries`, but resolves one game at a time and records a
+ *  real per-game result (who won it, which map it was on) instead of collapsing straight to a final score.
+ *  Maps are drawn from `mapsForSeries` up front (the max possible games for this `bestOf`) so a series never
+ *  repeats a map until the pool runs out — the exact rule the player's own live tournament series already
+ *  follows (see useMatchStore.ts's startTournamentSeries) — any unused trailing maps (a series that ends
+ *  early) are simply never assigned to a game. */
+function simulateSeriesWithGames(
+  a: TournamentTeam,
+  b: TournamentTeam,
+  bestOf: number,
+  currentDate: SimDate
+): { winner: TournamentTeam; loser: TournamentTeam; winnerGames: number; loserGames: number; games: GameResult[] } {
+  const gamesToWin = Math.ceil(bestOf / 2);
+  const pA = gameWinProbability(a.power, b.power);
+  const maps = mapsForSeries(currentDate, bestOf);
+  const games: GameResult[] = [];
+  let gamesA = 0;
+  let gamesB = 0;
+  while (gamesA < gamesToWin && gamesB < gamesToWin) {
+    const aWon = Math.random() < pA;
+    if (aWon) gamesA++;
+    else gamesB++;
+    games.push({ gameNumber: games.length + 1, winnerId: (aWon ? a : b).id, mapId: maps[games.length].id });
+  }
+  return gamesA > gamesB
+    ? { winner: a, loser: b, winnerGames: gamesA, loserGames: gamesB, games }
+    : { winner: b, loser: a, winnerGames: gamesB, loserGames: gamesA, games };
+}
+
 function shuffled<T>(arr: T[]): T[] {
   const copy = [...arr];
   for (let i = copy.length - 1; i > 0; i--) {
@@ -67,40 +105,291 @@ function shuffled<T>(arr: T[]): T[] {
   return copy;
 }
 
-/** Loss-count elimination: teams are paired at random each round among everyone still alive, two losses
- *  eliminates a team (matching real RLCS Stage 1 rules), continues until only `advanceCount` teams
- *  remain with fewer than 2 losses. Eliminated teams are placed in the order they dropped, latest first. */
-export function runDoubleElimStage(teams: TournamentTeam[], advanceCount: number, bestOf = 3): StageResult {
-  if (teams.length === 0) return { advanced: [], standings: [] };
-  const losses = new Map<string, number>(teams.map((t) => [t.id, 0]));
-  const eliminated: TournamentTeam[] = [];
-  let alive = [...teams];
+function makeEmptyNode(id: string, round: number, bracket: MatchNode["bracket"]): MatchNode {
+  return { id, round, bracket, slotA: null, slotB: null, winnerAdvancesTo: null, loserDropsTo: null, resolved: false, winnerId: null, games: [] };
+}
 
-  let guard = 0;
-  while (alive.length > advanceCount && guard < 30) {
-    guard++;
-    const pairs = shuffled(alive);
-    const nextAlive: TournamentTeam[] = [];
-    for (let i = 0; i + 1 < pairs.length; i += 2) {
-      const { winner, loser } = simulateSeries(pairs[i], pairs[i + 1], bestOf);
-      nextAlive.push(winner);
-      const l = (losses.get(loser.id) ?? 0) + 1;
-      losses.set(loser.id, l);
-      if (l >= 2) eliminated.push(loser);
-      else nextAlive.push(loser);
+/** Every node whose `winnerAdvancesTo`/`loserDropsTo` points at `(targetId, slot)` — a node's ONE feeder,
+ *  used to walk backward from a not-yet-playable match to whatever needs to resolve first. Bracket sizes
+ *  here (at most a few hundred nodes) make a linear scan plenty fast for the handful of lookups this
+ *  actually needs (bounded by the bracket's depth, O(log N)). */
+export function feederFor(nodes: MatchNode[], targetId: string, slot: "A" | "B"): MatchNode | null {
+  return (
+    nodes.find((n) => n.winnerAdvancesTo?.matchId === targetId && n.winnerAdvancesTo.slot === slot) ??
+    nodes.find((n) => n.loserDropsTo?.matchId === targetId && n.loserDropsTo.slot === slot) ??
+    null
+  );
+}
+
+function advanceWinner(nodesById: Map<string, MatchNode>, node: MatchNode, winnerId: string) {
+  node.winnerId = winnerId;
+  node.resolved = true;
+  if (node.winnerAdvancesTo) {
+    const target = nodesById.get(node.winnerAdvancesTo.matchId);
+    if (target) {
+      if (node.winnerAdvancesTo.slot === "A") target.slotA = { teamId: winnerId };
+      else target.slotB = { teamId: winnerId };
     }
-    if (pairs.length % 2 === 1) nextAlive.push(pairs[pairs.length - 1]); // odd one out gets a bye
-    alive = nextAlive;
+  }
+}
+
+function dropLoser(nodesById: Map<string, MatchNode>, node: MatchNode, loserId: string) {
+  if (node.loserDropsTo) {
+    const target = nodesById.get(node.loserDropsTo.matchId);
+    if (target) {
+      if (node.loserDropsTo.slot === "A") target.slotA = { teamId: loserId };
+      else target.slotB = { teamId: loserId };
+    }
+  }
+}
+
+/** Resolves exactly one match: a bye (only one slot ever filled) auto-advances with no games; otherwise
+ *  simulates the series and routes the winner/loser onward. No-ops if already resolved, or if a slot is
+ *  still empty (caller's job to have resolved its feeder first). */
+function resolveOneMatch(tree: BracketTree, nodesById: Map<string, MatchNode>, node: MatchNode, currentDate: SimDate, bestOf: number) {
+  if (node.resolved) return;
+  if (node.slotA && !node.slotB) { advanceWinner(nodesById, node, node.slotA.teamId); return; }
+  if (node.slotB && !node.slotA) { advanceWinner(nodesById, node, node.slotB.teamId); return; }
+  if (!node.slotA || !node.slotB) return;
+  const teamA = tree.teams[node.slotA.teamId];
+  const teamB = tree.teams[node.slotB.teamId];
+  const result = simulateSeriesWithGames(teamA, teamB, bestOf, currentDate);
+  node.games = result.games;
+  advanceWinner(nodesById, node, result.winner.id);
+  if (node.bracket === "winners") dropLoser(nodesById, node, result.loser.id);
+}
+
+/** Writes the REAL result of the player's own just-played live match-sim series into their bracket node —
+ *  no simulation happens here, `games` comes from what actually happened in useMatchStore's live series
+ *  (see useMatchStore.ts's seriesGameLog), same as an AI match's `games` comes from simulateSeriesWithGames.
+ *  This is the one place a node gets resolved by something other than resolveOneMatch. */
+export function resolvePlayerNode(tree: BracketTree, node: MatchNode, winnerId: string, loserId: string, games: GameResult[]): void {
+  const nodesById = new Map(allNodes(tree).map((n) => [n.id, n]));
+  node.games = games;
+  advanceWinner(nodesById, node, winnerId);
+  if (node.bracket === "winners") dropLoser(nodesById, node, loserId);
+}
+
+/** Resolves `targetNode`, first recursively resolving whichever specific feeder match(es) are still
+ *  blocking its two slots (not the whole stage) — used to find the player's own next opponent without
+ *  bulk-simulating the entire field around them. Bounded by the bracket's depth (O(log N) matches). */
+export function resolveNodeAndAncestors(tree: BracketTree, targetNode: MatchNode, currentDate: SimDate, bestOf: number): string | null {
+  const nodes = allNodes(tree);
+  const nodesById = new Map(nodes.map((n) => [n.id, n]));
+  function ensure(node: MatchNode) {
+    if (node.resolved) return;
+    if (!node.slotA) {
+      const feeder = feederFor(nodes, node.id, "A");
+      if (feeder) ensure(feeder);
+    }
+    if (!node.slotB) {
+      const feeder = feederFor(nodes, node.id, "B");
+      if (feeder) ensure(feeder);
+    }
+    resolveOneMatch(tree, nodesById, node, currentDate, bestOf);
+  }
+  ensure(targetNode);
+  return targetNode.winnerId;
+}
+
+/** Bulk-fills every still-unresolved match in the tree, in dependency order (each round only after
+ *  whatever feeds it), so final standings/placements can be computed once the player's own run through the
+ *  stage is decided and the rest of the field just needs to play out. */
+export function resolveRemainingBracket(tree: BracketTree, currentDate: SimDate, bestOf: number): void {
+  const nodes = allNodes(tree);
+  const nodesById = new Map(nodes.map((n) => [n.id, n]));
+  const order: MatchNode[] = [];
+  if (tree.format === "single_elim") {
+    order.push(...tree.rounds.flat());
+  } else {
+    for (let i = 0; i < tree.winnersRounds.length; i++) {
+      order.push(...tree.winnersRounds[i]);
+      if (tree.losersRounds[i]) order.push(...tree.losersRounds[i]);
+    }
+    if (tree.grandFinal) order.push(tree.grandFinal);
+  }
+  for (const node of order) resolveOneMatch(tree, nodesById, node, currentDate, bestOf);
+}
+
+/** Builds a real seeded single-elimination bracket: round 1 pairs teams via the standard bracket seed
+ *  order (seedTeams), every later round's slots start empty and get filled by the prior round's
+ *  `winnerAdvancesTo` once that match actually resolves (see resolveNodeAndAncestors/resolveRemainingBracket
+ *  — building the tree does NOT simulate anything by itself). */
+export function buildSingleElimBracket(teams: TournamentTeam[]): SingleElimBracket {
+  const teamLookup: Record<string, TournamentTeam> = {};
+  teams.forEach((t) => (teamLookup[t.id] = t));
+  const seeded = seedTeams(teams);
+
+  const rounds: MatchNode[][] = [];
+  let prevRound: MatchNode[] = [];
+  for (let i = 0; i < seeded.length; i += 2) {
+    const node = makeEmptyNode(`se_r1_m${i / 2}`, 1, "winners");
+    node.slotA = seeded[i].team ? { teamId: seeded[i].team!.id } : null;
+    node.slotB = seeded[i + 1]?.team ? { teamId: seeded[i + 1].team!.id } : null;
+    prevRound.push(node);
+  }
+  rounds.push(prevRound);
+
+  let roundNum = 2;
+  while (prevRound.length > 1) {
+    const nextRound: MatchNode[] = [];
+    for (let i = 0; i < prevRound.length; i += 2) {
+      nextRound.push(makeEmptyNode(`se_r${roundNum}_m${i / 2}`, roundNum, "winners"));
+    }
+    prevRound.forEach((m, i) => {
+      const target = nextRound[Math.floor(i / 2)];
+      m.winnerAdvancesTo = { matchId: target.id, slot: i % 2 === 0 ? "A" : "B" };
+    });
+    rounds.push(nextRound);
+    prevRound = nextRound;
+    roundNum++;
   }
 
-  const standings: StandingEntry[] = [
-    ...alive.map((team) => ({ team, wins: 0, losses: losses.get(team.id) ?? 0, placement: null })),
-    ...eliminated
-      .slice()
-      .reverse()
-      .map((team, i) => ({ team, wins: 0, losses: losses.get(team.id) ?? 2, placement: advanceCount + i + 1 })),
-  ];
-  return { advanced: alive.slice(0, advanceCount), standings };
+  return { format: "single_elim", rounds, teams: teamLookup };
+}
+
+function singleElimStandings(tree: SingleElimBracket): StandingEntry[] {
+  const standings: StandingEntry[] = [];
+  const totalRounds = tree.rounds.length;
+  const finalMatch = tree.rounds[totalRounds - 1]?.[0];
+  if (finalMatch?.resolved && finalMatch.winnerId) {
+    standings.push({ team: tree.teams[finalMatch.winnerId], wins: 0, losses: 0, placement: 1 });
+  }
+  let nextPlacement = 2;
+  for (let r = totalRounds; r >= 1; r--) {
+    const round = tree.rounds[r - 1];
+    const losersThisRound: TournamentTeam[] = [];
+    for (const m of round) {
+      if (!m.resolved || !m.winnerId) continue;
+      const loserId = m.slotA?.teamId === m.winnerId ? m.slotB?.teamId : m.slotA?.teamId;
+      if (loserId) losersThisRound.push(tree.teams[loserId]);
+    }
+    for (const team of losersThisRound) standings.push({ team, wins: 0, losses: 1, placement: nextPlacement });
+    if (losersThisRound.length > 0) nextPlacement += losersThisRound.length;
+  }
+  return standings;
+}
+
+/** Builds a real seeded double-elimination bracket, cut short at the top `advanceCount` survivors instead
+ *  of running to a single champion (none of today's stages need a single champion out of this format — see
+ *  tournaments.ts's RLCS_OPEN_STAGES etc., Stage 1 always cuts to a multi-team field). Round SIZES (how
+ *  many matches each winners/losers round has) are fully determined by the team count alone — every match
+ *  eliminates exactly one team regardless of who wins — so the whole round structure is built up front here,
+ *  before any match is actually simulated; only the winner slots stay empty until resolved.
+ *
+ *  Losers-bracket routing is a deliberate simplification of the official RLCS/Liquipedia double-elim
+ *  bracket shape: instead of the official alternating "survivors play down, then merge with new drops"
+ *  pattern, every losers round simply pools ALL currently-alive losers-side teams (carried-over survivors
+ *  plus this round's fresh winners-bracket drops) and pairs them off left-to-right. This keeps the exactly-
+ *  2-losses elimination rule and real per-match routing (each loss drops to one SPECIFIC match built here,
+ *  never a random pick at resolve time) without needing to replicate the official merge-round algorithm
+ *  exactly — visually it reads as a steadily-shrinking losers bracket rather than official RLCS's uneven
+ *  round heights. */
+export function buildDoubleElimBracket(teams: TournamentTeam[], advanceCount: number): DoubleElimBracket {
+  const teamLookup: Record<string, TournamentTeam> = {};
+  teams.forEach((t) => (teamLookup[t.id] = t));
+  const seeded = seedTeams(teams);
+
+  const winnersRounds: MatchNode[][] = [];
+  const losersRounds: MatchNode[][] = [];
+
+  let round1: MatchNode[] = [];
+  for (let i = 0; i < seeded.length; i += 2) {
+    const node = makeEmptyNode(`de_wb1_m${i / 2}`, 1, "winners");
+    node.slotA = seeded[i].team ? { teamId: seeded[i].team!.id } : null;
+    node.slotB = seeded[i + 1]?.team ? { teamId: seeded[i + 1].team!.id } : null;
+    round1.push(node);
+  }
+  winnersRounds.push(round1);
+
+  let prevWbRound = round1;
+  let currentWbSize = seeded.length;
+  let lbPoolSize = 0;
+  let wbRoundIdx = 1;
+
+  while (true) {
+    const nextWbSize = Math.floor(currentWbSize / 2);
+    lbPoolSize += prevWbRound.length; // one loser per WB match just played
+
+    const lbRoundSize = Math.max(1, Math.ceil(lbPoolSize / 2));
+    const lbRound: MatchNode[] = [];
+    for (let i = 0; i < lbRoundSize; i++) lbRound.push(makeEmptyNode(`de_lb${wbRoundIdx}_m${i}`, wbRoundIdx, "losers"));
+    losersRounds.push(lbRound);
+
+    let lbSlotCursor = 0;
+    const nextLbSlot = () => {
+      const node = lbRound[Math.floor(lbSlotCursor / 2)];
+      const slot: "A" | "B" = lbSlotCursor % 2 === 0 ? "A" : "B";
+      lbSlotCursor++;
+      return { node, slot };
+    };
+    if (losersRounds.length > 1) {
+      for (const m of losersRounds[losersRounds.length - 2]) {
+        const { node, slot } = nextLbSlot();
+        m.winnerAdvancesTo = { matchId: node.id, slot };
+      }
+    }
+    for (const m of prevWbRound) {
+      const { node, slot } = nextLbSlot();
+      m.loserDropsTo = { matchId: node.id, slot };
+    }
+
+    lbPoolSize = lbRoundSize;
+    const survivorCount = nextWbSize + lbPoolSize;
+    const isLastRound = survivorCount <= advanceCount || nextWbSize <= 1;
+
+    if (!isLastRound) {
+      const nextWbRound: MatchNode[] = [];
+      for (let i = 0; i < nextWbSize; i++) nextWbRound.push(makeEmptyNode(`de_wb${wbRoundIdx + 1}_m${i}`, wbRoundIdx + 1, "winners"));
+      prevWbRound.forEach((m, i) => {
+        const target = nextWbRound[Math.floor(i / 2)];
+        m.winnerAdvancesTo = { matchId: target.id, slot: i % 2 === 0 ? "A" : "B" };
+      });
+      winnersRounds.push(nextWbRound);
+      prevWbRound = nextWbRound;
+      currentWbSize = nextWbSize;
+    }
+
+    wbRoundIdx++;
+    if (isLastRound) break;
+  }
+
+  return { format: "double_elim", winnersRounds, losersRounds, grandFinal: null, teams: teamLookup };
+}
+
+function doubleElimStandings(tree: DoubleElimBracket, advanceCount: number): { advanced: TournamentTeam[]; standings: StandingEntry[] } {
+  const lastWbRound = tree.winnersRounds[tree.winnersRounds.length - 1];
+  const lastLbRound = tree.losersRounds[tree.losersRounds.length - 1];
+  const survivors: TournamentTeam[] = [];
+  for (const m of lastWbRound) if (m.resolved && m.winnerId) survivors.push(tree.teams[m.winnerId]);
+  for (const m of lastLbRound) if (m.resolved && m.winnerId) survivors.push(tree.teams[m.winnerId]);
+
+  const standings: StandingEntry[] = survivors.map((team) => ({ team, wins: 0, losses: 0, placement: null }));
+  let placement = advanceCount + 1;
+  for (let i = tree.losersRounds.length - 1; i >= 0; i--) {
+    const round = tree.losersRounds[i];
+    const eliminatedHere: TournamentTeam[] = [];
+    for (const m of round) {
+      if (!m.resolved || !m.winnerId) continue;
+      const loserId = m.slotA?.teamId === m.winnerId ? m.slotB?.teamId : m.slotA?.teamId;
+      if (loserId) eliminatedHere.push(tree.teams[loserId]);
+    }
+    for (const team of eliminatedHere) standings.push({ team, wins: 0, losses: 2, placement });
+    if (eliminatedHere.length > 0) placement += eliminatedHere.length;
+  }
+  return { advanced: survivors.slice(0, advanceCount), standings };
+}
+
+/** Converts a (possibly still partially-unresolved) bracket tree into the same `StageResult` shape the
+ *  rest of the store already understands (`advanced`/`standings`) — call `resolveRemainingBracket` first
+ *  if anything in the tree still needs to be simulated. */
+export function bracketStageResult(tree: BracketTree, advanceCount: number): StageResult {
+  if (tree.format === "single_elim") {
+    const standings = singleElimStandings(tree);
+    const champion = standings.find((s) => s.placement === 1)?.team;
+    return { advanced: champion ? [champion] : [], standings };
+  }
+  return doubleElimStandings(tree, advanceCount);
 }
 
 /** Swiss pairing: each round, sort by current wins and pair adjacent teams (standard Swiss simplification,
@@ -165,31 +454,3 @@ export function runGslGroupStage(teams: TournamentTeam[], advanceCount: number, 
   return { advanced, standings };
 }
 
-/** Standard single-elimination bracket, produces a full placement order (1st down through the whole
- *  field), used for the final playoff stage that actually crowns a champion. */
-export function runSingleElimStage(teams: TournamentTeam[], bestOf = 5): StageResult {
-  if (teams.length === 0) return { advanced: [], standings: [] };
-  let alive = shuffled(teams);
-  const eliminationOrder: TournamentTeam[] = [];
-
-  while (alive.length > 1) {
-    const nextAlive: TournamentTeam[] = [];
-    for (let i = 0; i + 1 < alive.length; i += 2) {
-      const { winner, loser } = simulateSeries(alive[i], alive[i + 1], bestOf);
-      nextAlive.push(winner);
-      eliminationOrder.push(loser);
-    }
-    if (alive.length % 2 === 1) nextAlive.push(alive[alive.length - 1]);
-    alive = nextAlive;
-  }
-
-  const champion = alive[0];
-  const placementsDescending = [champion, ...eliminationOrder.slice().reverse()];
-  const standings: StandingEntry[] = placementsDescending.map((team, i) => ({
-    team,
-    wins: 0,
-    losses: 0,
-    placement: i + 1,
-  }));
-  return { advanced: champion ? [champion] : [], standings };
-}

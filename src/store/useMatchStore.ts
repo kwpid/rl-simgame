@@ -756,6 +756,12 @@ interface MatchStoreState {
   seriesWinsSelf: number;
   seriesWinsOpp: number;
   seriesGameNumber: number;
+  /** One entry per game actually played this series (ranked included, though nothing reads it there),
+   *  reset alongside seriesWinsSelf/seriesWinsOpp. For a tournament series, TourneysScreen.tsx's
+   *  onSeriesComplete reads this back out to record the player's own real per-game results (win/loss + map)
+   *  into the bracket-tree match node, so the player's own bracket history has the same per-game fidelity
+   *  as every AI-vs-AI match around it instead of a single synthetic result. */
+  seriesGameLog: { won: boolean; mapId: string | null }[];
   onSeriesComplete: ((selfWonSeries: boolean) => void) | null;
 
   /** Starts searching one or more queues at once (multi-queue): each request gets its own independent
@@ -910,6 +916,7 @@ function startTicking(
       const wonThisGame = selfTeam === "blue" ? scoreBlue > scoreOrange : scoreOrange > scoreBlue;
       const seriesWinsSelf = state.seriesWinsSelf + (wonThisGame ? 1 : 0);
       const seriesWinsOpp = state.seriesWinsOpp + (wonThisGame ? 0 : 1);
+      const seriesGameLog = [...state.seriesGameLog, { won: wonThisGame, mapId: state.mapId }];
       set({
         players,
         scoreBlue,
@@ -921,6 +928,7 @@ function startTicking(
         selfSaves,
         seriesWinsSelf,
         seriesWinsOpp,
+        seriesGameLog,
         ...extra,
       });
     }
@@ -982,6 +990,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   seriesFormat: 1,
   seriesWinsSelf: 0,
   seriesWinsOpp: 0,
+  seriesGameLog: [],
   seriesGameNumber: 1,
   onSeriesComplete: null,
   fieldX: 50,
@@ -1005,6 +1014,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       seriesFormat: 1,
       seriesWinsSelf: 0,
       seriesWinsOpp: 0,
+      seriesGameLog: [],
       seriesGameNumber: 1,
       onSeriesComplete: null,
       fieldX: 50,
@@ -1201,6 +1211,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       seriesFormat,
       seriesWinsSelf: 0,
       seriesWinsOpp: 0,
+      seriesGameLog: [],
       seriesGameNumber: 1,
       onSeriesComplete,
       fieldX: 50,
@@ -1238,6 +1249,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         seriesFormat: 1,
         seriesWinsSelf: 0,
         seriesWinsOpp: 0,
+        seriesGameLog: [],
         seriesGameNumber: 1,
         onSeriesComplete: null,
         fieldX: 50,
@@ -1291,6 +1303,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       seriesFormat: 1,
       seriesWinsSelf: 0,
       seriesWinsOpp: 0,
+      seriesGameLog: [],
       seriesGameNumber: 1,
       onSeriesComplete: null,
       fieldX: 50,

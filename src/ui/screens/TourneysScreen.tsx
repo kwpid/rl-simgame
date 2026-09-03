@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, projectedSeasonSchedule, type TournamentInstance, type RlcsDiscipline } from "@/store/useTournamentStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
+import { TournamentBracket } from "./TournamentBracket";
 import {
   REGION_LABELS,
   MAJOR_GROUPS,
@@ -33,6 +34,16 @@ function isRegistrationOpen(instance: TournamentInstance | undefined): boolean {
   if (instance.playerTeamId) return false;
   if (instance.stageIndex > 0 || instance.completed) return false;
   return true;
+}
+
+/** The bracket tree to show for this instance's currently-relevant stage, if it has one at all (swiss/
+ *  gsl_group stages never get a tree — falls back to null so the caller keeps showing StandingsCard). A
+ *  completed instance only ever retains its FINAL stage's tree (see TournamentInstance's stageBrackets doc
+ *  comment in useTournamentStore.ts), which sits at `stages.length - 1`, not the current (past-the-end)
+ *  stageIndex. */
+function bracketForInstance(instance: TournamentInstance) {
+  const key = instance.completed ? instance.stages.length - 1 : instance.stageIndex;
+  return instance.stageBrackets[key] ?? null;
 }
 
 /** Team roster size is a reliable, kind-agnostic way to tell which discipline an instance is (majors/
@@ -217,7 +228,10 @@ export function TourneysScreen() {
     startTournamentSeries(self, [pendingMatch.opponentName], pendingMatch.seriesFormat, era, rankedSeasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
       const before = useTournamentStore.getState().instances[pendingInstanceId];
       const stageLabelBefore = before?.stages[before.stageIndex]?.label;
-      resolvePlayerMatch(pendingInstanceId, wonSeries, currentDate);
+      // The real per-game log (win/loss + map) from the live series just played, so the player's own
+      // bracket match shows the same per-game fidelity as every AI-vs-AI match around it.
+      const gameLog = useMatchStore.getState().seriesGameLog;
+      resolvePlayerMatch(pendingInstanceId, wonSeries, currentDate, gameLog);
       const after = useTournamentStore.getState().instances[pendingInstanceId];
       if (!after) return;
       const wonItAll = after.completed && after.championName === s.displayName;
@@ -520,7 +534,11 @@ export function TourneysScreen() {
         </>
       )}
 
-      {selected && <StandingsCard instance={selected} currentDate={currentDate} />}
+      {selected && (
+        bracketForInstance(selected)
+          ? <TournamentBracket bracket={bracketForInstance(selected)!} playerTeamId={selected.playerTeamId} />
+          : <StandingsCard instance={selected} currentDate={currentDate} />
+      )}
 
       <style>{`
         .schedule-panel {
