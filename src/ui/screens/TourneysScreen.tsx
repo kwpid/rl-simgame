@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSaveStore } from "@/store/useSaveStore";
-import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, projectedSeasonSchedule, effectiveRlcsSeason, firstSeasonGateDate, effectiveOpenDate, type TournamentInstance, type RlcsDiscipline } from "@/store/useTournamentStore";
+import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, projectedSeasonSchedule, effectiveRlcsSeason, type TournamentInstance, type RlcsDiscipline } from "@/store/useTournamentStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
 import { TournamentBracket } from "./TournamentBracket";
 import {
@@ -90,14 +90,9 @@ export function TourneysScreen() {
   const currentDate = s.currentDate;
   const currentYear = currentDate.year;
   const rankedSeasonNumber = s.seasonNumber; // ranked ladder season, only used for AI opponents' flavor titles
-  const { seasonNumber: rlcsSeasonNumber, seasonStartDate: rlcsSeasonStartDate } = effectiveRlcsSeason(currentDate);
+  const { seasonNumber: rlcsSeasonNumber, seasonStartDate: rlcsSeasonStartDate } = effectiveRlcsSeason(currentDate, s.startDate.year);
   const playerProRegion = saveRegionToProRegion(s.region);
   const era = eraForDate(currentDate);
-  // A brand-new save's first RLCS season doesn't open on each region's own raw stagger date — see
-  // firstSeasonGateDate's doc comment. Every "starts in Nd"/"Starting..." countdown in this screen needs
-  // to count down to whichever is later, or it'll hit zero and show "Starting..." long before the real
-  // gate (up to RLCS_FIRST_SEASON_DELAY_DAYS) actually clears.
-  const rlcsGateDate = firstSeasonGateDate(rlcsSeasonNumber, s.startDate.year, rlcsSeasonStartDate);
 
   const instances = useTournamentStore((st) => st.instances);
   const ensureProgress = useTournamentStore((st) => st.ensureProgress);
@@ -276,7 +271,7 @@ export function TourneysScreen() {
               roughly here based on how long qualifiers and scrim windows take, but shift slightly with how
               regionals/majors actually finish.
             </div>
-            {projectedSeasonSchedule(rlcsSeasonNumber, rlcsSeasonStartDate, s.startDate.year).map((entry) => (
+            {projectedSeasonSchedule(rlcsSeasonNumber, rlcsSeasonStartDate).map((entry) => (
               <div key={entry.id} className="schedule-panel-row">
                 <span className="schedule-panel-date">{formatSimDate(entry.date)}</span>
                 <span>
@@ -332,7 +327,7 @@ export function TourneysScreen() {
       <div className="tourney-grid">
         {rlcsSchedule.map((item) => {
           const instance = instances[item.id];
-          const daysUntilStart = daysBetween(currentDate, effectiveOpenDate(item.startDate, rlcsGateDate));
+          const daysUntilStart = daysBetween(currentDate, item.startDate);
           // 1v1 stays open to anyone as a manual solo entry. 3v3 never shows a register button at all —
           // the org signs itself up automatically (see the auto-register effect above), the player never
           // has that choice to make.
@@ -383,7 +378,7 @@ export function TourneysScreen() {
           <div className="tourney-grid">
             {rivalSeriesSchedule.map((item) => {
               const instance = instances[item.id];
-              const daysUntilStart = daysBetween(currentDate, effectiveOpenDate(item.startDate, rlcsGateDate));
+              const daysUntilStart = daysBetween(currentDate, item.startDate);
               return (
                 <div
                   key={item.id}
@@ -514,7 +509,7 @@ export function TourneysScreen() {
           <div className="tourney-grid">
             {otherSchedule.map((item) => {
               const instance = instances[item.id];
-              const daysUntilStart = daysBetween(currentDate, effectiveOpenDate(item.startDate, rlcsGateDate));
+              const daysUntilStart = daysBetween(currentDate, item.startDate);
               return (
                 <button
                   key={item.id}

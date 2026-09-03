@@ -540,16 +540,22 @@ export function buildSeasonSchedule(seasonNumber: number, seasonStartDate: SimDa
 
   // 1v1 RLCS doesn't exist yet as its own discipline before season 2023 — 3v3 is the only RLCS discipline
   // for the sim's early years, matching the intended fiction (2v2 following a year later, in 2024, isn't
-  // built at all yet, a separate future addition). 1v1 regionals run alongside the 3v3 ones once they do
-  // exist, staggered the same way across all 7 (larger) region list.
+  // built at all yet, a separate future addition). Once it does exist, 1v1 regionals run AFTER every 3v3
+  // regional has concluded (but before the majors) — real RLCS never runs 3v3 and 1v1 regionals in
+  // parallel, 1v1 is the off-season/between-splits format. `lastRegionalEnd` is the last (highest-stagger)
+  // 3v3 region's own start date plus its full stage chain's length, a schedule-time estimate (not tied to
+  // whether that regional has actually finished resolving yet), then 1v1 regionals stagger across their own
+  // (larger, 7-region) list from there.
   if (seasonNumber >= RLCS_1V1_INTRODUCED_SEASON) {
+    const totalOpenStageDays = RLCS_OPEN_STAGES.reduce((sum, stage) => sum + stage.days, 0);
+    const lastRegionalEnd = addDays(seasonStartDate, (RLCS_REGIONS.length - 1) * RLCS_REGION_STAGGER_DAYS + totalOpenStageDays);
     RLCS_1V1_REGIONS.forEach((region, i) => {
       schedule.push({
         id: `rlcs1v1_s${seasonNumber}_${region}`,
         kind: "rlcs_1v1_regional" as const,
         label: `1v1 Regional Season ${seasonNumber} — ${REGION_LABELS[region]}`,
         region,
-        startDate: addDays(seasonStartDate, i * RLCS_REGION_STAGGER_DAYS),
+        startDate: addDays(lastRegionalEnd, i * RLCS_REGION_STAGGER_DAYS),
         stages: RLCS_1V1_REGIONAL_STAGES,
         fieldSize: RLCS_1V1_REGIONAL_FIELD_SIZE,
       });

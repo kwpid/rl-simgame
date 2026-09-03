@@ -66,19 +66,27 @@ let activeSaveId: string | null = null;
 let seasonRestartAnchor: SimDate | null = null;
 const RLCS_RESTART_DELAY_DAYS = 7;
 
-/** The real RLCS season number/start-date to actually schedule from, accounting for a dev restart's
- *  on-ramp (see `seasonRestartAnchor`) — this MUST be the single source of truth for "what season start
- *  date is RLCS actually using right now", since `ensureProgress` (which creates/advances instances) and
- *  any UI code that independently recomputes the season's schedule for DISPLAY purposes (see
- *  TourneysScreen.tsx's own `buildSeasonSchedule` call, and `projectedSeasonSchedule` below) both need to
- *  agree on it. Using `rlcsSeasonForDate`'s raw Jan-1 anchor in one place and this shifted one in another
- *  was exactly the bug where a region's tile showed "Starting..." forever instead of a real countdown: its
- *  own locally-recomputed (unshifted) date had already passed even though the REAL (shifted, store-side)
- *  date hadn't arrived yet, so `!instance` stayed true with no future date to count down to. */
-export function effectiveRlcsSeason(currentDate: SimDate): { seasonNumber: number; seasonStartDate: SimDate } {
+/** The real RLCS season number/start-date to actually schedule from, accounting for BOTH a fresh save's
+ *  first-season on-ramp (RLCS_FIRST_SEASON_DELAY_DAYS) and a dev restart's on-ramp (`seasonRestartAnchor`)
+ *  — this MUST be the single source of truth for "what season start date is RLCS actually using right
+ *  now", since `ensureProgress` (which creates/advances instances) and any UI code that independently
+ *  recomputes the season's schedule for DISPLAY purposes (TourneysScreen.tsx's own `buildSeasonSchedule`
+ *  call, and `projectedSeasonSchedule` below) both need to agree on it.
+ *
+ *  Critically, this shifts the WHOLE anchor `buildSeasonSchedule` staggers every region from, rather than
+ *  gating/clamping each item's own date independently — the latter was tried and is wrong: once a delay
+ *  (90 days for a first season, say) is longer than the stagger spread between regions (at most ~70 days
+ *  for 7 regions), EVERY region's individually-clamped date collapses onto the exact same day, destroying
+ *  the whole point of staggering regions apart. Shifting the anchor instead means `buildSeasonSchedule`
+ *  computes each region's date as normal (anchor + its own offset), so regions still open on different,
+ *  staggered days — they're just all pushed later as a whole. */
+export function effectiveRlcsSeason(currentDate: SimDate, saveStartYear: number): { seasonNumber: number; seasonStartDate: SimDate } {
   const { seasonNumber, seasonStartDate: realSeasonStartDate } = rlcsSeasonForDate(currentDate);
+  const candidates: SimDate[] = [realSeasonStartDate];
+  if (seasonNumber === saveStartYear) candidates.push(addDays(realSeasonStartDate, RLCS_FIRST_SEASON_DELAY_DAYS));
   const restartAppliesThisSeason = seasonRestartAnchor !== null && rlcsSeasonForDate(seasonRestartAnchor).seasonNumber === seasonNumber;
-  const seasonStartDate = restartAppliesThisSeason ? addDays(seasonRestartAnchor!, RLCS_RESTART_DELAY_DAYS) : realSeasonStartDate;
+  if (restartAppliesThisSeason) candidates.push(addDays(seasonRestartAnchor!, RLCS_RESTART_DELAY_DAYS));
+  const seasonStartDate = candidates.reduce((latest, d) => (daysBetween(latest, d) > 0 ? d : latest));
   return { seasonNumber, seasonStartDate };
 }
 
@@ -170,23 +178,6 @@ export const REGISTRATION_WINDOW_DAYS = 7;
  *  spirit as a real rookie season not starting mid-split. Only ever applies to the save's first season. */
 export const RLCS_FIRST_SEASON_DELAY_DAYS = 90;
 
-/** null outside the save's first RLCS season (no gate at all — every later season opens right on its own
- *  staggered date). Inside the first season, the date nothing can open before, regardless of a region's own
- *  earlier stagger offset — used by BOTH `ensureProgress` (to actually gate creation) and any UI computing
- *  its own "starts in Nd" countdown for display, so the two can't disagree the way they did before this
- *  was extracted: a region whose raw stagger offset (e.g. day 10) is much earlier than this gate (day 90)
- *  would otherwise count down to zero and show "Starting..." for the ~80 days in between, when the real
- *  wait is still that much longer. */
-export function firstSeasonGateDate(seasonNumber: number, saveStartYear: number, seasonStartDate: SimDate): SimDate | null {
-  if (seasonNumber !== saveStartYear) return null;
-  return addDays(seasonStartDate, RLCS_FIRST_SEASON_DELAY_DAYS);
-}
-
-/** The date a schedule item's tile should actually count down to for display — its own raw stagger date,
- *  or the save's first-season gate date if that's later (see `firstSeasonGateDate`). */
-export function effectiveOpenDate(itemStartDate: SimDate, gateDate: SimDate | null): SimDate {
-  return gateDate && daysBetween(itemStartDate, gateDate) > 0 ? gateDate : itemStartDate;
-}
 
 /** Simplified, uniform rule for the player's own live journey through a stage: win enough series to
  *  clinch one of the stage's advancing spots, two losses (regardless of the stage's real-world format,
@@ -537,14 +528,11 @@ function totalStageDays(stages: StageConfig[]): number {
  *  exact same date as their 3v3 counterpart (real RLCS runs both disciplines at the same event weekend, see
  *  getMajorReadiness's own doc comment), so they're just relabeled copies of the 3v3 entries rather than a
  *  separate calculation from 1v1 regionals. */
-export function projectedSeasonSchedule(seasonNumber: number, seasonStartDate: SimDate, saveStartYear: number): ProjectedScheduleEntry[] {
-  // A brand-new save's regionals/Rival Series don't actually open on their raw stagger date (see
-  // firstSeasonGateDate) — shifting each one here, before anything downstream uses it, keeps the whole
-  // cascade (the entries themselves, and the Major/Worlds estimates computed FROM their completion dates)
-  // consistent with what `ensureProgress` will really create, instead of showing an earlier date here that
-  // silently disagrees with the actual gated one shown elsewhere (TourneysScreen's own tile countdowns).
-  const gateDate = firstSeasonGateDate(seasonNumber, saveStartYear, seasonStartDate);
-  const scheduled = buildSeasonSchedule(seasonNumber, seasonStartDate).map((sc) => ({ ...sc, startDate: effectiveOpenDate(sc.startDate, gateDate) }));
+export function projectedSeasonSchedule(seasonNumber: number, seasonStartDate: SimDate): ProjectedScheduleEntry[] {
+  // `seasonStartDate` is expected to already be the fully-shifted anchor from `effectiveRlcsSeason` (first-
+  // season on-ramp/dev restart both folded in there) — this function just builds the schedule from it like
+  // any other date, no separate gating needed here.
+  const scheduled = buildSeasonSchedule(seasonNumber, seasonStartDate);
   const entries: ProjectedScheduleEntry[] = scheduled
     .filter((sc) => sc.kind === "rlcs_regional" || sc.kind === "rlcs_1v1_regional" || sc.kind === "rlrs_regional")
     .map((sc) => ({ id: sc.id, label: sc.label, date: sc.startDate, estimated: false }));
@@ -777,21 +765,19 @@ export const useTournamentStore = create<TournamentStoreState>((set, get) => ({
 
   ensureProgress: (currentDate, currentYear, saveStartYear, teamsResetSeed) => {
     const state = get();
-    const { seasonNumber, seasonStartDate } = effectiveRlcsSeason(currentDate);
+    // effectiveRlcsSeason folds in both the fresh-save first-season on-ramp and a dev restart's on-ramp by
+    // shifting the WHOLE anchor buildSeasonSchedule staggers regions from (see its own doc comment) — so
+    // no separate gate check is needed here, `item.startDate` already reflects whichever delay applies.
+    const { seasonNumber, seasonStartDate } = effectiveRlcsSeason(currentDate, saveStartYear);
     const scheduled = buildSeasonSchedule(seasonNumber, seasonStartDate);
     let changed = false;
     const next: InstanceTable = { ...state.instances };
-    // A brand-new save doesn't drop the player into a live RLCS season on day one — the very first season
-    // only opens once RLCS_FIRST_SEASON_DELAY_DAYS have passed, same on-ramp a real fresh career would get.
-    // Every later season (seasonNumber !== saveStartYear) is unaffected, still opens right on its own Jan 1.
-    const gateDate = firstSeasonGateDate(seasonNumber, saveStartYear, seasonStartDate);
 
     for (const item of scheduled) {
       // Fields open up to REGISTRATION_WINDOW_DAYS before the scheduled start so the player can see and
       // register ahead of time, the stage itself still won't actually resolve until the real start date
       // (daysBetween(stageStartDate, currentDate) stays negative until then, see advanceInstance).
       if (daysBetween(item.startDate, currentDate) < -REGISTRATION_WINDOW_DAYS) continue;
-      if (gateDate && daysBetween(gateDate, currentDate) < 0) continue;
       if (!next[item.id]) {
         next[item.id] = createInstance(item, currentYear, seasonNumber, teamsResetSeed, currentDate, seasonStartDate);
         changed = true;
