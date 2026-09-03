@@ -16,7 +16,7 @@ import { orgTagForOrgName, saveRegionToProRegion, REGION_LABELS as PRO_REGION_LA
 import { seasonEndDate, rewardTierSequence, REWARD_WINS_REQUIRED } from "@/data/seasons";
 import { daysBetween } from "@/data/dateUtils";
 
-const LEADERBOARD_SIZE = 50;
+const LEADERBOARD_SIZE = 100;
 
 const TEAM_SIZE: Record<QueueMode, number> = { "1v1": 1, "2v2": 2, "3v3": 3 };
 
@@ -68,10 +68,10 @@ export function RankedScreen() {
     return () => clearTimeout(timer);
   }, [showPromotionAnim, dismissPendingPromotion]);
 
-  // Top 50 is by definition everyone at the very top of the ladder, so nobody on it (real pro or filler)
+  // Top 100 is by definition everyone at the very top of the ladder, so nobody on it (real pro or filler)
   // can sit below the MMR floor for the best tier this era actually offers (SSL in modern, Grand
   // Champion in legacy). A pro whose live MMR in THIS queue doesn't clear that floor (a 2v2-main pro's
-  // weaker 1v1, or basically anyone's neglected 3v3) just isn't Top 50 caliber here and is left out.
+  // weaker 1v1, or basically anyone's neglected 3v3) just isn't Top 100 caliber here and is left out.
   const topTierFloor = tierMinMmr(era === "modern" ? "ssl" : "grand_champion", era, queue);
   const proRows = activePros
     .map((pro) => {
@@ -387,7 +387,7 @@ export function RankedScreen() {
 
         <div className="leaderboard-card" style={{ ["--top-color" as string]: tierColor(topRankTier, era) }}>
           <div className="leaderboard-header">
-            <h2 className="leaderboard-title">Top 50</h2>
+            <h2 className="leaderboard-title">Top 100</h2>
             <RankBadge tier={topRankTier} era={era} size={22} />
           </div>
           <div className="leaderboard-scroll">

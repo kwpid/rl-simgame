@@ -249,10 +249,12 @@ export function generateOpponentStats(
    *  seriously skilled, not just typical ranked players. Only affects non-pro opponents, a real pro's
    *  stats already come from the dedicated pro floor regardless of context. */
   isTournamentMatch = false,
-  /** Real RLCS titles this specific name has actually earned in completed tournament history (see
-   *  store/useTournamentStore.ts's findRealRlcsTitlesForPlayer), takes priority over the fictional
-   *  past-season titles below when present, since it's chronologically real rather than a plausible guess. */
-  realRlcsTitles?: TitleEntry[],
+  /** The FINAL title choice for a tracked identity (pro, regional grinder, leaderboard filler), already
+   *  resolved by the caller via useAiTitleStore.ts's getEquippedTitle (real/fictional RLCS history +
+   *  fictional season-title inventory, persisted so the same name keeps wearing the same title match to
+   *  match). `null` means tracked but genuinely has no titles at all. `undefined` (an untracked, one-off
+   *  generic opponent) falls back to the old per-match `pickAiTitle` flavor roll below. */
+  resolvedTitle?: TitleEntry | null,
   /** A pro or leaderboard filler regular's own persistent, gradually-simulated Game Sense/Mechanical
    *  Consistency (see store/useProLeaderboardStore.ts / useLeaderboardFillerStore.ts), used verbatim
    *  instead of rolling a fresh jittered value every match — the whole point being that a name tracked on
@@ -291,10 +293,7 @@ export function generateOpponentStats(
   const amateurTournamentFloor = 25000 + Math.max(0, Math.min(1, tournamentStageProgress)) * 45000 + Math.random() * 15000;
   const rankedEstimate = estimateGameSenseForMmr(mmr, era, proQueueOverride?.queue ?? queue, currentYear);
 
-  // Real, earned RLCS history takes priority over the fictional season-title guesswork below, someone
-  // who's actually won a Regional should show that far more often than a made-up past-season title.
-  const bestRealTitle = realRlcsTitles && realRlcsTitles.length > 0 ? realRlcsTitles[realRlcsTitles.length - 1] : null;
-  const title = bestRealTitle && Math.random() < 0.7 ? bestRealTitle : pickAiTitle(era, seasonNumber, effectiveTier);
+  const title = resolvedTitle !== undefined ? resolvedTitle : pickAiTitle(era, seasonNumber, effectiveTier);
 
   return {
     name,

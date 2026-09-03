@@ -9,7 +9,8 @@
 // while ranked at-or-above that tier. Losses never count. A tier stays unlocked for the season even if
 // you derank afterward, and the final unlocked tier is what gets paid out at season's end.
 
-import { eraForDate, ERA_CUTOVER, type RankEra, type RankTierId } from "./rankSystem";
+import { eraForDate, ERA_CUTOVER, tierMinMmr, type RankEra, type RankQueue, type RankTierId } from "./rankSystem";
+import { hashString } from "./proPlayers";
 import type { SimDate } from "./dateUtils";
 import { addDays, daysBetween } from "./dateUtils";
 
@@ -159,6 +160,52 @@ export function pickAiTitle(era: RankEra, currentSeasonNumber: number, currentRa
   const sslChance = era === "modern" ? (currentRankTier === "ssl" ? 0.7 : currentRankTier === "grand_champion" ? 0.1 : 0) : 0;
   const peakTier: RankTierId = Math.random() < sslChance ? "ssl" : "grand_champion";
   return seasonTitleFor(pastSeason, era, peakTier);
+}
+
+/** A tracked AI identity's (pro, regional grinder, leaderboard filler) plausible PAST season titles,
+ *  deterministic per name (never `Math.random()`, unlike `pickAiTitle` above) so it forms a real, stable
+ *  inventory to equip from rather than a different guess every time it's asked — see useAiTitleStore.ts's
+ *  doc comment for why that stability matters. `mmr` is this identity's current live MMR in `queue`, used
+ *  as a skill proxy: how far clear of the era's top-tier floor they currently sit gates both how many past
+ *  seasons plausibly went their way and how often the flashier SSL banner (vs "merely" GC) shows up. */
+export function pickFictionalSeasonTitles(name: string, currentSeasonNumber: number, era: RankEra, mmr: number, queue: RankQueue): TitleEntry[] {
+  const pastSeasonsAvailable = currentSeasonNumber - 1;
+  if (pastSeasonsAvailable < 1) return [];
+  const floorTier: RankTierId = era === "modern" ? "ssl" : "grand_champion";
+  const floor = tierMinMmr(floorTier, era, queue);
+  const clearance = mmr - floor;
+  if (clearance < -floor * 0.15) return []; // nowhere near title-caliber, not worth rolling for
+
+  const showChance = Math.max(0, Math.min(0.85, 0.25 + clearance / 2000));
+  if (hashString(name + "#season_history_show") % 1000 / 1000 > showChance) return [];
+
+  const maxCount = Math.max(1, Math.min(pastSeasonsAvailable, 1 + Math.floor(clearance / 400)));
+  const count = 1 + (hashString(name + "#season_history_count") % maxCount);
+  const sslChance = era === "modern" ? Math.max(0, Math.min(0.7, clearance / 900)) : 0;
+
+  const titles: TitleEntry[] = [];
+  for (let i = 0; i < count; i++) {
+    const pastSeason = 1 + (hashString(`${name}#season_history_${i}`) % pastSeasonsAvailable);
+    const tierRoll = hashString(`${name}#season_history_tier_${i}`) % 1000 / 1000;
+    const peakTier: RankTierId = tierRoll < sslChance ? "ssl" : "grand_champion";
+    const title = seasonTitleFor(pastSeason, era, peakTier);
+    if (title) titles.push(title);
+  }
+  return titles;
+}
+
+/** How impressive a title is, for picking the single "best" one out of an inventory (see
+ *  useAiTitleStore.ts) — RLCS results (see tournaments.ts's `rlcsTitleMmrBonus`, the same rough ordering)
+ *  outrank season titles, which outrank a bare participation-level title. */
+export function titleImpressiveness(t: TitleEntry): number {
+  if (t.id.includes("_worlds_champ")) return 100;
+  if (t.id.includes("_major_") && t.id.endsWith("_champ")) return 90;
+  if (t.id.includes("_worlds_elite")) return 80;
+  if (t.id.includes("_regional_champ") || (t.id.startsWith("rlrs_") && t.id.endsWith("_champ"))) return 70;
+  if (t.id.endsWith("_ssl")) return 65;
+  if (t.id.endsWith("_gc")) return 55;
+  if (t.id.includes("_contender")) return 40;
+  return 10;
 }
 
 /** Popup shown once per season rollover: what season it is now, whether this is the first modern-era

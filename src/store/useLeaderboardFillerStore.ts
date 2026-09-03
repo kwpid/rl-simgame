@@ -193,7 +193,7 @@ interface LeaderboardFillerState {
   getMmr: (name: string, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => number;
   /** Same as `getMmr` but returns the persistent Game Sense/Mechanical Consistency this entry has
    *  simulated its way to, so a filler regular's in-match stats are the SAME person the board shows. */
-  getStats: (name: string, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => { gameSense: number; mechanicalConsistency: number };
+  getStats: (name: string, queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => { gameSense: number; mechanicalConsistency: number; peakMmr: number };
   /** Batches catch-up for every name in the list, in one `set` call. Call this from a `useEffect`, never
    *  from inside a render body. */
   ensureSeeded: (names: string[], queue: QueueMode, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate) => void;
@@ -224,7 +224,7 @@ export const useLeaderboardFillerStore = create<LeaderboardFillerState>((set, ge
     const nextTable = { ...state.mmr, [name]: { ...state.mmr[name], [queue]: entry } };
     set({ mmr: nextTable });
     persist(nextTable);
-    return { gameSense: entry.gameSense, mechanicalConsistency: entry.mechanicalConsistency };
+    return { gameSense: entry.gameSense, mechanicalConsistency: entry.mechanicalConsistency, peakMmr: entry.peakMmr };
   },
 
   ensureSeeded: (names, queue, era, currentYear, currentDate, seasonStartDate) => {

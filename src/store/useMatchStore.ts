@@ -17,6 +17,8 @@ import { isOnlineNow, isActivelyQueueing, REGION_HOUR_OFFSET } from "@/data/aiAc
 import { regionCompatiblePeers, partyPartnerFor, isCurrentlyPartied } from "@/data/aiParties";
 import { aiTeamChemistryForDate } from "@/data/orgs";
 import { findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
+import { useAiTitleStore } from "@/store/useAiTitleStore";
+import { pickFictionalSeasonTitles } from "@/data/seasons";
 import { useSaveStore } from "@/store/useSaveStore";
 import {
   generateOpponentStats,
@@ -301,6 +303,18 @@ function realOrgTagForPlayer(
   return team ? orgTagForOrgName(team.name) : undefined;
 }
 
+/** Resolves the one title a tracked AI identity (pro, regional grinder, leaderboard filler) should actually
+ *  be shown wearing right now: merges their real+fictional RLCS history (findRealRlcsTitlesForPlayer,
+ *  RLCS-season-numbered) with a fictional ranked-season-title inventory (pickFictionalSeasonTitles,
+ *  ranked-ladder-season-numbered — deliberately NOT the same season number, same reasoning as
+ *  useTournamentStore.ts's createInstance doc comment on not conflating the two calendars), then hands the
+ *  combined inventory to useAiTitleStore.ts's getEquippedTitle for the actual persistent pick. */
+function resolveAiTitle(name: string, era: RankEra, rankedSeasonNumber: number, currentDate: SimDate, queue: QueueMode, mmr: number): TitleEntry | null {
+  const rlcsTitles = findRealRlcsTitlesForPlayer(name, rlcsSeasonForDate(currentDate).seasonNumber);
+  const seasonTitles = pickFictionalSeasonTitles(name, rankedSeasonNumber, era, mmr, queue);
+  return useAiTitleStore.getState().getEquippedTitle(name, [...rlcsTitles, ...seasonTitles], currentDate);
+}
+
 function buildOpponent(
   name: string,
   team: "blue" | "orange",
@@ -327,7 +341,9 @@ function buildOpponent(
 ): MatchPlayer {
   const effectiveMmr = friendOverride?.mmr ?? leaderboardMmr;
   const proQueueOverride = effectiveMmr !== undefined ? { mmr: effectiveMmr, queue } : undefined;
-  const realRlcsTitles = findRealRlcsTitlesForPlayer(name, rlcsSeasonForDate(currentDate).seasonNumber);
+  // Only a real tracked leaderboard name (pro/grinder/filler) gets a persistent title inventory — a plain
+  // friend has no queue-based MMR history to seed one from, they keep the old untracked flavor roll.
+  const resolvedTitle = leaderboardMmr !== undefined ? resolveAiTitle(name, era, seasonNumber, currentDate, queue, leaderboardMmr) : undefined;
   // A tracked leaderboard name (pro, regional grinder, or filler regular), or a plain friend, carries its
   // own persistent, gradually-simulated Game Sense/Mechanical Consistency, the same person shows up match
   // to match instead of a fresh jittered roll every time.
@@ -343,7 +359,7 @@ function buildOpponent(
           : useLeaderboardFillerStore.getState().getStats(name, queue, era, currentYear, currentDate, seasonStartDate);
   const region = pro?.region ?? grinderRegion;
   return {
-    ...generateOpponentStats(name, team, rankTier, era, seasonNumber, currentYear, playerMmr, queue, proQueueOverride, false, realRlcsTitles, persistentStats),
+    ...generateOpponentStats(name, team, rankTier, era, seasonNumber, currentYear, playerMmr, queue, proQueueOverride, false, resolvedTitle, persistentStats),
     points: 0,
     region,
     orgTag: realOrgTagForPlayer(name, region, currentYear, era, currentDate, seasonStartDate, rlcsTeamsResetSeed),
@@ -1193,6 +1209,16 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       if (grinderRegion) return useRegionalRosterStore.getState().getStats(name, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate);
       return undefined;
     }
+    // Titles here still reflect a tracked identity's REAL ranked-ladder MMR/history (same as ranked
+    // matchmaking), not the flat elite tournament-context stats above — an org scrim/RLCS opponent's shown
+    // title should track who they actually are, not the tournament-only strength bump.
+    function tournamentResolvedTitle(name: string): TitleEntry | null | undefined {
+      const pro = PRO_PLAYERS.find((p) => p.name === name);
+      if (pro) return resolveAiTitle(name, era, seasonNumber, currentDate, queue, useProLeaderboardStore.getState().getMmr(pro.name, queue, era, currentYear, currentDate, seasonStartDate));
+      const grinderRegion = findGrinderRegion(name, currentYear);
+      if (grinderRegion) return resolveAiTitle(name, era, seasonNumber, currentDate, queue, useRegionalRosterStore.getState().getMmr(name, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate));
+      return undefined;
+    }
     // Same 50/50 team-color coinflip as ranked (see generateRoster) — rolled once for the whole series,
     // continueSeries never rebuilds `players` between games, so this stays consistent start to finish.
     const selfTeam: "blue" | "orange" = Math.random() < 0.5 ? "blue" : "orange";
@@ -1217,7 +1243,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       // signed to the exact same org as the player, so they always carry the player's own tag (and the same
       // team's chemistry) rather than whatever generateOpponentStats would have randomly assigned.
       ...teammateNames.map((name) => ({
-        ...generateOpponentStats(name, selfTeam, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, tournamentPersistentStats(name), stageProgress),
+        ...generateOpponentStats(name, selfTeam, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, tournamentResolvedTitle(name), tournamentPersistentStats(name), stageProgress),
         points: 0,
         orgTag: self.orgTag,
         teamChemistry: self.teamChemistry,
@@ -1227,7 +1253,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       // Their team's chemistry (see aiTeamChemistryForDate) ramps with how far into the RLCS season it is,
       // not tracked per-team — no per-team scrim history exists for every generated AI team.
       ...opponentNames.map((name) => ({
-        ...generateOpponentStats(name, oppTeam, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, undefined, tournamentPersistentStats(name), stageProgress),
+        ...generateOpponentStats(name, oppTeam, "grand_champion", era, seasonNumber, currentYear, 0, queue, undefined, true, tournamentResolvedTitle(name), tournamentPersistentStats(name), stageProgress),
         points: 0,
         ...(opponentOrgTag ? { orgTag: opponentOrgTag } : {}),
         teamChemistry: queue === "3v3" ? aiTeamChemistryForDate(currentDate, seasonStartDate) : undefined,
