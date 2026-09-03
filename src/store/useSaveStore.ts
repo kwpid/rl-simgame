@@ -379,6 +379,11 @@ interface SaveStoreState extends SaveData {
    *  matches use, clearing placements and bumping peak rank if this is a new high. */
   devSetMmr: (queue: QueueMode, mmr: number) => void;
   devSetRewardLevel: (tier: RankTierId, winsProgress: number) => void;
+  /** Dev-only: directly sets a queue's lifetime career wins/losses (careerStats, shown on the Stats
+   *  screen) and this ranked season's games-played count (rankedProfiles[queue].seasonMatchesPlayed) —
+   *  goals/assists/saves/mvps are untouched, only wins/losses/season activity need a quick way to fake for
+   *  testing. */
+  devSetCareerStats: (queue: QueueMode, wins: number, losses: number, seasonMatchesPlayed: number) => void;
   /** Dev-only: forces the ranked ladder's current season number, and resets `seasonStartDate` to right
    *  now so the natural day-based rollover doesn't immediately re-fire from a now-stale season-start date.
    *  Lets past-season AI titles (see data/seasons.ts's pickAiTitle, which only ever looks strictly BEFORE
@@ -1416,6 +1421,20 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const nextTier = sequence[tierIdx + 1];
     if (nextTier) rewardProgressByTier[nextTier] = Math.max(0, Math.min(REWARD_WINS_REQUIRED, winsProgress));
     set({ rewardTierUnlocked: tier, rewardProgressByTier });
+  },
+
+  devSetCareerStats: (queue, wins, losses, seasonMatchesPlayed) => {
+    const state = get();
+    set({
+      careerStats: {
+        ...state.careerStats,
+        [queue]: { ...state.careerStats[queue], wins: Math.max(0, Math.round(wins)), losses: Math.max(0, Math.round(losses)) },
+      },
+      rankedProfiles: {
+        ...state.rankedProfiles,
+        [queue]: { ...state.rankedProfiles[queue], seasonMatchesPlayed: Math.max(0, Math.round(seasonMatchesPlayed)) },
+      },
+    });
   },
 
   devSetSeasonNumber: (seasonNumber) => {

@@ -310,6 +310,7 @@ function DeveloperToolsSection() {
   const devAddSkillPoints = useSaveStore((store) => store.devAddSkillPoints);
   const devSetMmr = useSaveStore((store) => store.devSetMmr);
   const devSetRewardLevel = useSaveStore((store) => store.devSetRewardLevel);
+  const devSetCareerStats = useSaveStore((store) => store.devSetCareerStats);
   const devSetSeasonNumber = useSaveStore((store) => store.devSetSeasonNumber);
   const resetProLeaderboard = useProLeaderboardStore((store) => store.resetAll);
   const resetFillerLeaderboard = useLeaderboardFillerStore((store) => store.resetAll);
@@ -330,6 +331,10 @@ function DeveloperToolsSection() {
   const [rewardTier, setRewardTier] = useState<RankTierId>(s.rewardTierUnlocked);
   const [rewardWins, setRewardWins] = useState("0");
   const [seasonNumberValue, setSeasonNumberValue] = useState(String(s.seasonNumber));
+  const [careerStatsQueue, setCareerStatsQueue] = useState<QueueMode>("2v2");
+  const [careerWinsValue, setCareerWinsValue] = useState(String(s.careerStats["2v2"].wins));
+  const [careerLossesValue, setCareerLossesValue] = useState(String(s.careerStats["2v2"].losses));
+  const [seasonMatchesValue, setSeasonMatchesValue] = useState(String(s.rankedProfiles["2v2"].seasonMatchesPlayed));
 
   const [mechanicId, setMechanicId] = useState(MECHANICS[0].id);
   const [mechanicValue, setMechanicValue] = useState("1000");
@@ -646,6 +651,47 @@ function DeveloperToolsSection() {
               />
               <button className="dev-btn" onClick={() => devSetSeasonNumber(Number(seasonNumberValue) || 1)}>
                 Set (AI titles from earlier seasons show up automatically)
+              </button>
+            </div>
+          </div>
+
+          <div className="dev-tools-group">
+            <span className="dev-tools-label">Set Career Stats (per queue)</span>
+            <div className="dev-tools-row">
+              <select className="dev-select" value={careerStatsQueue} onChange={(e) => setCareerStatsQueue(e.target.value as QueueMode)}>
+                {QUEUES.map((q) => (
+                  <option key={q} value={q}>{QUEUE_LABELS[q]}</option>
+                ))}
+              </select>
+              <input
+                className="dev-input"
+                type="number"
+                value={careerWinsValue}
+                onChange={(e) => setCareerWinsValue(e.target.value)}
+                placeholder="Wins"
+                title="Lifetime career wins in this queue"
+              />
+              <input
+                className="dev-input"
+                type="number"
+                value={careerLossesValue}
+                onChange={(e) => setCareerLossesValue(e.target.value)}
+                placeholder="Losses"
+                title="Lifetime career losses in this queue"
+              />
+              <input
+                className="dev-input"
+                type="number"
+                value={seasonMatchesValue}
+                onChange={(e) => setSeasonMatchesValue(e.target.value)}
+                placeholder="Season games"
+                title="Games played this ranked season in this queue"
+              />
+              <button
+                className="dev-btn"
+                onClick={() => devSetCareerStats(careerStatsQueue, Number(careerWinsValue) || 0, Number(careerLossesValue) || 0, Number(seasonMatchesValue) || 0)}
+              >
+                Set
               </button>
             </div>
           </div>
