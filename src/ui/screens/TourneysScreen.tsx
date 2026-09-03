@@ -276,7 +276,7 @@ export function TourneysScreen() {
               roughly here based on how long qualifiers and scrim windows take, but shift slightly with how
               regionals/majors actually finish.
             </div>
-            {projectedSeasonSchedule(rlcsSeasonNumber, rlcsSeasonStartDate).map((entry) => (
+            {projectedSeasonSchedule(rlcsSeasonNumber, rlcsSeasonStartDate, s.startDate.year).map((entry) => (
               <div key={entry.id} className="schedule-panel-row">
                 <span className="schedule-panel-date">{formatSimDate(entry.date)}</span>
                 <span>

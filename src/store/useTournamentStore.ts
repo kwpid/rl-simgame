@@ -537,8 +537,14 @@ function totalStageDays(stages: StageConfig[]): number {
  *  exact same date as their 3v3 counterpart (real RLCS runs both disciplines at the same event weekend, see
  *  getMajorReadiness's own doc comment), so they're just relabeled copies of the 3v3 entries rather than a
  *  separate calculation from 1v1 regionals. */
-export function projectedSeasonSchedule(seasonNumber: number, seasonStartDate: SimDate): ProjectedScheduleEntry[] {
-  const scheduled = buildSeasonSchedule(seasonNumber, seasonStartDate);
+export function projectedSeasonSchedule(seasonNumber: number, seasonStartDate: SimDate, saveStartYear: number): ProjectedScheduleEntry[] {
+  // A brand-new save's regionals/Rival Series don't actually open on their raw stagger date (see
+  // firstSeasonGateDate) — shifting each one here, before anything downstream uses it, keeps the whole
+  // cascade (the entries themselves, and the Major/Worlds estimates computed FROM their completion dates)
+  // consistent with what `ensureProgress` will really create, instead of showing an earlier date here that
+  // silently disagrees with the actual gated one shown elsewhere (TourneysScreen's own tile countdowns).
+  const gateDate = firstSeasonGateDate(seasonNumber, saveStartYear, seasonStartDate);
+  const scheduled = buildSeasonSchedule(seasonNumber, seasonStartDate).map((sc) => ({ ...sc, startDate: effectiveOpenDate(sc.startDate, gateDate) }));
   const entries: ProjectedScheduleEntry[] = scheduled
     .filter((sc) => sc.kind === "rlcs_regional" || sc.kind === "rlcs_1v1_regional" || sc.kind === "rlrs_regional")
     .map((sc) => ({ id: sc.id, label: sc.label, date: sc.startDate, estimated: false }));
