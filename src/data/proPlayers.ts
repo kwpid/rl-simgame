@@ -290,11 +290,21 @@ export function seedProMmr(pro: ProPlayer, era: RankEra, currentYear: number): R
     "3v3": grindedThirdMmr,
   } as Record<QueueMode, number>;
 
-  // 1v1's real population is far smaller than 2s, the MMR ceiling sits much closer to the SSL floor
-  // itself, real top-50 duel is typically 1700-1800, rarely past 2000, regardless of whether 1v1 ended
-  // up being this pro's primary or secondary queue above.
-  const oneV1Ceiling = tierMinMmr(topAnchor, era, "1v1") + 200;
-  result["1v1"] = Math.min(result["1v1"], oneV1Ceiling);
+  // 1v1's real population is far smaller than 2s, so a pro who ISN'T taking duel seriously stays held
+  // back near the floor — but a genuine 1v1 specialist (it's literally their primary queue) climbs the
+  // exact same uncapped way a 2v2/3v3 primary already does above, nothing here should artificially flatten
+  // them back down near the floor just for being good at 1v1. A 2v2-main "dual threat" (see
+  // isDualThreatPro, real RL has plenty of these — duel doubles as serious secondary practice, not an
+  // afterthought) sits in between: a real, meaningfully high 1v1 MMR that can clear the leaderboard floor
+  // on its own, just not quite primary-level. Without this split, EVERY pro's 1v1 (including actual 1v1
+  // mains) used to get capped at floor+200 regardless, which let "mid"-band ranked grinders (who have no
+  // such queue-specific cap) casually out-rank literally every pro in 1v1, leaving the 1v1 leaderboard
+  // almost entirely nameless grinders instead of recognizable pros.
+  if (primary !== "1v1") {
+    const dualThreat = isDualThreatPro(pro.name);
+    const oneV1Ceiling = tierMinMmr(topAnchor, era, "1v1") + (dualThreat ? 550 + mmrEraInflation(currentYear, era) * 0.5 : 200);
+    result["1v1"] = Math.min(result["1v1"], oneV1Ceiling);
+  }
 
   return result;
 }

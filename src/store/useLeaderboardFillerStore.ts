@@ -55,6 +55,17 @@ function seasonKey(seasonStartDate: SimDate): string {
   return `${seasonStartDate.year}-${seasonStartDate.month}-${seasonStartDate.day}`;
 }
 
+/** This filler leaderboard's own reseed/catch-up cadence anchors to the RLCS calendar (one season = one
+ *  calendar year, see data/tournaments.ts's `rlcsSeasonForDate`), NOT the player's ranked-ladder season
+ *  (which resets every 84 days) — a ranked season rollover must never touch a filler regular's tracked
+ *  MMR/stats. Every caller in this file still threads a `seasonStartDate` parameter through (kept so every
+ *  existing call site across the codebase doesn't need touching), but it's intentionally ignored below in
+ *  favor of this. Duplicated here (rather than importing `rlcsSeasonForDate`) to avoid a circular import —
+ *  data/tournaments.ts itself imports this store. */
+function rlcsSeasonAnchor(year: number): SimDate {
+  return { year, month: 1, day: 1 };
+}
+
 function gamesPerDay(name: string): number {
   return GAMES_PER_DAY_MIN + ((hashString(name + "#pace")) % 100) / 100 * GAMES_PER_DAY_SPREAD;
 }
@@ -108,8 +119,8 @@ function reseedEntry(
   };
 }
 
-function simulateForward(entry: FillerMmrEntry, name: string, currentDate: SimDate, seasonStartDate: SimDate): FillerMmrEntry {
-  const daysIn = Math.max(0, daysBetween(seasonStartDate, currentDate));
+function simulateForward(entry: FillerMmrEntry, name: string, currentDate: SimDate): FillerMmrEntry {
+  const daysIn = Math.max(0, daysBetween(rlcsSeasonAnchor(currentDate.year), currentDate));
   // Real leaderboard names no-life ranked right after a reset to reclaim their rank, and again near
   // season's end grinding for rewards — see seasonActivityMultiplier's doc comment.
   const expectedGames = Math.floor(daysIn * gamesPerDay(name) * seasonActivityMultiplier(daysIn));
@@ -160,11 +171,12 @@ function catchUp(
   era: RankEra,
   currentYear: number,
   currentDate: SimDate,
-  seasonStartDate: SimDate
+  _seasonStartDate: SimDate
 ): FillerMmrEntry {
-  const key = seasonKey(seasonStartDate);
-  const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, queue, era, currentYear, seasonStartDate, existing);
-  return simulateForward(base, name, currentDate, seasonStartDate);
+  const anchor = rlcsSeasonAnchor(currentDate.year);
+  const key = seasonKey(anchor);
+  const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, queue, era, currentYear, anchor, existing);
+  return simulateForward(base, name, currentDate);
 }
 
 function loadStored(): FillerMmrTable {
@@ -258,23 +270,25 @@ export const useLeaderboardFillerStore = create<LeaderboardFillerState>((set, ge
     persist(nextTable);
   },
 
-  applyResult: (name, queue, mmrDelta, era, currentYear, seasonStartDate) => {
+  applyResult: (name, queue, mmrDelta, era, currentYear, _seasonStartDate) => {
     const state = get();
-    const key = seasonKey(seasonStartDate);
+    const anchor = rlcsSeasonAnchor(currentYear);
+    const key = seasonKey(anchor);
     const existing = state.mmr[name]?.[queue];
-    const entry = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, queue, era, currentYear, seasonStartDate, existing);
+    const entry = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, queue, era, currentYear, anchor, existing);
     const nextEntry: FillerMmrEntry = { ...entry, mmr: Math.max(0, entry.mmr + mmrDelta) };
     const nextTable = { ...state.mmr, [name]: { ...state.mmr[name], [queue]: nextEntry } };
     set({ mmr: nextTable });
     persist(nextTable);
   },
 
-  resetAll: (era, currentYear, seasonStartDate) => {
+  resetAll: (era, currentYear, _seasonStartDate) => {
+    const anchor = rlcsSeasonAnchor(currentYear);
     const nextTable: FillerMmrTable = {};
     for (const name of fillerLeaderboardNames()) {
       const perQueue: Partial<Record<QueueMode, FillerMmrEntry>> = {};
       (["1v1", "2v2", "3v3"] as QueueMode[]).forEach((queue) => {
-        perQueue[queue] = reseedEntry(name, queue, era, currentYear, seasonStartDate, undefined);
+        perQueue[queue] = reseedEntry(name, queue, era, currentYear, anchor, undefined);
       });
       nextTable[name] = perQueue;
     }

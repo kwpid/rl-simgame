@@ -56,6 +56,17 @@ function seasonKey(seasonStartDate: SimDate): string {
   return `${seasonStartDate.year}-${seasonStartDate.month}-${seasonStartDate.day}`;
 }
 
+/** This pro ladder's own reseed/catch-up cadence anchors to the RLCS calendar (one season = one calendar
+ *  year, see data/tournaments.ts's `rlcsSeasonForDate`), NOT the player's ranked-ladder season (which
+ *  resets every 84 days) — a ranked season rollover must never touch a pro's tracked MMR/stats, only the
+ *  player's own rank does that. Every caller in this file still threads a `seasonStartDate` parameter
+ *  through (kept so every existing call site across the codebase doesn't need touching), but it's
+ *  intentionally ignored below in favor of this. Duplicated here (rather than importing
+ *  `rlcsSeasonForDate`) to avoid a circular import — data/tournaments.ts itself imports this store. */
+function rlcsSeasonAnchor(year: number): SimDate {
+  return { year, month: 1, day: 1 };
+}
+
 function loadStored(): ProMmrTable {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -155,8 +166,8 @@ function reseedEntry(
  *  opponent near their own current rating, nudging MMR and letting skill close the gap toward their
  *  season target a little at a time — this is what makes the ladder feel like real people grinding rather
  *  than a smooth formula or a fresh random roll. */
-function simulateForward(entry: ProMmrEntry, proName: string, currentDate: SimDate, seasonStartDate: SimDate): ProMmrEntry {
-  const daysIn = Math.max(0, daysBetween(seasonStartDate, currentDate));
+function simulateForward(entry: ProMmrEntry, proName: string, currentDate: SimDate): ProMmrEntry {
+  const daysIn = Math.max(0, daysBetween(rlcsSeasonAnchor(currentDate.year), currentDate));
   // Real pros no-life ranked right after a reset to reclaim their rank, and again near season's end
   // grinding for rewards — see seasonActivityMultiplier's doc comment.
   const expectedGames = Math.floor(daysIn * gamesPerDay(proName) * seasonActivityMultiplier(daysIn));
@@ -211,13 +222,14 @@ function catchUp(
   era: RankEra,
   currentYear: number,
   currentDate: SimDate,
-  seasonStartDate: SimDate
+  _seasonStartDate: SimDate
 ): ProMmrEntry {
-  const key = seasonKey(seasonStartDate);
-  const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, seasonStartDate, existing);
+  const anchor = rlcsSeasonAnchor(currentDate.year);
+  const key = seasonKey(anchor);
+  const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, anchor, existing);
   // Guards against a pre-existing localStorage entry saved before `peakMmr` was tracked at all.
   const safeBase = typeof base.peakMmr === "number" ? base : { ...base, peakMmr: base.mmr };
-  return simulateForward(safeBase, proName, currentDate, seasonStartDate);
+  return simulateForward(safeBase, proName, currentDate);
 }
 
 interface ProLeaderboardState {
@@ -283,11 +295,12 @@ export const useProLeaderboardStore = create<ProLeaderboardState>((set, get) => 
     persist(nextTable);
   },
 
-  applyResult: (proName, queue, mmrDelta, era, currentYear, seasonStartDate) => {
+  applyResult: (proName, queue, mmrDelta, era, currentYear, _seasonStartDate) => {
     const state = get();
-    const key = seasonKey(seasonStartDate);
+    const anchor = rlcsSeasonAnchor(currentYear);
+    const key = seasonKey(anchor);
     const existing = state.mmr[proName]?.[queue];
-    const rawEntry = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, seasonStartDate, existing);
+    const rawEntry = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, anchor, existing);
     const entry = typeof rawEntry.peakMmr === "number" ? rawEntry : { ...rawEntry, peakMmr: rawEntry.mmr };
     const nextMmr = Math.max(0, entry.mmr + mmrDelta);
     const nextEntry: ProMmrEntry = { ...entry, mmr: nextMmr, peakMmr: Math.max(entry.peakMmr, nextMmr) };
@@ -296,13 +309,14 @@ export const useProLeaderboardStore = create<ProLeaderboardState>((set, get) => 
     persist(nextTable);
   },
 
-  resetAll: (era, currentYear, seasonStartDate) => {
+  resetAll: (era, currentYear, _seasonStartDate) => {
+    const anchor = rlcsSeasonAnchor(currentYear);
     const nextTable: ProMmrTable = {};
     for (const pro of PRO_PLAYERS) {
       if (pro.debutYear > currentYear) continue;
       const perQueue: Partial<Record<QueueMode, ProMmrEntry>> = {};
       (["1v1", "2v2", "3v3"] as QueueMode[]).forEach((queue) => {
-        perQueue[queue] = reseedEntry(pro.name, queue, era, currentYear, seasonStartDate, undefined);
+        perQueue[queue] = reseedEntry(pro.name, queue, era, currentYear, anchor, undefined);
       });
       nextTable[pro.name] = perQueue;
     }

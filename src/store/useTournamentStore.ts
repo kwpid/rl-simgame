@@ -352,16 +352,18 @@ function resolveStage(instance: TournamentInstance, currentDate: SimDate): Stage
   return runGslGroupStage(instance.currentTeams, stage.advanceCount);
 }
 
-/** `aiSeasonStartDate` here is deliberately the player's own RANKED-LADDER season anchor, not the RLCS
- *  schedule's own season start date, even though this function otherwise deals entirely in RLCS terms
- *  (`seasonNumber`, `scheduled.startDate`, etc). The real pro/grinder MMR entries this reads via
- *  `generateTeamsForRegion`/`generateGlobalTeams` (see tournaments.ts's `eligibleRealPlayersForRegion`) are
- *  a single shared table keyed by `seasonStartKey` — every other caller of that same table (ranked
- *  matchmaking, org invites) already keys off the ranked ladder's season, so feeding it the RLCS schedule's
- *  differently-timed date here instead would make the SAME entries constantly reseed back and forth
- *  between two disagreeing season anchors every time a different subsystem queried them, each reseed
- *  landing near the fresh-reset floor — this was the actual cause of a thin region like MENA sometimes
- *  fielding almost no real teams (everyone eligible kept getting caught below the org rank floor). */
+/** `aiSeasonStartDate` is only threaded through for call-site compatibility now — the pro/grinder leaderboard
+ *  stores (useProLeaderboardStore/useRegionalRosterStore/useLeaderboardFillerStore) ignore whatever date is
+ *  actually passed in and always anchor their own reseed/catch-up cadence to the RLCS calendar internally
+ *  (one season = one calendar year, see tournaments.ts's `rlcsSeasonForDate` and each store's own
+ *  `rlcsSeasonAnchor`). This used to matter a great deal: an earlier version of this code fed those stores
+ *  the RLCS schedule's date here while every OTHER caller (ranked matchmaking, org invites) fed them the
+ *  player's ranked-ladder date instead, which made the SAME entries reseed back and forth between two
+ *  disagreeing anchors depending who queried them last — the actual cause both of a thin region like MENA
+ *  sometimes fielding almost no real teams, and of a ranked season rollover (every 84 days) visibly
+ *  reshuffling RLCS org rosters and resetting AI stats, when neither should ever be affected by the ranked
+ *  ladder's own reset cadence at all. Every caller now effectively agrees on the RLCS anchor regardless of
+ *  what it passes, so there's nothing left to disagree. */
 function createInstance(scheduled: ScheduledTournament, currentYear: number, seasonNumber: number, teamsResetSeed: number, currentDate: SimDate, aiSeasonStartDate: SimDate): TournamentInstance {
   const era = eraForDate(currentDate);
   const teams =

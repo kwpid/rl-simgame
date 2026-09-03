@@ -9,18 +9,41 @@ import { useMatchStore } from "@/store/useMatchStore";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
+import { fillerLeaderboardNames, useLeaderboardFillerStore } from "@/store/useLeaderboardFillerStore";
 import { regionalGrinderRoster } from "@/data/regionalGrinders";
-import { activeProPlayers, type ProRegion } from "@/data/proPlayers";
+import { activeProPlayers, PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { flattenProgress } from "@/data/matchSim";
 import { orgTagForOrgName, saveRegionToProRegion, REGION_LABELS as PRO_REGION_LABELS } from "@/data/tournaments";
 import { seasonEndDate, rewardTierSequence, REWARD_WINS_REQUIRED } from "@/data/seasons";
-import { daysBetween } from "@/data/dateUtils";
+import { daysBetween, type SimDate } from "@/data/dateUtils";
 
 const LEADERBOARD_SIZE = 100;
 
 const TEAM_SIZE: Record<QueueMode, number> = { "1v1": 1, "2v2": 2, "3v3": 3 };
 
 const ALL_MATCHMAKING_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", "SSA"];
+
+/** A friend's live MMR/region for the current queue on the leaderboard's "Friends" filter — same
+ *  pro/grinder/filler-then-plain resolution order SocialScreen's own resolveFriendStats uses, just
+ *  single-queue and MMR-only (this only needs to sort/rank rows, not the full stats block). */
+function resolveFriendLeaderboardRow(
+  name: string,
+  friendRegion: string,
+  queue: QueueMode,
+  era: ReturnType<typeof eraForDate>,
+  currentYear: number,
+  currentDate: SimDate,
+  seasonStartDate: SimDate,
+  fallbackMmr: number
+): { mmr: number; region: ProRegion } {
+  const pro = PRO_PLAYERS.find((p) => p.name === name);
+  if (pro) return { mmr: useProLeaderboardStore.getState().getMmr(name, queue, era, currentYear, currentDate, seasonStartDate), region: pro.region };
+  const grinderRegion = ALL_MATCHMAKING_REGIONS.find((region) => regionalGrinderRoster(region, currentYear).some((g) => g.name === name));
+  if (grinderRegion) return { mmr: useRegionalRosterStore.getState().getMmr(name, grinderRegion, queue, era, currentYear, currentDate, seasonStartDate), region: grinderRegion };
+  const fallbackRegion = (ALL_MATCHMAKING_REGIONS as string[]).includes(friendRegion) ? (friendRegion as ProRegion) : "NA";
+  if (fillerLeaderboardNames().includes(name)) return { mmr: useLeaderboardFillerStore.getState().getMmr(name, queue, era, currentYear, currentDate, seasonStartDate), region: fallbackRegion };
+  return { mmr: fallbackMmr, region: fallbackRegion };
+}
 
 function formatMmSs(ms: number): string {
   const totalSeconds = Math.max(0, Math.round(ms / 1000));
@@ -31,6 +54,7 @@ function formatMmSs(ms: number): string {
 
 export function RankedScreen() {
   const [queue, setQueue] = useState<QueueMode>("2v2");
+  const [leaderboardFilter, setLeaderboardFilter] = useState<"global" | "region" | "friends">("global");
   // Multi-queue: extra queues (besides whichever tab is currently shown) to search at the same time,
   // whichever pops first wins and the rest cancel automatically (see useMatchStore's startQueue).
   const [multiQueueExtras, setMultiQueueExtras] = useState<Set<QueueMode>>(new Set());
@@ -94,17 +118,32 @@ export function RankedScreen() {
       return { rank: 0, name: grinder.name, mmr, rankTier: derived.tier, division: derived.division, region, isPlayer: false };
     })
   ).filter((row) => row.mmr >= topTierFloor);
-  const leaderboard =
-    profile.placementMatchesRemaining > 0
-      ? [...proRows, ...grinderRows].sort((a, b) => b.mmr - a.mmr).slice(0, LEADERBOARD_SIZE).map((row, i) => ({ ...row, rank: i + 1 }))
-      : [
-          ...proRows,
-          ...grinderRows,
-          { rank: 0, name: s.displayName, mmr: profile.mmr, rankTier: profile.rankTier, division: profile.division, region: saveRegionToProRegion(s.region), isPlayer: true },
-        ]
-          .sort((a, b) => b.mmr - a.mmr)
-          .slice(0, LEADERBOARD_SIZE)
-          .map((row, i) => ({ ...row, rank: i + 1 }));
+  const playerProRegion = saveRegionToProRegion(s.region);
+  const selfRow = { rank: 0, name: s.displayName, mmr: profile.mmr, rankTier: profile.rankTier, division: profile.division, region: playerProRegion, isPlayer: true };
+  // "Friends" pulls live MMR straight off each friend's own tracked source (pro/grinder/filler/plain, see
+  // resolveFriendLeaderboardRow) rather than filtering the global pool — a friend who isn't Top 100 caliber
+  // (most "plain" friends aren't) should still show up here, this is "how do my queue buddies stack up",
+  // not "which of my friends happen to also be globally elite".
+  const friendRows =
+    leaderboardFilter === "friends"
+      ? Object.values(s.friends).map((friend) => {
+          const resolved = resolveFriendLeaderboardRow(friend.name, friend.region, queue, era, currentYear, s.currentDate, s.seasonStartDate, friend.mmr[queue] ?? 0);
+          const derived = deriveRankFromMmr(resolved.mmr, era, queue);
+          return { rank: 0, name: friend.name, mmr: resolved.mmr, rankTier: derived.tier, division: derived.division, region: resolved.region, isPlayer: false };
+        })
+      : [];
+  const filteredPool =
+    leaderboardFilter === "friends" ? friendRows
+    : leaderboardFilter === "region" ? [...proRows, ...grinderRows].filter((row) => row.region === playerProRegion)
+    : [...proRows, ...grinderRows];
+  const leaderboard = (profile.placementMatchesRemaining > 0 ? filteredPool : [...filteredPool, selfRow])
+    .sort((a, b) => b.mmr - a.mmr)
+    .slice(0, LEADERBOARD_SIZE)
+    .map((row, i) => ({ ...row, rank: i + 1 }));
+  const leaderboardTitle =
+    leaderboardFilter === "global" ? "Top 100"
+    : leaderboardFilter === "region" ? `${PRO_REGION_LABELS[playerProRegion]} Leaderboard`
+    : "Friends Leaderboard";
   const topRankTier = era === "modern" ? "ssl" : "grand_champion";
 
   const matchPhase = useMatchStore((m) => m.phase);
@@ -387,30 +426,46 @@ export function RankedScreen() {
 
         <div className="leaderboard-card" style={{ ["--top-color" as string]: tierColor(topRankTier, era) }}>
           <div className="leaderboard-header">
-            <h2 className="leaderboard-title">Top 100</h2>
+            <h2 className="leaderboard-title">{leaderboardTitle}</h2>
             <RankBadge tier={topRankTier} era={era} size={22} />
           </div>
+          <div className="leaderboard-filter-row">
+            {(["global", "region", "friends"] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                className={`leaderboard-filter-btn${leaderboardFilter === f ? " active" : ""}`}
+                onClick={() => setLeaderboardFilter(f)}
+              >
+                {f === "global" ? "Global" : f === "region" ? PRO_REGION_LABELS[playerProRegion] : "Friends"}
+              </button>
+            ))}
+          </div>
           <div className="leaderboard-scroll">
-            <table className="leaderboard-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Player</th>
-                  <th>Region</th>
-                  <th style={{ textAlign: "right" }}>MMR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {leaderboard.map((row) => (
-                  <tr key={row.isPlayer ? "self" : row.rank} className={row.isPlayer ? "leaderboard-row-self" : undefined}>
-                    <td>{row.rank}</td>
-                    <td>{row.name}</td>
-                    <td style={{ color: "var(--text-tertiary)" }}>{PRO_REGION_LABELS[row.region]}</td>
-                    <td style={{ textAlign: "right", fontWeight: 600 }}>{row.mmr}</td>
+            {leaderboardFilter === "friends" && leaderboard.length === 0 ? (
+              <div className="leaderboard-empty">No friends to show yet — add some from a post-match roster or the Social screen.</div>
+            ) : (
+              <table className="leaderboard-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Player</th>
+                    <th>Region</th>
+                    <th style={{ textAlign: "right" }}>MMR</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {leaderboard.map((row) => (
+                    <tr key={row.isPlayer ? "self" : row.name} className={row.isPlayer ? "leaderboard-row-self" : undefined}>
+                      <td>{row.rank}</td>
+                      <td>{row.name}</td>
+                      <td style={{ color: "var(--text-tertiary)" }}>{PRO_REGION_LABELS[row.region]}</td>
+                      <td style={{ textAlign: "right", fontWeight: 600 }}>{row.mmr}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       </div>
@@ -781,6 +836,33 @@ export function RankedScreen() {
           text-transform: uppercase;
           letter-spacing: 0.8px;
           color: var(--text-tertiary);
+        }
+        .leaderboard-filter-row {
+          display: flex;
+          gap: var(--space-2);
+          margin-bottom: var(--space-3);
+        }
+        .leaderboard-filter-btn {
+          flex: 1;
+          background: var(--bg-surface-hover);
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--radius-sm);
+          padding: 6px 10px;
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text-secondary);
+          cursor: pointer;
+        }
+        .leaderboard-filter-btn.active {
+          background: color-mix(in srgb, var(--top-color) 22%, var(--bg-surface));
+          border-color: var(--top-color);
+          color: var(--text-primary);
+        }
+        .leaderboard-empty {
+          padding: var(--space-4);
+          color: var(--text-tertiary);
+          font-size: 13px;
+          text-align: center;
         }
         .leaderboard-scroll {
           max-height: 360px;
