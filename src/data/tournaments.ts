@@ -21,6 +21,17 @@ import { FOUNDATION_LABELS, type FoundationCategory } from "./mechanics";
 
 export type TournamentKind = "rlcs_regional" | "ewc" | "eleague" | "rlcs_1v1_regional" | "rlcs_major" | "rlcs_worlds" | "rlrs_regional";
 
+/** Majors/Worlds are LAN events from this RLCS season onward, online before it — regionals/Rival Series/1v1
+ *  regionals are always online, real RLCS never runs those as LAN. A simple year cutoff rather than
+ *  modeling the COVID-era online gap real RLCS actually had, matching "some point it becomes a real, in-
+ *  person LAN, and stays that way." */
+export const RLCS_LAN_CUTOFF_SEASON = 2020;
+
+export function isLanEvent(kind: TournamentKind, seasonNumber: number): boolean {
+  if (kind !== "rlcs_major" && kind !== "rlcs_worlds") return false;
+  return seasonNumber >= RLCS_LAN_CUTOFF_SEASON;
+}
+
 /** RLCS's real-life structure changed shape over the years, not just its production value: 2015-2019 had
  *  no "Major" concept at all (a regional's champion went straight to one LAN World Championship), plus a
  *  real lower-tier developmental league (Rival Series) beneath the main bracket; 2020-2022 (RLCS X) is the

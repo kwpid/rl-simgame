@@ -142,6 +142,7 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
   const mapId = useMatchStore((m) => m.mapId);
   const map = ARENA_MAPS.find((m) => m.id === mapId) ?? null;
   const mapImage = mapImagePath(map);
+  const matchVenue = useMatchStore((m) => m.matchVenue);
   const isSeriesMatch = seriesFormat > 1;
   const seriesDecided = isSeriesMatch && (seriesWinsSelf >= Math.ceil(seriesFormat / 2) || seriesWinsOpp >= Math.ceil(seriesFormat / 2));
   const recordMatchResult = useSaveStore((s) => s.recordMatchResult);
@@ -264,7 +265,11 @@ function LiveMatch({ queue }: { queue: import("@/data/mockSave").QueueMode | nul
   return (
     <div className="live-match fade-in">
       {mapImage && <div className="match-bg" style={{ backgroundImage: `url(${mapImage})` }} />}
-      {map && <div className="match-map-label">{map.name}</div>}
+      {map && (
+        <div className="match-map-label">
+          {map.name} · {matchVenue === "lan" ? "LAN Event" : "Online Match"}
+        </div>
+      )}
       {phase === "post_match" && isSeriesMatch && (
         <div className={"result-banner" + (resultWin ? " result-win" : " result-loss")}>
           <span>

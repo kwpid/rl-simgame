@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSaveStore } from "@/store/useSaveStore";
-import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, type TournamentInstance, type RlcsDiscipline } from "@/store/useTournamentStore";
+import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, projectedSeasonSchedule, type TournamentInstance, type RlcsDiscipline } from "@/store/useTournamentStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
 import {
   REGION_LABELS,
@@ -17,10 +17,12 @@ import {
   worldsTitlesEarned,
   rivalSeriesTitleFor,
   rivalSeriesTitlesEarned,
+  RLCS_1V1_INTRODUCED_SEASON,
+  isLanEvent,
 } from "@/data/tournaments";
 import type { TitleEntry } from "@/data/seasons";
 import { eraForDate } from "@/data/rankSystem";
-import { daysBetween } from "@/data/dateUtils";
+import { daysBetween, formatSimDate } from "@/data/dateUtils";
 import { flattenProgress } from "@/data/matchSim";
 import { orgTagForOrgName, type TournamentKind } from "@/data/tournaments";
 
@@ -99,6 +101,16 @@ export function TourneysScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentDate.year, currentDate.month, currentDate.day]);
 
+  // 1v1 RLCS doesn't exist before RLCS_1V1_INTRODUCED_SEASON — there's nothing to switch to yet, so the
+  // discipline tab bar itself doesn't show at all until then (see the render below), just the 3v3 content.
+  // This guard snaps `mode` back to "3v3" if the season ever regresses below that threshold with "1v1"
+  // still selected (dev tools season jump), so the view never strands on a tab with nothing to show.
+  const showModeTabs = rlcsSeasonNumber >= RLCS_1V1_INTRODUCED_SEASON;
+  useEffect(() => {
+    if (!showModeTabs && mode === "1v1") setMode("3v3");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showModeTabs]);
+
   // The org handles its own tournament logistics: once signed, the player is entered into their region's
   // 3v3 regional (and, in the early era, Rival Series) the moment the field opens, rather than waiting on a
   // manual click — "signed up in advance", matching OrgContract's own doc comment in mockSave.ts. Re-fires
@@ -152,6 +164,7 @@ export function TourneysScreen() {
   // champion instead, see getEarlyEraWorldsReadiness's doc comment.
   const earlyEraWorldsReadiness = rlcsStructureEraNow === "early" ? getEarlyEraWorldsReadiness(instances, discipline, currentDate) : null;
 
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = selectedId ? instances[selectedId] : null;
   const [resultMessage, setResultMessage] = useState<string | null>(null);
@@ -170,11 +183,12 @@ export function TourneysScreen() {
     return Math.round(700 + (s.player.gameSense[mode] + s.player.mechanicalConsistency[mode]) / 15);
   }
 
+  // 1v1 RLCS only — solo entry, open to anyone at any time (no org involved). 3v3 (regionals AND Rival
+  // Series) is the org's territory entirely: the org signs itself up every season on its own (see the
+  // auto-register effect above), there's no manual registration path for it at all — matching "you
+  // yourself can't sign the org up, they will, always, regardless."
   function handleRegister(instanceId: string) {
-    // 3v3 RLCS is the org's territory: registering there uses the player's real signed org roster instead
-    // of a solo entrant, matching "pro play happens through your org" rather than being open to anyone.
-    const teammates = mode === "3v3" && s.orgContract ? s.orgContract.teammates : undefined;
-    registerPlayer(instanceId, s.displayName, playerProRegion, playerPower(), teammates);
+    registerPlayer(instanceId, s.displayName, playerProRegion, playerPower(), undefined);
   }
 
   function handlePlayMatch() {
@@ -197,6 +211,9 @@ export function TourneysScreen() {
     const instanceLabel = instances[pendingInstanceId]?.label ?? "the tournament";
     const pendingInstance = instances[pendingInstanceId];
     const stageProgress = pendingInstance ? pendingInstance.stageIndex / Math.max(1, pendingInstance.stages.length - 1) : 0;
+    // Majors/Worlds are the only events that can ever be LAN (see isLanEvent); everything else the player
+    // personally plays (regionals, Rival Series, 1v1 regionals) always stays online.
+    const venue: "online" | "lan" = pendingInstance && isLanEvent(pendingInstance.kind, rlcsSeasonNumber) ? "lan" : "online";
     startTournamentSeries(self, [pendingMatch.opponentName], pendingMatch.seriesFormat, era, rankedSeasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
       const before = useTournamentStore.getState().instances[pendingInstanceId];
       const stageLabelBefore = before?.stages[before.stageIndex]?.label;
@@ -219,7 +236,7 @@ export function TourneysScreen() {
       } else {
         setResultMessage(wonSeries ? `Series won (${stageLabelBefore}), more matches to come in this stage.` : "Series lost, but you're still alive in this stage.");
       }
-    }, stageProgress);
+    }, stageProgress, undefined, undefined, venue);
   }
 
   return (
@@ -228,6 +245,31 @@ export function TourneysScreen() {
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 650 }}>Tournaments</h1>
         <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>RLCS Season {rlcsSeasonNumber}</div>
       </header>
+
+      <div className="schedule-panel">
+        <button className="schedule-panel-toggle" onClick={() => setScheduleOpen((o) => !o)}>
+          <span>Season {rlcsSeasonNumber} Schedule</span>
+          <span>{scheduleOpen ? "▲" : "▼"}</span>
+        </button>
+        {scheduleOpen && (
+          <div className="schedule-panel-body">
+            <div className="schedule-panel-note">
+              Regionals/Rival Series dates are locked in. Majors/Worlds dates are estimates — they land
+              roughly here based on how long qualifiers and scrim windows take, but shift slightly with how
+              regionals/majors actually finish.
+            </div>
+            {projectedSeasonSchedule(rlcsSeasonNumber, rlcsSeasonStartDate).map((entry) => (
+              <div key={entry.id} className="schedule-panel-row">
+                <span className="schedule-panel-date">{formatSimDate(entry.date)}</span>
+                <span>
+                  {entry.label}
+                  {entry.estimated ? " (estimated)" : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {pendingMatch && matchPhase === "idle" && (
         <div className="pending-match-banner">
@@ -252,28 +294,31 @@ export function TourneysScreen() {
         </div>
       )}
 
-      <div className="mode-tabbar" role="tablist">
-        {(["3v3", "1v1"] as Mode[]).map((m) => (
-          <button
-            key={m}
-            role="tab"
-            aria-selected={mode === m}
-            className={"mode-tab" + (mode === m ? " mode-tab-active" : "")}
-            onClick={() => setMode(m)}
-          >
-            {m}
-          </button>
-        ))}
-      </div>
+      {showModeTabs && (
+        <div className="mode-tabbar" role="tablist">
+          {(["3v3", "1v1"] as Mode[]).map((m) => (
+            <button
+              key={m}
+              role="tab"
+              aria-selected={mode === m}
+              className={"mode-tab" + (mode === m ? " mode-tab-active" : "")}
+              onClick={() => setMode(m)}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="tourney-section-label">RLCS Season {rlcsSeasonNumber} — {mode} Regional (Your Region)</div>
       <div className="tourney-grid">
         {rlcsSchedule.map((item) => {
           const instance = instances[item.id];
           const daysUntilStart = daysBetween(currentDate, item.startDate);
-          // 1v1 stays open to anyone, 3v3 only opens up once the player's actually signed to an org —
-          // real RLCS competes through your org, not a solo walk-in.
-          const canRegister = (mode === "1v1" || (mode === "3v3" && !!s.orgContract)) && isRegistrationOpen(instance) && daysUntilStart <= REGISTRATION_WINDOW_DAYS;
+          // 1v1 stays open to anyone as a manual solo entry. 3v3 never shows a register button at all —
+          // the org signs itself up automatically (see the auto-register effect above), the player never
+          // has that choice to make.
+          const canRegister = mode === "1v1" && isRegistrationOpen(instance) && daysUntilStart <= REGISTRATION_WINDOW_DAYS;
           return (
             <div
               key={item.id}
@@ -321,7 +366,6 @@ export function TourneysScreen() {
             {rivalSeriesSchedule.map((item) => {
               const instance = instances[item.id];
               const daysUntilStart = daysBetween(currentDate, item.startDate);
-              const canRegisterRival = isRegistrationOpen(instance) && daysUntilStart <= REGISTRATION_WINDOW_DAYS;
               return (
                 <div
                   key={item.id}
@@ -344,17 +388,6 @@ export function TourneysScreen() {
                           ? `Champion: ${instance.championName}`
                           : `${instance.stages[instance.stageIndex].label} · ${instance.currentTeams.length} left`}
                   </div>
-                  {canRegisterRival && (
-                    <button
-                      className="tourney-register-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRegister(item.id);
-                      }}
-                    >
-                      Register
-                    </button>
-                  )}
                 </div>
               );
             })}
@@ -490,6 +523,48 @@ export function TourneysScreen() {
       {selected && <StandingsCard instance={selected} currentDate={currentDate} />}
 
       <style>{`
+        .schedule-panel {
+          border: 1px solid var(--border-strong);
+          border-radius: var(--radius-md);
+          margin-bottom: var(--space-4);
+          overflow: hidden;
+        }
+        .schedule-panel-toggle {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          background: var(--bg-surface-raised);
+          border: none;
+          padding: 10px 14px;
+          font-size: 13px;
+          font-weight: 650;
+          color: var(--text-primary);
+          cursor: pointer;
+        }
+        .schedule-panel-body {
+          padding: 10px 14px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .schedule-panel-note {
+          font-size: 12px;
+          color: var(--text-tertiary);
+          margin-bottom: 4px;
+        }
+        .schedule-panel-row {
+          display: flex;
+          gap: var(--space-3);
+          font-size: 13px;
+          color: var(--text-secondary);
+        }
+        .schedule-panel-date {
+          flex: 0 0 auto;
+          min-width: 72px;
+          font-weight: 600;
+          color: var(--text-primary);
+        }
         .result-message-banner {
           display: flex;
           align-items: center;

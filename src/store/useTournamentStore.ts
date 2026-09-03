@@ -24,6 +24,7 @@ import {
   WORLDS_STAGES,
   RLCS_REGIONS,
   RLCS_1V1_REGIONS,
+  RLCS_1V1_INTRODUCED_SEASON,
   type ScheduledTournament,
   type TournamentKind,
 } from "@/data/tournaments";
@@ -386,6 +387,68 @@ export function getEarlyEraWorldsReadiness(table: InstanceTable, discipline: Rlc
   const readyChamps = champs as ChampionInfo[];
   const readinessDate = latestDate(readyChamps.map((c) => c.completionDate));
   return { kind: "scheduled", scheduledStart: addDays(readinessDate, WORLDS_DELAY_DAYS), champs: readyChamps };
+}
+
+export interface ProjectedScheduleEntry {
+  id: string;
+  label: string;
+  date: SimDate;
+  /** false for regionals/Rival Series (buildSeasonSchedule already fixes their exact date). true for
+   *  Majors/Worlds — a projection from fixed delay constants assuming everything runs on schedule, not
+   *  authoritative once the real instance actually exists (see getMajorReadiness/getEarlyEraWorldsReadiness
+   *  for the live version, which reacts to actual completion instead of assuming it). */
+  estimated: boolean;
+}
+
+function totalStageDays(stages: StageConfig[]): number {
+  return stages.reduce((sum, stage) => sum + stage.days, 0);
+}
+
+/** A full RLCS season's worth of event dates, computed up front from fixed constants alone — unlike the
+ *  reactive Major/Worlds creation elsewhere in this file (which only actually forms an instance once its
+ *  prerequisite regionals/majors are DONE), this assumes every stage takes exactly as long as scheduled and
+ *  projects where every event lands regardless of live completion state. Good for showing the player "here's
+ *  roughly when this season's events happen" months in advance, same as real RLCS publishes its whole-season
+ *  calendar up front — not meant to be authoritative once an event's real instance actually exists (that's
+ *  what `getMajorReadiness`/`getEarlyEraWorldsReadiness` are for). 1v1 Majors/Worlds always land on the
+ *  exact same date as their 3v3 counterpart (real RLCS runs both disciplines at the same event weekend, see
+ *  getMajorReadiness's own doc comment), so they're just relabeled copies of the 3v3 entries rather than a
+ *  separate calculation from 1v1 regionals. */
+export function projectedSeasonSchedule(seasonNumber: number, seasonStartDate: SimDate): ProjectedScheduleEntry[] {
+  const scheduled = buildSeasonSchedule(seasonNumber, seasonStartDate);
+  const entries: ProjectedScheduleEntry[] = scheduled
+    .filter((sc) => sc.kind === "rlcs_regional" || sc.kind === "rlcs_1v1_regional" || sc.kind === "rlrs_regional")
+    .map((sc) => ({ id: sc.id, label: sc.label, date: sc.startDate, estimated: false }));
+
+  const regionals3v3 = scheduled.filter((sc) => sc.kind === "rlcs_regional");
+  const oneVOneUnlocked = seasonNumber >= RLCS_1V1_INTRODUCED_SEASON;
+
+  if (rlcsStructureEra(seasonNumber) === "early") {
+    // No Major concept at all — Worlds forms straight from every region's regional champion.
+    const lastRegionalEnd = latestDate(regionals3v3.map((sc) => addDays(sc.startDate, totalStageDays(sc.stages))));
+    const worldsStart = addDays(lastRegionalEnd, WORLDS_DELAY_DAYS);
+    entries.push({ id: `worlds_3v3_projected_s${seasonNumber}`, label: `World Championship Season ${seasonNumber} (3v3)`, date: worldsStart, estimated: true });
+    return entries.sort((a, b) => daysBetween(a.date, b.date));
+  }
+
+  const majorStarts: SimDate[] = [];
+  for (const group of MAJOR_GROUPS) {
+    const groupRegionals = regionals3v3.filter((sc) => group.regions.includes(sc.region!));
+    const lastRegionalEnd = latestDate(groupRegionals.map((sc) => addDays(sc.startDate, totalStageDays(sc.stages))));
+    const majorStart = addDays(lastRegionalEnd, MAJOR_DELAY_DAYS);
+    majorStarts.push(majorStart);
+    entries.push({ id: `major_3v3_${group.id}_projected_s${seasonNumber}`, label: `${group.location} Major Season ${seasonNumber} (3v3)`, date: majorStart, estimated: true });
+    if (oneVOneUnlocked) {
+      entries.push({ id: `major_1v1_${group.id}_projected_s${seasonNumber}`, label: `${group.location} Major Season ${seasonNumber} (1v1)`, date: majorStart, estimated: true });
+    }
+  }
+  const lastMajorEnd = addDays(latestDate(majorStarts), totalStageDays(MAJOR_STAGES));
+  const worldsStart = addDays(lastMajorEnd, WORLDS_DELAY_DAYS);
+  entries.push({ id: `worlds_3v3_projected_s${seasonNumber}`, label: `World Championship Season ${seasonNumber} (3v3)`, date: worldsStart, estimated: true });
+  if (oneVOneUnlocked) {
+    entries.push({ id: `worlds_1v1_projected_s${seasonNumber}`, label: `World Championship Season ${seasonNumber} (1v1)`, date: worldsStart, estimated: true });
+  }
+  return entries.sort((a, b) => daysBetween(a.date, b.date));
 }
 
 /** Majors and Worlds aren't calendar-scheduled like everything else. Each major group only ever has one
