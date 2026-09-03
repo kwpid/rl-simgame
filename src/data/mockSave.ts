@@ -165,6 +165,14 @@ export interface ShowmatchResultEntry {
   date: SimDate;
 }
 
+/** One line of a replayable match log — see RecentMatchEntry.log and HomeScreen.tsx's replay modal. Kept
+ *  deliberately minimal (just what's actually shown), unlike useMatchStore.ts's own live MatchLogLine which
+ *  also carries an `id`/`emphasis` only the live screen needs. */
+export interface MatchReplayLine {
+  clockLabel: string;
+  text: string;
+}
+
 export interface RecentMatchEntry {
   queue: QueueMode;
   result: "win" | "loss";
@@ -173,6 +181,10 @@ export interface RecentMatchEntry {
   /** Every other player's name from this match (teammates and opponents alike). Clicking one in the Recent
    *  Matches list opens their stats if they resolve to a real tracked identity (see AiProfileModal.tsx). */
   opponents: string[];
+  /** The full in-match log for this specific game, start to finish — always real names, never an alt-name
+   *  display swap (see data/altNames.ts), matching "match history shows who you actually played." Empty for
+   *  any match recorded before this existed (migrated saves), which just reads as "no replay available". */
+  log: MatchReplayLine[];
 }
 
 // Org/pro-scene system: entirely separate from ranked (an org contract never touches ranked MMR/progress),
@@ -424,9 +436,9 @@ export const mockSave = {
   rlcsTeamsResetSeed: 0,
 
   recentMatches: [
-    { queue: "2v2" as const, result: "win" as const, score: "4-2", note: "Clean rotation, one whiffed flip reset attempt.", opponents: [] },
-    { queue: "1v1" as const, result: "loss" as const, score: "2-3", note: "Lost the double-tap read late in OT.", opponents: [] },
-    { queue: "2v2" as const, result: "win" as const, score: "3-1", note: "MVP, two solo plays off boost-starved reads.", opponents: [] },
+    { queue: "2v2" as const, result: "win" as const, score: "4-2", note: "Clean rotation, one whiffed flip reset attempt.", opponents: [], log: [] },
+    { queue: "1v1" as const, result: "loss" as const, score: "2-3", note: "Lost the double-tap read late in OT.", opponents: [], log: [] },
+    { queue: "2v2" as const, result: "win" as const, score: "3-1", note: "MVP, two solo plays off boost-starved reads.", opponents: [], log: [] },
   ] satisfies RecentMatchEntry[] as RecentMatchEntry[],
 
   // Default titles are grey ("none" glow), earned through ordinary play. Glow titles (gold/red/white)

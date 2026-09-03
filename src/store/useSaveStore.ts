@@ -14,6 +14,7 @@ import {
   type OrgTier,
   type PlaystyleProfile,
   type TravelWindow,
+  type MatchReplayLine,
 } from "@/data/mockSave";
 import { TACTICAL_FOUNDATION_CATEGORIES, type FoundationCategory } from "@/data/mechanics";
 import { addDays, daysBetween, type SimDate } from "@/data/dateUtils";
@@ -230,6 +231,9 @@ export interface MatchResultInput {
   /** Every other player's name from this match (teammates and opponents alike), shown in the Recent
    *  Matches list and clickable there to pull up that name's stats (see AiProfileModal.tsx). */
   opponentNames: string[];
+  /** The full in-match log, start to finish, real names only (never alt-name-substituted) — see
+   *  mockSave.ts's RecentMatchEntry.log and HomeScreen.tsx's replay modal. */
+  log: MatchReplayLine[];
 }
 
 interface SaveStoreState extends SaveData {
@@ -578,7 +582,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
 
   initFromSave: (data) => set({ ...data }),
 
-  recordMatchResult: ({ queue, win, mmrDelta, scoreSelf, scoreOpp, selfGoals, selfSaves, note, opponentNames }) => {
+  recordMatchResult: ({ queue, win, mmrDelta, scoreSelf, scoreOpp, selfGoals, selfSaves, note, opponentNames, log }) => {
     const state = get();
     const profile = state.rankedProfiles[queue];
     const careerStats = state.careerStats[queue];
@@ -633,6 +637,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       score: `${scoreSelf}-${scoreOpp}`,
       note,
       opponents: opponentNames,
+      log,
     };
 
     set({

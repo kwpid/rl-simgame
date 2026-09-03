@@ -1,7 +1,8 @@
+import { useState } from "react";
 import { Card } from "@/ui/components/Card";
 import { StatBar } from "@/ui/components/StatBar";
 import { Icon } from "@/ui/components/Icon";
-import type { QueueMode } from "@/data/mockSave";
+import type { QueueMode, RecentMatchEntry } from "@/data/mockSave";
 import { eraForDate, tierColor, divisionLabel as rankDivisionLabel } from "@/data/rankSystem";
 import { formatClockHour, formatSimDate } from "@/data/dateUtils";
 import { useSaveStore } from "@/store/useSaveStore";
@@ -15,6 +16,7 @@ export function HomeScreen() {
   const rest = useSaveStore((store) => store.rest);
   const sleepToNextDay = useSaveStore((store) => store.sleepToNextDay);
   const era = eraForDate(s.currentDate);
+  const [viewingReplay, setViewingReplay] = useState<RecentMatchEntry | null>(null);
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
@@ -142,6 +144,11 @@ export function HomeScreen() {
               <span style={{ fontSize: 13, color: "var(--text-secondary)", width: 32 }}>{m.queue}</span>
               <span style={{ fontSize: 13, fontWeight: 600 }}>{m.score}</span>
               <span style={{ fontSize: 12, color: "var(--text-tertiary)", flex: 1 }}>{m.note}</span>
+              {m.log.length > 0 && (
+                <button className="recent-match-view-btn" onClick={() => setViewingReplay(m)}>
+                  View
+                </button>
+              )}
             </div>
             {m.opponents.length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, paddingLeft: 2 }}>
@@ -161,6 +168,8 @@ export function HomeScreen() {
         </div>
       </Card>
 
+      {viewingReplay && <MatchReplayModal entry={viewingReplay} onClose={() => setViewingReplay(null)} />}
+
       <style>{`
         .recent-match-opponent {
           background: var(--bg-surface-raised);
@@ -175,6 +184,95 @@ export function HomeScreen() {
         .recent-match-opponent:hover {
           border-color: var(--accent);
           color: var(--accent);
+        }
+        .recent-match-view-btn {
+          background: none;
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--radius-sm);
+          color: var(--text-secondary);
+          font-size: 11px;
+          font-weight: 600;
+          padding: 4px 10px;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: border-color 150ms ease, color 150ms ease;
+        }
+        .recent-match-view-btn:hover {
+          border-color: var(--accent);
+          color: var(--accent);
+        }
+        .replay-modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.65);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 16px;
+          backdrop-filter: blur(3px);
+        }
+        .replay-modal {
+          background: var(--bg-card, #1c1e24);
+          border: 1px solid var(--border-strong);
+          border-radius: var(--radius-lg, 12px);
+          width: 100%;
+          max-width: 560px;
+          max-height: 85vh;
+          display: flex;
+          flex-direction: column;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        }
+        .replay-modal-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          padding: var(--space-4) var(--space-4) var(--space-3);
+          border-bottom: 1px solid var(--border-subtle);
+          gap: var(--space-3);
+        }
+        .replay-modal-title {
+          font-weight: 700;
+          font-size: 15px;
+        }
+        .replay-modal-sub {
+          font-size: 12px;
+          color: var(--text-tertiary);
+          margin-top: 2px;
+        }
+        .replay-modal-close {
+          background: none;
+          border: none;
+          color: var(--text-tertiary);
+          font-size: 18px;
+          cursor: pointer;
+          padding: 0 4px;
+          line-height: 1;
+          flex-shrink: 0;
+        }
+        .replay-modal-close:hover { color: var(--text-primary); }
+        .replay-modal-body {
+          padding: var(--space-3) var(--space-4);
+          overflow-y: auto;
+          font-size: 12px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          line-height: 1.6;
+        }
+        .replay-log-line {
+          display: flex;
+          gap: 10px;
+        }
+        .replay-log-clock {
+          color: var(--text-tertiary);
+          flex-shrink: 0;
+          width: 48px;
+        }
+        .replay-modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: var(--space-2);
+          padding: var(--space-3) var(--space-4);
+          border-top: 1px solid var(--border-subtle);
         }
         .home-grid {
           display: grid;
@@ -217,6 +315,58 @@ export function HomeScreen() {
           color: #17181c;
         }
       `}</style>
+    </div>
+  );
+}
+
+/** The full start-to-end log for one past match (see mockSave.ts's RecentMatchEntry.log), plus a one-click
+ *  copy of the whole thing as plain text — for pasting into a chat/forum post, same idea as a real replay
+ *  code. Real names only, this is exactly what got recorded when the match ended. */
+function MatchReplayModal({ entry, onClose }: { entry: RecentMatchEntry; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+
+  function replayText(): string {
+    return entry.log.map((l) => `[${l.clockLabel}] ${l.text}`).join("\n");
+  }
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(replayText());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard access denied/unavailable — the button just silently doesn't confirm, nothing else to do.
+    }
+  }
+
+  return (
+    <div className="replay-modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="replay-modal">
+        <div className="replay-modal-header">
+          <div>
+            <div className="replay-modal-title">
+              {entry.queue} &middot; {entry.score} &middot; {entry.result === "win" ? "Win" : "Loss"}
+            </div>
+            <div className="replay-modal-sub">{entry.log.length} log lines</div>
+          </div>
+          <button className="replay-modal-close" onClick={onClose} aria-label="Close replay">
+            ✕
+          </button>
+        </div>
+        <div className="replay-modal-body">
+          {entry.log.map((l, i) => (
+            <div key={i} className="replay-log-line">
+              <span className="replay-log-clock">{l.clockLabel}</span>
+              <span>{l.text}</span>
+            </div>
+          ))}
+        </div>
+        <div className="replay-modal-footer">
+          <button className="recent-match-view-btn" onClick={handleCopy}>
+            {copied ? "Copied!" : "Copy Log"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -249,6 +249,10 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
         selfSaves,
         note,
         opponentNames: players.filter((p) => !p.isSelf).map((p) => p.name),
+        // Real names only, never the alt-name display swap (see data/altNames.ts) — the log lines
+        // themselves were already generated with real names, this is exactly what's live on screen right
+        // now, just without the id/emphasis fields only the live view needs.
+        log: log.map((l) => ({ clockLabel: l.clockLabel, text: l.text })),
       });
 
       // The match actually matters to any real pro or leaderboard regular who was in it: their queue MMR

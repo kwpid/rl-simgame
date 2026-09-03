@@ -63,9 +63,13 @@ function migrateSaveData(raw: any): SaveData {
   // region, same as a fresh save.
   if (data.selectedMatchmakingRegions === undefined) data.selectedMatchmakingRegions = [saveRegionToProRegion(data.region)];
 
-  // Recent matches used to not track who was in them at all.
+  // Recent matches used to not track who was in them at all, and later didn't carry a replayable log.
   if (Array.isArray(data.recentMatches)) {
-    data.recentMatches = data.recentMatches.map((m: any) => (Array.isArray(m.opponents) ? m : { ...m, opponents: [] }));
+    data.recentMatches = data.recentMatches.map((m: any) => ({
+      ...m,
+      opponents: Array.isArray(m.opponents) ? m.opponents : [],
+      log: Array.isArray(m.log) ? m.log : [],
+    }));
   }
 
   // Display Name (the free-text, always-editable name shown everywhere) didn't exist before, the fixed
