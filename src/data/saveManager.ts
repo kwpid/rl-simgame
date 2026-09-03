@@ -14,7 +14,7 @@ import { exportRegionalRosterDataForSave, importRegionalRosterDataForSave } from
 import { exportAiTitleDataForSave, importAiTitleDataForSave } from "@/store/useAiTitleStore";
 import { exportProLeaderboardData, importProLeaderboardData } from "@/store/useProLeaderboardStore";
 import { exportFillerLeaderboardData, importFillerLeaderboardData } from "@/store/useLeaderboardFillerStore";
-import { saveRegionToProRegion } from "./tournaments";
+import { saveRegionToProRegion, exportTeamsCacheDataForSave, importTeamsCacheDataForSave } from "./tournaments";
 
 /**
  * Saves persisted from an older build can be missing fields the current schema expects, or have fields
@@ -413,6 +413,7 @@ export interface SaveExportBundle {
   aiTitleChoices?: string | null;
   proLeaderboard?: string | null;
   leaderboardFiller?: string | null;
+  teamsCache?: string | null;
 }
 
 /** Builds the full export bundle for a save (see `SaveExportBundle`) — call with the save's own id (from
@@ -428,6 +429,7 @@ export function exportSaveBundle(saveId: string, data: SaveData): SaveExportBund
     aiTitleChoices: exportAiTitleDataForSave(saveId),
     proLeaderboard: exportProLeaderboardData(),
     leaderboardFiller: exportFillerLeaderboardData(),
+    teamsCache: exportTeamsCacheDataForSave(saveId),
   };
 }
 
@@ -462,6 +464,7 @@ export async function importSaveFile(raw: unknown): Promise<SaveSummary> {
     importAiTitleDataForSave(id, bundle.aiTitleChoices);
     importProLeaderboardData(bundle.proLeaderboard);
     importFillerLeaderboardData(bundle.leaderboardFiller);
+    importTeamsCacheDataForSave(id, bundle.teamsCache);
   }
 
   return (await listSaves()).find((s) => s.id === id)!;

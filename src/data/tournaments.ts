@@ -156,9 +156,18 @@ function rlcsPowerFromStats(mmr2v2: number, gameSense2v2: number, mechanicalCons
 
 /** Every player legitimately good enough to be on a real RLCS team this year: active pros from the region,
  *  plus that region's `mid`-band ranked grinders (never `low` band — those read as ranked-ladder regulars,
- *  not remotely pro-caliber) — never a generic filler name, and gated by the same 2v2 MMR floor the
- *  player's own org track requires. This is the entire "no filler teams" fix: a thin region (APAC/SSA) just
- *  fields fewer, entirely real teams instead of padding the field out. */
+ *  not remotely pro-caliber) — never a generic filler name. This is the entire "no filler teams" fix: a thin
+ *  region (APAC/SSA) just fields fewer, entirely real teams instead of padding the field out.
+ *
+ *  Gated by career-PEAK 2v2 MMR (the same floor the player's own org track requires), never the live ranked-
+ *  ladder MMR — that resets every ranked season (a soft reset, see useProLeaderboardStore.ts), and a real
+ *  org roster must never be affected by that at all (ranked has nothing to do with RLCS/orgs). Using live
+ *  MMR here used to mean that right after a season reset, most or every pro/grinder in a region could drop
+ *  below the floor simultaneously (a soft reset can knock 500+ MMR off in one step) until they'd simulated
+ *  enough background games to climb back — and since generateTeamsForRegion caches its result for the whole
+ *  RLCS season, whichever snapshot got queried FIRST (very plausibly right after a reset, before any
+ *  catch-up had run) would lock in an empty or near-empty roster permanently. Peak MMR only ever grows, so
+ *  a pro's org eligibility now reflects their demonstrated ceiling, immune to ladder resets entirely. */
 function eligibleRealPlayersForRegion(region: ProRegion, currentYear: number, era: RankEra, currentDate: SimDate, seasonStartDate: SimDate): EligibleRealPlayer[] {
   const candidates = [
     ...activeProPlayers(currentYear).filter((p) => p.region === region).map((p) => p.name),
@@ -167,14 +176,11 @@ function eligibleRealPlayersForRegion(region: ProRegion, currentYear: number, er
   const eligible: EligibleRealPlayer[] = [];
   for (const name of candidates) {
     const pro = activeProPlayers(currentYear).find((p) => p.name === name);
-    const mmr2v2 = pro
-      ? useProLeaderboardStore.getState().getMmr(name, "2v2", era, currentYear, currentDate, seasonStartDate)
-      : useRegionalRosterStore.getState().getMmr(name, region, "2v2", era, currentYear, currentDate, seasonStartDate);
-    if (!meetsOrgRankRequirement(era, mmr2v2)) continue;
     const stats = pro
       ? useProLeaderboardStore.getState().getStats(name, "2v2", era, currentYear, currentDate, seasonStartDate)
       : useRegionalRosterStore.getState().getStats(name, region, "2v2", era, currentYear, currentDate, seasonStartDate);
-    eligible.push({ name, power: rlcsPowerFromStats(mmr2v2, stats.gameSense, stats.mechanicalConsistency, era, currentYear) });
+    if (!meetsOrgRankRequirement(era, stats.peakMmr)) continue;
+    eligible.push({ name, power: rlcsPowerFromStats(stats.peakMmr, stats.gameSense, stats.mechanicalConsistency, era, currentYear) });
   }
   return eligible;
 }
@@ -233,19 +239,75 @@ const ALL_PRO_REGIONS: ProRegion[] = ["NA", "EU", "OCE", "SAM", "MENA", "APAC", 
 // — and never recomputing it again until the season/resetSeed actually changes — makes the roster literally
 // frozen for the rest of the season, matching what was already documented/intended.
 //
+// Persisted to localStorage (not just an in-memory Map) — a purely in-memory cache is wiped by every page
+// reload/app restart, and since AI leaderboard MMR keeps drifting (and soft-resets every ranked season, see
+// useProLeaderboardStore.ts) independently of the RLCS calendar, a reload landing after either of those
+// would recompute this from whatever the CURRENT (different) MMR values are and silently produce a
+// different roster than what was already shown — orgs visibly "reshuffling" across a reload/reset even
+// though nothing actually changed within one continuous session. This is what "locked for the season"
+// actually requires: the FIRST roster ever built for a given (region, season, resetSeed) is the one that
+// sticks, permanently, regardless of how many times the app reloads or AI MMR resets in between.
+//
 // Scoped per active save (see `setActiveSaveIdForTeamsCache`, called from AppRoot.tsx alongside every other
 // per-save store reset) so two different saves that happen to be in the same numbered RLCS season never
 // leak each other's cached rosters — this cache has no other awareness of which save is open.
-const teamsCache = new Map<string, TournamentTeam[]>();
-let activeSaveIdForTeamsCache: string | null = null;
+// Bumped to v2 when eligibility switched from live ranked MMR to career-peak MMR (see
+// eligibleRealPlayersForRegion) — v1 entries could have permanently cached an empty/near-empty roster from
+// right after a ranked-season reset, so they're not reused.
+const TEAMS_CACHE_STORAGE_PREFIX = "rl-sim:org-teams-cache-v2";
 
-/** Clears the cached real-team rosters — call whenever the active save changes (a fresh save's own AI
- *  leaderboard progress starts from scratch, so its region rosters must be recomputed from scratch too,
- *  never inherited from whichever save was open before it). */
+function teamsCacheStorageKey(saveId: string | null): string {
+  return `${TEAMS_CACHE_STORAGE_PREFIX}:${saveId ?? "unsaved"}`;
+}
+
+function loadTeamsCache(saveId: string | null): Map<string, TournamentTeam[]> {
+  try {
+    const raw = localStorage.getItem(teamsCacheStorageKey(saveId));
+    if (!raw) return new Map();
+    return new Map(Object.entries(JSON.parse(raw) as Record<string, TournamentTeam[]>));
+  } catch {
+    return new Map();
+  }
+}
+
+function persistTeamsCache(saveId: string | null, cache: Map<string, TournamentTeam[]>): void {
+  try {
+    localStorage.setItem(teamsCacheStorageKey(saveId), JSON.stringify(Object.fromEntries(cache)));
+  } catch {
+    // Storage full/unavailable, the cache just won't persist across reloads this session — rosters can
+    // still drift on a reload in that case, but that's a genuine storage failure, not the normal path.
+  }
+}
+
+let activeSaveIdForTeamsCache: string | null = null;
+let teamsCache: Map<string, TournamentTeam[]> = loadTeamsCache(activeSaveIdForTeamsCache);
+
+/** Switches the cached real-team rosters over to a different save — call whenever the active save changes
+ *  (a fresh save's own AI leaderboard progress starts from scratch, so its region rosters must be recomputed
+ *  from scratch too, never inherited from whichever save was open before it), same as every other per-save
+ *  store's own `loadForSave`. */
 export function setActiveSaveIdForTeamsCache(saveId: string | null): void {
   if (saveId === activeSaveIdForTeamsCache) return;
   activeSaveIdForTeamsCache = saveId;
-  teamsCache.clear();
+  teamsCache = loadTeamsCache(saveId);
+}
+
+/** Raw (already-JSON-string) cached-team-roster data for one save, read verbatim — same "bundle it so a
+ *  device switch doesn't quietly reshuffle every org roster" reasoning as useRegionalRosterStore.ts's own
+ *  export, see saveManager.ts's exportSaveBundle. */
+export function exportTeamsCacheDataForSave(saveId: string): string | null {
+  return localStorage.getItem(teamsCacheStorageKey(saveId));
+}
+
+/** Writes a previously-exported blob into storage under a NEW save id — the normal
+ *  `setActiveSaveIdForTeamsCache` call that happens whenever a save is actually opened picks it up from
+ *  there afterward. */
+export function importTeamsCacheDataForSave(saveId: string, data: string | null | undefined): void {
+  try {
+    if (data) localStorage.setItem(teamsCacheStorageKey(saveId), data);
+  } catch {
+    // Storage full/unavailable, the imported team cache just won't carry over this session.
+  }
 }
 
 /** Builds a region's real, season-locked RLCS field: every team is real active pros and/or mid-band ranked
@@ -272,6 +334,7 @@ export function generateTeamsForRegion(region: ProRegion, currentYear: number, s
       cached.push({ id: `${i}`, name: orgNames[i], region, power, players: roster.map((p) => p.name) });
     }
     teamsCache.set(cacheKey, cached);
+    persistTeamsCache(activeSaveIdForTeamsCache, teamsCache);
   }
   return cached.map((t) => ({ ...t, id: `${idPrefix}_${t.id}` }));
 }
