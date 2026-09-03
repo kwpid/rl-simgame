@@ -639,7 +639,12 @@ function applyPartyFlavor(players: MatchPlayer[]): MatchPlayer[] {
   // A real AI-AI duo (see fillTeamSlots) or the player's own party already carries a partyId, don't
   // overwrite it with an unrelated cosmetic pairing.
   if (players.some((p) => p.partyId)) return players;
-  const enemyTeam = players.filter((p) => p.team === "orange");
+  // The enemy team is whichever side the player ISN'T on — team colors are a 50/50 coinflip per match
+  // (see generateRoster), not always "self is blue, enemy is orange", so hardcoding "orange" here would
+  // sometimes filter in the player's own team (self included) instead of the actual opponents, and could
+  // cosmetically "party" the player up with a random AI they never actually queued with.
+  const selfTeam = players.find((p) => p.isSelf)?.team;
+  const enemyTeam = players.filter((p) => p.team !== selfTeam);
   if (enemyTeam.length < 2 || Math.random() >= PARTY_CHANCE) return players;
   const shuffled = [...enemyTeam].sort(() => Math.random() - 0.5);
   const [a, b] = shuffled;
