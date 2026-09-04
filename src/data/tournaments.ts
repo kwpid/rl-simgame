@@ -154,6 +154,24 @@ function rlcsPowerFromStats(mmr2v2: number, gameSense2v2: number, mechanicalCons
   return overallRating * RLCS_ELIGIBILITY_RATING_WEIGHT + mmrAsRating * RLCS_ELIGIBILITY_MMR_WEIGHT;
 }
 
+/** A team's real seeding/"power ranking" once its roster is actually set: the SUM (not average) of each
+ *  rostered player's own Overall Rating in 3v3 specifically - matching the Stats screen's own Overall
+ *  Rating formula, just fed 3v3 stats instead of 2v2. 2v2 above is deliberately only ever used to decide
+ *  WHO makes a roster at all (real orgs scout there, see eligibleRealPlayersForRegion's doc comment) - once
+ *  the 3 players are set, seeding has to reflect the actual competitive format (3s), and a genuine stacked
+ *  roster of three strong players should clearly outrank a roster with only one standout, which summing
+ *  (rather than averaging) is what actually captures. */
+export function threeVThreeOverallRatingForPlayer(name: string, region: ProRegion, era: RankEra, currentYear: number, currentDate: SimDate, seasonStartDate: SimDate): number {
+  const pro = activeProPlayers(currentYear).find((p) => p.name === name);
+  const stats = pro
+    ? useProLeaderboardStore.getState().getStats(name, "3v3", era, currentYear, currentDate, seasonStartDate)
+    : useRegionalRosterStore.getState().getStats(name, region, "3v3", era, currentYear, currentDate, seasonStartDate);
+  const uniformFoundation = Object.fromEntries(
+    (Object.keys(FOUNDATION_LABELS) as FoundationCategory[]).map((cat) => [cat, stats.gameSense])
+  ) as Record<FoundationCategory, number>;
+  return computeOverallRating(stats.gameSense, stats.mechanicalConsistency, uniformFoundation);
+}
+
 /** Every player legitimately good enough to be on a real RLCS team this year: active pros from the region,
  *  plus that region's `mid`-band ranked grinders (never `low` band — those read as ranked-ladder regulars,
  *  not remotely pro-caliber) — never a generic filler name. This is the entire "no filler teams" fix: a thin
@@ -373,7 +391,9 @@ export function generateTeamsForRegion(region: ProRegion, currentYear: number, s
     cached = [];
     for (let i = 0; i < teamCount; i++) {
       const roster = eligible.slice(i * 3, i * 3 + 3);
-      const power = Math.round(roster.reduce((sum, p) => sum + p.power, 0) / roster.length);
+      const power = Math.round(
+        roster.reduce((sum, p) => sum + threeVThreeOverallRatingForPlayer(p.name, region, era, currentYear, currentDate, seasonStartDate), 0)
+      );
       cached.push({ id: `${i}`, name: orgNames[i], region, power, players: roster.map((p) => p.name) });
     }
     teamsCache.set(cacheKey, cached);

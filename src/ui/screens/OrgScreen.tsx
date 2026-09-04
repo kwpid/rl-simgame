@@ -16,7 +16,9 @@ import {
   applyPlayerOrgOverride,
   REGION_LABELS,
   rlcsSeasonPhase,
+  threeVThreeOverallRatingForPlayer,
 } from "@/data/tournaments";
+import type { TournamentTeam } from "@/data/tournamentFormats";
 import {
   ORG_TIER_LABELS,
   meetsOrgRankRequirement,
@@ -111,6 +113,7 @@ export function OrgScreen() {
   const [coachingResult, setCoachingResult] = useState<{ gameSense: Record<QueueMode, number>; mechanicalConsistency: Record<QueueMode, number> } | null>(null);
   const [bootcampResult, setBootcampResult] = useState<{ scrimWins: number; scrimLosses: number; gameSense: Record<QueueMode, number>; mechanicalConsistency: Record<QueueMode, number> } | null>(null);
   const [topTeamsScope, setTopTeamsScope] = useState<"region" | "world">("region");
+  const [viewingTeam, setViewingTeam] = useState<TournamentTeam | null>(null);
 
   const era = eraForDate(s.currentDate);
   const currentYear = s.currentDate.year;
@@ -444,16 +447,50 @@ export function OrgScreen() {
         </div>
         <Card>
           {(topTeamsScope === "region" ? topRegionTeams : topWorldTeams).map((team, i) => (
-            <div key={team.id} className="org-team-row">
+            <button type="button" key={team.id} className="org-team-row" onClick={() => setViewingTeam(team)}>
               <span className="org-team-rank">#{i + 1}</span>
               <div className="org-team-info">
-                <div className="org-team-name">{team.name}{topTeamsScope === "world" && ` (${team.region})`}</div>
+                <div className="org-team-name">
+                  {team.name}
+                  {topTeamsScope === "world" && ` (${team.region})`}
+                </div>
                 <div className="org-team-roster">{team.players.join(", ")}</div>
               </div>
-            </div>
+            </button>
           ))}
         </Card>
       </SectionShell>
+
+      {viewingTeam && (
+        <div className="team-modal-backdrop" onClick={() => setViewingTeam(null)}>
+          <div className="team-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="team-modal-header">
+              <div>
+                <div className="team-modal-name">
+                  {viewingTeam.name} <span className="team-modal-region">({REGION_LABELS[viewingTeam.region as ProRegion]})</span>
+                </div>
+                <div className="team-modal-power">{viewingTeam.power.toLocaleString()} Power Rating</div>
+              </div>
+              <button type="button" className="team-modal-close" onClick={() => setViewingTeam(null)}>
+                ✕
+              </button>
+            </div>
+            <div className="team-modal-roster">
+              {viewingTeam.players.map((name) => (
+                <div key={name} className="team-modal-player-row">
+                  <span>{name}</span>
+                  <span className="team-modal-player-rating">
+                    {Math.round(
+                      threeVThreeOverallRatingForPlayer(name, viewingTeam.region as ProRegion, era, currentYear, s.currentDate, s.seasonStartDate)
+                    ).toLocaleString()}{" "}
+                    OVR (3v3)
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <SectionShell title="Org News">
         <Card>
@@ -548,8 +585,20 @@ export function OrgScreen() {
           display: flex;
           align-items: baseline;
           gap: 10px;
+          width: 100%;
           padding: 8px 0;
           border-bottom: 1px solid var(--border-subtle);
+          background: none;
+          border-left: none;
+          border-right: none;
+          border-top: none;
+          text-align: left;
+          cursor: pointer;
+          font: inherit;
+          color: inherit;
+        }
+        .org-team-row:hover {
+          background: var(--bg-surface-hover);
         }
         .org-team-row:last-child {
           border-bottom: none;
@@ -569,6 +618,82 @@ export function OrgScreen() {
         .org-team-roster {
           font-size: 12px;
           color: var(--text-tertiary);
+        }
+        .team-modal-backdrop {
+          position: fixed;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.55);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 200;
+          padding: var(--space-4);
+        }
+        .team-modal {
+          background: var(--bg-surface);
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--radius-lg);
+          padding: var(--space-4);
+          width: 100%;
+          max-width: 380px;
+          max-height: 80vh;
+          overflow-y: auto;
+        }
+        .team-modal-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: var(--space-3);
+          margin-bottom: var(--space-3);
+          padding-bottom: var(--space-3);
+          border-bottom: 1px solid var(--border-subtle);
+        }
+        .team-modal-name {
+          font-size: 16px;
+          font-weight: 700;
+          color: var(--text-primary);
+        }
+        .team-modal-region {
+          font-size: 12px;
+          font-weight: 500;
+          color: var(--text-tertiary);
+        }
+        .team-modal-power {
+          margin-top: 2px;
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--accent);
+        }
+        .team-modal-close {
+          flex-shrink: 0;
+          background: none;
+          border: none;
+          font-size: 18px;
+          line-height: 1;
+          color: var(--text-tertiary);
+          cursor: pointer;
+          padding: 2px;
+        }
+        .team-modal-close:hover {
+          color: var(--text-primary);
+        }
+        .team-modal-roster {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .team-modal-player-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: var(--space-3);
+          padding: 6px 0;
+          font-size: 13px;
+        }
+        .team-modal-player-rating {
+          font-weight: 700;
+          color: var(--text-secondary);
+          white-space: nowrap;
         }
       `}</style>
     </div>
