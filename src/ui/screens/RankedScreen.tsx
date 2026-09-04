@@ -502,39 +502,51 @@ export function RankedScreen() {
               </button>
             ))}
           </div>
-          <div className="leaderboard-scroll">
-            {leaderboardFilter === "friends" && leaderboard.length === 0 ? (
-              <div className="leaderboard-empty">No friends to show yet — add some from a post-match roster or the Social screen.</div>
-            ) : (
-              <table className="leaderboard-table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Player</th>
-                    <th style={{ textAlign: "right" }}>MMR</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {leaderboard.map((row) => (
-                    <tr key={row.isPlayer ? "self" : row.name} className={row.isPlayer ? "leaderboard-row-self" : undefined}>
-                      <td>{row.rank}</td>
-                      <td>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <Avatar
-                            name={row.name}
-                            currentDate={s.currentDate}
-                            size={22}
-                            overrideUrl={row.isPlayer ? s.playerPfp : undefined}
-                            notable={row.isPlayer}
-                          />
-                          {row.name}
-                        </div>
-                      </td>
-                      <td style={{ textAlign: "right", fontWeight: 600 }}>{row.mmr}</td>
+          <div className="leaderboard-bottom-bleed">
+            <div className="leaderboard-scroll">
+              {leaderboardFilter === "friends" && leaderboard.length === 0 ? (
+                <div className="leaderboard-empty">No friends to show yet — add some from a post-match roster or the Social screen.</div>
+              ) : (
+                <table className="leaderboard-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Player</th>
+                      <th style={{ textAlign: "right" }}>MMR</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {leaderboard.map((row) => (
+                      <tr key={row.isPlayer ? "self" : row.name} className={row.isPlayer ? "leaderboard-row-self" : undefined}>
+                        <td>{row.rank}</td>
+                        <td>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <Avatar
+                              name={row.name}
+                              currentDate={s.currentDate}
+                              size={22}
+                              overrideUrl={row.isPlayer ? s.playerPfp : undefined}
+                              notable={row.isPlayer}
+                            />
+                            {row.name}
+                          </div>
+                        </td>
+                        <td style={{ textAlign: "right", fontWeight: 600 }}>{row.mmr}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            {leaderboardFilter !== "friends" && (
+              <div className="leaderboard-self-banner">
+                <span className="leaderboard-self-rank">{leaderboard.find((row) => row.isPlayer)?.rank ?? "--"}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
+                  <Avatar name={s.displayName} currentDate={s.currentDate} size={22} overrideUrl={s.playerPfp} notable />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{s.displayName}</span>
+                </div>
+                <span className="leaderboard-self-mmr">{profile.mmr}</span>
+              </div>
             )}
           </div>
         </div>
@@ -934,10 +946,14 @@ export function RankedScreen() {
           font-size: 13px;
           text-align: center;
         }
+        .leaderboard-bottom-bleed {
+          margin: 0 calc(var(--space-4) * -1) calc(var(--space-4) * -1);
+          border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+          overflow: hidden;
+        }
         .leaderboard-scroll {
           max-height: 360px;
           overflow-y: auto;
-          margin: 0 calc(var(--space-4) * -1) calc(var(--space-4) * -1);
         }
         .leaderboard-table {
           width: 100%;
@@ -971,6 +987,25 @@ export function RankedScreen() {
         .leaderboard-row-self td {
           color: var(--accent);
           font-weight: 700;
+        }
+        .leaderboard-self-banner {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 7px var(--space-4);
+          font-size: 13px;
+          background: var(--bg-surface-hover);
+          color: var(--text-primary);
+          font-weight: 600;
+        }
+        .leaderboard-self-rank {
+          width: 24px;
+          flex-shrink: 0;
+          color: var(--text-secondary);
+          font-weight: 400;
+        }
+        .leaderboard-self-mmr {
+          margin-left: auto;
         }
       `}</style>
     </div>
