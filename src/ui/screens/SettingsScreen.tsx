@@ -466,6 +466,7 @@ function DeveloperToolsSection() {
   const devSetRewardLevel = useSaveStore((store) => store.devSetRewardLevel);
   const devSetCareerStats = useSaveStore((store) => store.devSetCareerStats);
   const devSetSeasonNumber = useSaveStore((store) => store.devSetSeasonNumber);
+  const devSetLevel = useSaveStore((store) => store.devSetLevel);
   const resetProLeaderboard = useProLeaderboardStore((store) => store.resetAll);
   const resetFillerLeaderboard = useLeaderboardFillerStore((store) => store.resetAll);
   const resetRegionalRoster = useRegionalRosterStore((store) => store.resetAll);
@@ -486,6 +487,7 @@ function DeveloperToolsSection() {
   const [rewardTier, setRewardTier] = useState<RankTierId>(s.rewardTierUnlocked);
   const [rewardWins, setRewardWins] = useState("0");
   const [seasonNumberValue, setSeasonNumberValue] = useState(String(s.seasonNumber));
+  const [levelValue, setLevelValue] = useState(String(s.level));
   const [titleSeasonValue, setTitleSeasonValue] = useState(String(s.seasonNumber));
   const [titleTier, setTitleTier] = useState<"grand_champion" | "ssl">("ssl");
   const [careerStatsQueue, setCareerStatsQueue] = useState<QueueMode>("2v2");
@@ -808,6 +810,23 @@ function DeveloperToolsSection() {
               />
               <button className="dev-btn" onClick={() => devSetSeasonNumber(Number(seasonNumberValue) || 1)}>
                 Set (AI titles from earlier seasons show up automatically)
+              </button>
+            </div>
+          </div>
+
+          <div className="dev-tools-group">
+            <span className="dev-tools-label">Set Player Level</span>
+            <div className="dev-tools-row">
+              <input
+                className="dev-input"
+                type="number"
+                min={1}
+                value={levelValue}
+                onChange={(e) => setLevelValue(e.target.value)}
+                title="Player level, 1+"
+              />
+              <button className="dev-btn" onClick={() => devSetLevel(Number(levelValue) || 1)}>
+                Set (grants every level title you'd have earned by then)
               </button>
             </div>
           </div>

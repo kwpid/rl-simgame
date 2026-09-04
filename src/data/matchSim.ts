@@ -6,8 +6,9 @@
 import { MECHANICS, type FoundationCategory } from "./mechanics";
 import { deriveRankFromMmr, tierMinMmr, type RankEra, type RankQueue, type RankTierId } from "./rankSystem";
 import { pickAiTitle, type TitleEntry } from "./seasons";
+import { pickAiLevelTitle } from "./levelTitles";
 import { PRO_PLAYERS, isGenerationalTalent, experienceGrowth, hashString, type ProRegion } from "./proPlayers";
-import type { PlaystyleProfile } from "./mockSave";
+import type { PlaystyleProfile, QueueMode } from "./mockSave";
 import { ORG_NAMES, orgTagForOrgName } from "./orgNames";
 import type { SimDate } from "./dateUtils";
 
@@ -16,14 +17,22 @@ import type { SimDate } from "./dateUtils";
  *  back to a believable proxy derived from their overall stats instead (see matchSim.ts's pickWeightedMove). */
 export interface DuelMastery {
   mechanicMastery: Record<string, number>;
+  mechanicReps: Record<string, number>;
   queueConceptMastery: Record<string, number>;
+  queueConceptReps: Record<string, number>;
   playstyle: PlaystyleProfile;
 }
 
-/** mechanicProgress/queueConceptProgress on the save are `{ currentValue }` wrapper records, this strips
- *  that down to a flat id->value map for `DuelMastery`. */
+/** mechanicProgress/queueConceptProgress on the save are `{ currentValue, reps }` wrapper records, this
+ *  strips that down to a flat id->value map for `DuelMastery`. */
 export function flattenProgress(progress: Record<string, { currentValue: number }>): Record<string, number> {
   return Object.fromEntries(Object.entries(progress).map(([id, p]) => [id, p.currentValue]));
+}
+
+/** Sibling to `flattenProgress`, for the reps ("confidence") side of the same records - see
+ *  moveMasteryValue/conceptMasteryValue for how this scales a mechanic's in-match pick weight. */
+export function flattenReps(progress: Record<string, { reps: number }>): Record<string, number> {
+  return Object.fromEntries(Object.entries(progress).map(([id, p]) => [id, p.reps]));
 }
 
 export interface MatchParticipantStats {
@@ -298,7 +307,10 @@ export function generateOpponentStats(
   const amateurTournamentFloor = 25000 + Math.max(0, Math.min(1, tournamentStageProgress)) * 45000 + Math.random() * 15000;
   const rankedEstimate = estimateGameSenseForMmr(mmr, era, proQueueOverride?.queue ?? queue, currentYear);
 
-  const title = resolvedTitle !== undefined ? resolvedTitle : pickAiTitle(era, seasonNumber, effectiveTier);
+  // Generic/untracked opponents: try the season/RLCS-flavor roll first (only ever fires champion+), then
+  // fall back to a plain level title (see data/levelTitles.ts) so lower-tier opponents aren't locked out
+  // of ever showing a title at all - pickAiLevelTitle keeps a real chance of nothing here too.
+  const title = resolvedTitle !== undefined ? resolvedTitle : pickAiTitle(era, seasonNumber, effectiveTier) ?? pickAiLevelTitle(effectiveTier);
 
   return {
     name,
@@ -597,6 +609,23 @@ function attemptFinish(
     return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.3, keeperMultiplier);
   }
   if (kind === "wall_read") {
+    // Mirrors the "aerial" branch above: a named ground mechanic only comes up when it's actually
+    // unlocked yet and the attacker clears a mastery bar relative to their own general consistency.
+    const eraPool = GROUND_ATTACK_MOVE_IDS.filter((id) => mechanicUnlockedByDate(id, currentDate));
+    if (eraPool.length > 0) {
+      const move = pickWeightedMove(eraPool, attacker);
+      const mastery = moveMasteryValue(move.id, attacker);
+      const relativeMastery = mastery / Math.max(1, attacker.mechanicalConsistency);
+      if (relativeMastery > 0.35) {
+        lines.push({ text: `${attacker.name} reads it off the wall and goes for a ${move.label}.` });
+        const whiff = whiffChance(attacker, mastery + attacker.foundationStats.carControl * 0.3, relativeMastery > 0.6 ? 0.12 : 0.22);
+        if (Math.random() < whiff) {
+          lines.push({ text: `${attacker.name} mistimes the wall read and it skips away.` });
+          return { lines, outcome: "whiff", pointsAwarded };
+        }
+        return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.18, keeperMultiplier * (relativeMastery > 0.6 ? 1.1 : 1));
+      }
+    }
     lines.push({ text: `${attacker.name} reads it off the wall and drives toward goal.` });
     const whiff = whiffChance(attacker, attacker.foundationStats.carControl, 0.18);
     if (Math.random() < whiff) {
@@ -606,6 +635,21 @@ function attemptFinish(
     return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.2, keeperMultiplier);
   }
   if (kind === "ground_flick") {
+    const eraPool = GROUND_ATTACK_MOVE_IDS.filter((id) => mechanicUnlockedByDate(id, currentDate));
+    if (eraPool.length > 0) {
+      const move = pickWeightedMove(eraPool, attacker);
+      const mastery = moveMasteryValue(move.id, attacker);
+      const relativeMastery = mastery / Math.max(1, attacker.mechanicalConsistency);
+      if (relativeMastery > 0.35) {
+        lines.push({ text: `${attacker.name} pops it up for a ${move.label}.` });
+        const whiff = whiffChance(attacker, mastery + attacker.foundationStats.carControl * 0.3, relativeMastery > 0.6 ? 0.15 : 0.28);
+        if (Math.random() < whiff) {
+          lines.push({ text: `${attacker.name} fumbles the touch and loses the ball.` });
+          return { lines, outcome: "whiff", pointsAwarded };
+        }
+        return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.22, keeperMultiplier * (relativeMastery > 0.6 ? 1.1 : 1));
+      }
+    }
     lines.push({ text: `${attacker.name} pops it up for a flick.` });
     const whiff = whiffChance(attacker, attacker.foundationStats.carControl, 0.24);
     if (Math.random() < whiff) {
@@ -716,7 +760,8 @@ function maybePassToTeammate(
   attacker: MatchParticipantStats,
   attackingTeam: MatchParticipantStats[],
   defender: MatchParticipantStats,
-  passChance: number
+  passChance: number,
+  queue: QueueMode
 ): { attacker: MatchParticipantStats; lines: PossessionLogLine[]; awkward: boolean } {
   const teammates = attackingTeam.filter((p) => p !== attacker);
   if (teammates.length === 0) return { attacker, lines: [], awkward: false };
@@ -724,7 +769,13 @@ function maybePassToTeammate(
   // FriendRecord.chemistry/OrgContract.chemistry, this is the same shared mechanic both feed) reads each
   // other's positioning better, a genuinely higher pass success rate, not just flavor text.
   const chemistryBoost = attacker.teamChemistry !== undefined ? (attacker.teamChemistry - 70) / 400 : 0;
-  if (Math.random() > passChance + chemistryBoost) return { attacker, lines: [], awkward: false };
+  // The passer's own trained passing sense (2v2's "Cycling boost and passing to control tempo"/3v3's
+  // "Setting up a pass to a rotating teammate") also lifts pass success, same as the duel engine's shot-
+  // selection/low-boost concept ids already scale 1v1 whiff chance.
+  const passConceptId = queue === "2v2" ? "2v2_possession" : "3v3_passback_setups";
+  const passMastery = conceptMasteryValue(passConceptId, attacker, attacker.foundationStats.passing);
+  const masteryBoost = Math.min(0.12, passMastery / 12000);
+  if (Math.random() > passChance + chemistryBoost + masteryBoost) return { attacker, lines: [], awkward: false };
   const receiver = teammates[Math.floor(Math.random() * teammates.length)];
   const lines: PossessionLogLine[] = [{ text: `${attacker.name} finds ${receiver.name} with a pass.` }];
   const demoOnReceive = attemptDemo(defender, receiver, "reads the pass and demos");
@@ -867,7 +918,8 @@ export function simulateTeamChain(
   orangeTeam: MatchParticipantStats[],
   currentPressure: number,
   isKickoff: boolean,
-  currentDate: SimDate
+  currentDate: SimDate,
+  queue: QueueMode
 ): TeamChainResult {
   const lines: PossessionLogLine[] = [];
   const pointsAwarded: { name: string; amount: number }[] = [];
@@ -992,9 +1044,12 @@ export function simulateTeamChain(
       lines.push({ text: `${roles.challenger.name} shadows, backing toward net instead of committing.` });
       // A good shadow is genuinely hard to beat cleanly — weighted a little toward the defender relative
       // to the other challenge types, matching real high-level defense being the harder read to crack.
+      // The challenger's own trained shadow-reading (2v2/3v3's "Shadow Reads" concept) sharpens that further.
+      const shadowReadId = queue === "2v2" ? "2v2_shadow_reads" : "3v3_shadow_reads";
+      const shadowReadMastery = conceptMasteryValue(shadowReadId, roles.challenger, roles.challenger.foundationStats.defense);
       const contest = statProbability(
         attacker.foundationStats.carControl + attacker.gameSense * 0.2,
-        roles.challenger.foundationStats.defense + roles.challenger.gameSense * 0.2
+        roles.challenger.foundationStats.defense + roles.challenger.gameSense * 0.2 + shadowReadMastery * 0.15
       );
       if (Math.random() > contest) {
         // A shadow win isn't always the same dead end — real defense forces different KINDS of bad
@@ -1050,7 +1105,7 @@ export function simulateTeamChain(
         lines.push({ text: `${attacker.name} forces a touch through, but ${roles.challenger.name} stays right there in the play.` });
         pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 4);
       }
-      const passed = maybePassToTeammate(attacker, attackingTeam, roles.challenger, 0.3);
+      const passed = maybePassToTeammate(attacker, attackingTeam, roles.challenger, 0.3, queue);
       lines.push(...passed.lines);
       attacker = passed.attacker;
       continue;
@@ -1070,9 +1125,13 @@ export function simulateTeamChain(
     // cleaner behind the challenger — same shared mechanic maybePassToTeammate's boost feeds.
     const chemistryDefBoost = roles.challenger.teamChemistry !== undefined ? Math.max(0, (roles.challenger.teamChemistry - 70) * 2) : 0;
     const defBoost = roles.cover.reduce((sum, c) => sum + c.foundationStats.defense * 0.05, 0) + chemistryDefBoost;
+    // Trained challenge timing (2v2/3v3's "Challenge Timing" concept) sharpens the challenger's read on
+    // exactly when to commit, on top of raw defense/game sense.
+    const timingId = queue === "2v2" ? "2v2_challenge_timing" : "3v3_challenge_timing";
+    const challengeTiming = conceptMasteryValue(timingId, roles.challenger, roles.challenger.gameSense);
     const contest = statProbability(
       attacker.foundationStats.carControl + attacker.gameSense * 0.15,
-      roles.challenger.foundationStats.defense + roles.challenger.gameSense * 0.1 + defBoost
+      roles.challenger.foundationStats.defense + roles.challenger.gameSense * 0.1 + defBoost + challengeTiming * 0.1
     );
     // A genuinely close 50 doesn't just get handed to one side outright — the ball pops up loose and
     // ANYONE nearby (either side's covering teammate included) gets a real crack at it, same shape as a
@@ -1127,7 +1186,7 @@ export function simulateTeamChain(
     ];
     lines.push({ text: driveLines[Math.floor(Math.random() * driveLines.length)] });
     pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 22);
-    const passed = maybePassToTeammate(attacker, attackingTeam, roles.challenger, 0.35);
+    const passed = maybePassToTeammate(attacker, attackingTeam, roles.challenger, 0.35, queue);
     lines.push(...passed.lines);
     attacker = passed.attacker;
     // A won hard challenge is the most decisive beat — good odds this converts straight into a shot.
@@ -1193,16 +1252,32 @@ function moveLabel(id: string): string {
 /** How "ready" a specific mechanic is for this actor: the player's own real trained mastery when present,
  *  else a proxy spread deterministically around their overall mechanical stats (so the same AI name
  *  doesn't always favor the exact same move, but stays consistent match to match). */
+// A mechanic's in-match pick weight scales with training reps ("confidence"), not just raw mastery value,
+// so a heavily-drilled mechanic shows up disproportionately more than a barely-trained one sitting at the
+// same mastery. sqrt(reps) is deliberately a different, sub-linear, uncapped curve than the roughly-linear
+// mastery term, so two mechanics at equal mastery but different rep counts genuinely diverge in weight.
+const CONFIDENCE_WEIGHT_PER_SQRT_REP = 40;
+
 function moveMasteryValue(id: string, actor: MatchParticipantStats): number {
-  if (actor.duelMastery) return actor.duelMastery.mechanicMastery[id] ?? 0;
+  if (actor.duelMastery) {
+    const mastery = actor.duelMastery.mechanicMastery[id] ?? 0;
+    const reps = actor.duelMastery.mechanicReps[id] ?? 0;
+    return mastery + CONFIDENCE_WEIGHT_PER_SQRT_REP * Math.sqrt(reps);
+  }
   const spread = hashString(actor.name + id) % 600;
-  return actor.foundationStats.aerialControl * 0.25 + actor.mechanicalConsistency * 0.2 + spread;
+  const repsProxy = hashString(actor.name + id + "#reps") % 300;
+  return actor.foundationStats.aerialControl * 0.25 + actor.mechanicalConsistency * 0.2 + spread + CONFIDENCE_WEIGHT_PER_SQRT_REP * Math.sqrt(repsProxy);
 }
 
 function conceptMasteryValue(id: string, actor: MatchParticipantStats, proxyStat: number): number {
-  if (actor.duelMastery) return actor.duelMastery.queueConceptMastery[id] ?? 0;
+  if (actor.duelMastery) {
+    const mastery = actor.duelMastery.queueConceptMastery[id] ?? 0;
+    const reps = actor.duelMastery.queueConceptReps[id] ?? 0;
+    return mastery + CONFIDENCE_WEIGHT_PER_SQRT_REP * Math.sqrt(reps);
+  }
   const spread = hashString(actor.name + id) % 500;
-  return proxyStat * 0.3 + spread;
+  const repsProxy = hashString(actor.name + id + "#reps2") % 250;
+  return proxyStat * 0.3 + spread + CONFIDENCE_WEIGHT_PER_SQRT_REP * Math.sqrt(repsProxy);
 }
 
 /** Picks one move from a pool, weighted by mastery, not just the single best one, real players try

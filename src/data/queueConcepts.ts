@@ -220,6 +220,24 @@ export const QUEUE_CONCEPTS: QueueConceptDefinition[] = [
     recommendedStatValue: 2200,
     recommendedAfter: ["2v2_teammate_adaptation"],
   },
+  {
+    id: "2v2_shadow_reads",
+    label: "Shadow Reads",
+    description: "Backing off into a shadow at the right distance instead of committing early and getting beaten clean.",
+    queue: "2v2",
+    category: "rotation",
+    recommendedStat: "defense",
+    recommendedStatValue: 1300,
+  },
+  {
+    id: "2v2_challenge_timing",
+    label: "Challenge Timing",
+    description: "Reading exactly when to step up on a 50/50 instead of committing too early or too late.",
+    queue: "2v2",
+    category: "pressure",
+    recommendedStat: "gameSense",
+    recommendedStatValue: 2000,
+  },
 
   // ============ 3v3 ============
   {
@@ -278,6 +296,24 @@ export const QUEUE_CONCEPTS: QueueConceptDefinition[] = [
     recommendedStat: "defense",
     recommendedStatValue: 2100,
     recommendedAfter: ["3v3_full_rotation"],
+  },
+  {
+    id: "3v3_shadow_reads",
+    label: "Shadow Reads",
+    description: "Backing off into a shadow at the right distance instead of committing early and getting beaten clean.",
+    queue: "3v3",
+    category: "rotation",
+    recommendedStat: "defense",
+    recommendedStatValue: 1400,
+  },
+  {
+    id: "3v3_challenge_timing",
+    label: "Challenge Timing",
+    description: "Reading exactly when to step up on a 50/50 instead of committing too early or too late.",
+    queue: "3v3",
+    category: "pressure",
+    recommendedStat: "gameSense",
+    recommendedStatValue: 2200,
   },
 ];
 

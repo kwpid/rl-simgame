@@ -25,7 +25,7 @@ import {
 import type { TitleEntry } from "@/data/seasons";
 import { eraForDate } from "@/data/rankSystem";
 import { daysBetween, addDays, formatSimDate, type SimDate } from "@/data/dateUtils";
-import { flattenProgress } from "@/data/matchSim";
+import { flattenProgress, flattenReps } from "@/data/matchSim";
 import { orgTagForOrgName, type TournamentKind } from "@/data/tournaments";
 
 type Mode = "3v3" | "1v1";
@@ -280,7 +280,9 @@ export function TourneysScreen() {
       title: s.titles.find((t) => t.id === s.equippedTitleId) ?? null,
       duelMastery: {
         mechanicMastery: flattenProgress(s.mechanicProgress),
+        mechanicReps: flattenReps(s.mechanicProgress),
         queueConceptMastery: flattenProgress(s.queueConceptProgress),
+        queueConceptReps: flattenReps(s.queueConceptProgress),
         playstyle: s.playstyleProfiles[pendingDiscipline],
       },
       orgTag: s.orgContract ? orgTagForOrgName(s.orgContract.orgName) : undefined,

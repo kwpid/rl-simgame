@@ -29,6 +29,7 @@ import {
   simulateDuelPossession,
   prefersCounterAttack,
   flattenProgress,
+  flattenReps,
   type MatchParticipantStats,
   type DuelMastery,
   type PossessionResult,
@@ -56,9 +57,10 @@ export interface SelfStats {
   mechanicalConsistency: number;
   foundationStats: Record<FoundationCategory, number>;
   title: TitleEntry | null;
-  /** The player's real trained mechanic/queue-concept mastery and per-queue playstyle, used by the 1v1
-   *  duel engine so a named mechanic in the log is actually one they've trained, not a generic stand-in.
-   *  Omitted entirely for non-1v1 matches (that engine doesn't use it yet). */
+  /** The player's real trained mechanic/queue-concept mastery, reps ("confidence"), and per-queue
+   *  playstyle - populated for every queue, used by the 1v1 duel engine and by simulateTeamChain's
+   *  shadow/hard-challenge/pass/finish beats so a named mechanic in the log is actually one they've
+   *  trained, not a generic stand-in. */
   duelMastery?: DuelMastery;
   /** [TAG] shown before the player's own name, derived from their live orgContract (see mockSave.ts), or
    *  undefined when between orgs/never signed. */
@@ -738,7 +740,9 @@ function buildAutoQueueRequest(save: ReturnType<typeof useSaveStore.getState>, e
       title: save.titles.find((t) => t.id === save.equippedTitleId) ?? null,
       duelMastery: {
         mechanicMastery: flattenProgress(save.mechanicProgress),
+        mechanicReps: flattenReps(save.mechanicProgress),
         queueConceptMastery: flattenProgress(save.queueConceptProgress),
+        queueConceptReps: flattenReps(save.queueConceptProgress),
         playstyle: save.playstyleProfiles[q],
       },
       orgTag: save.orgContract ? orgTagForOrgName(save.orgContract.orgName) : undefined,
@@ -961,7 +965,7 @@ function startTicking(
         // cleared for every following possession until the next goal/overtime start sets it again.
         const blueTeam = players.filter((p) => p.team === "blue");
         const orangeTeam = players.filter((p) => p.team === "orange");
-        const chainResult = simulateTeamChain(blueTeam, orangeTeam, pressure, needsKickoff, useSaveStore.getState().currentDate);
+        const chainResult = simulateTeamChain(blueTeam, orangeTeam, pressure, needsKickoff, useSaveStore.getState().currentDate, state.queue ?? "2v2");
         result = chainResult;
         pressure = chainResult.pressure;
         needsKickoff = false;

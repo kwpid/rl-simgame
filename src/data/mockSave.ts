@@ -3,6 +3,7 @@
 
 import type { RankTierId, RankEra } from "./rankSystem";
 import { MECHANICS, type FoundationCategory } from "./mechanics";
+import { estimateRepsFromValue } from "./trainingMath";
 import type { TitleEntry, SeasonAnnouncement } from "./seasons";
 import type { SimDate } from "./dateUtils";
 import type { ProRegion } from "./proPlayers";
@@ -357,48 +358,56 @@ export const mockSave = {
   } satisfies Record<FoundationCategory, number>,
 
   // Named mechanic mastery, keyed by MechanicDefinition.id from data/mechanics.ts. A currentValue of 0
-  // means never trained, used as the "already trained" signal for synergy bonuses elsewhere. Generated
-  // from MECHANICS (~80 entries) via HAND_SEEDED_MECHANIC_PROGRESS for a handful of notable ones and a
-  // deterministic seed for the rest, see the comment above HAND_SEEDED_MECHANIC_PROGRESS.
+  // means never trained, used as the "already trained" signal for synergy bonuses elsewhere. `reps` is the
+  // training-session "confidence" figure matchSim.ts's move-picking weights on top of raw mastery, backfilled
+  // here via estimateRepsFromValue so the demo save's already-trained mechanics don't read as never-drilled.
+  // Generated from MECHANICS (~80 entries) via HAND_SEEDED_MECHANIC_PROGRESS for a handful of notable ones
+  // and a deterministic seed for the rest, see the comment above HAND_SEEDED_MECHANIC_PROGRESS.
   mechanicProgress: Object.fromEntries(
-    MECHANICS.map((m) => [
-      m.id,
-      { currentValue: HAND_SEEDED_MECHANIC_PROGRESS[m.id] ?? seededMechanicProgress(m.id, m.eraStart) },
-    ])
-  ) as Record<string, { currentValue: number }>,
+    MECHANICS.map((m) => {
+      const currentValue = HAND_SEEDED_MECHANIC_PROGRESS[m.id] ?? seededMechanicProgress(m.id, m.eraStart);
+      return [m.id, { currentValue, reps: estimateRepsFromValue(currentValue) }];
+    })
+  ) as Record<string, { currentValue: number; reps: number }>,
 
   // Playlist-specific tactical/mental concepts, keyed by QueueConceptDefinition.id from data/queueConcepts.ts.
   // Same mix of trained/untrained as mechanicProgress, nobody drills every concept in every playlist.
-  queueConceptProgress: {
-    // 1v1
-    "1v1_adaptation": { currentValue: 900 },
-    "1v1_opponent_read": { currentValue: 500 },
-    "1v1_car_reading": { currentValue: 0 },
-    "1v1_mind_games": { currentValue: 400 },
-    "1v1_air_dribble_bump": { currentValue: 700 },
-    "1v1_low_boost_defense": { currentValue: 600 },
-    "1v1_low_boost_offense": { currentValue: 300 },
-    "1v1_boost_starving": { currentValue: 0 },
-    "1v1_shot_selection": { currentValue: 800 },
-    "1v1_tilt_management": { currentValue: 1000 },
-    // 2v2
-    "2v2_teammate_adaptation": { currentValue: 850 },
-    "2v2_possession": { currentValue: 700 },
-    "2v2_rotation_basics": { currentValue: 1200 },
-    "2v2_leave_one_back": { currentValue: 600 },
-    "2v2_punish_overcommit": { currentValue: 500 },
-    "2v2_backpost_rotation": { currentValue: 0 },
-    "2v2_fake_challenge": { currentValue: 0 },
-    "2v2_duo_boost_starving": { currentValue: 300 },
-    "2v2_callouts": { currentValue: 400 },
-    // 3v3
-    "3v3_full_rotation": { currentValue: 500 },
-    "3v3_third_man": { currentValue: 0 },
-    "3v3_passback_setups": { currentValue: 300 },
-    "3v3_boost_distribution": { currentValue: 400 },
-    "3v3_field_awareness": { currentValue: 0 },
-    "3v3_defensive_shell": { currentValue: 200 },
-  } as Record<string, { currentValue: number }>,
+  queueConceptProgress: Object.fromEntries(
+    Object.entries({
+      // 1v1
+      "1v1_adaptation": 900,
+      "1v1_opponent_read": 500,
+      "1v1_car_reading": 0,
+      "1v1_mind_games": 400,
+      "1v1_air_dribble_bump": 700,
+      "1v1_low_boost_defense": 600,
+      "1v1_low_boost_offense": 300,
+      "1v1_boost_starving": 0,
+      "1v1_shot_selection": 800,
+      "1v1_tilt_management": 1000,
+      // 2v2
+      "2v2_teammate_adaptation": 850,
+      "2v2_possession": 700,
+      "2v2_rotation_basics": 1200,
+      "2v2_leave_one_back": 600,
+      "2v2_punish_overcommit": 500,
+      "2v2_backpost_rotation": 0,
+      "2v2_fake_challenge": 0,
+      "2v2_duo_boost_starving": 300,
+      "2v2_callouts": 400,
+      "2v2_shadow_reads": 0,
+      "2v2_challenge_timing": 0,
+      // 3v3
+      "3v3_full_rotation": 500,
+      "3v3_third_man": 0,
+      "3v3_passback_setups": 300,
+      "3v3_boost_distribution": 400,
+      "3v3_field_awareness": 0,
+      "3v3_defensive_shell": 200,
+      "3v3_shadow_reads": 0,
+      "3v3_challenge_timing": 0,
+    }).map(([id, currentValue]) => [id, { currentValue, reps: estimateRepsFromValue(currentValue) }])
+  ) as Record<string, { currentValue: number; reps: number }>,
 
   rankedProfiles: {
     "1v1": { queue: "1v1", mmr: 1820, rankTier: "grand_champion", division: 0, divisionProgress: 0, seasonMatchesPlayed: 63, placementMatchesRemaining: 0, peakRankTier: "grand_champion", peakDivision: 0, peakMmr: 1820, peakMmrSeason: 4, streakType: "win", streakCount: 3 }, // temp: set to top rank for testing
@@ -445,9 +454,12 @@ export const mockSave = {
   // only come from season-end rewards or RLCS results, see data/seasons.ts. `equippedTitleId: null` is
   // a valid, first-class choice, real RL lets you display no title at all.
   titles: [
-    { id: "rookie", label: "Rookie", glow: "none" },
     { id: "speedflip_adopter", label: "Speedflip Adopter", glow: "none" },
     { id: "season_legacy_2_gc", label: "SEASON 2 GRAND CHAMPION", glow: "gold" },
+    // Level-milestone grey titles (see data/levelTitles.ts) below Rookie already covered by this save's
+    // level 14 - listed explicitly here rather than relying on migration, since this mock object is the
+    // placeholder shown before a real save loads, not something migrateSaveData ever touches.
+    { id: "level_rookie", label: "Rookie", glow: "none" },
   ] satisfies TitleEntry[] as TitleEntry[],
   equippedTitleId: "season_legacy_2_gc" as string | null,
   seasonRewardTier: 5,

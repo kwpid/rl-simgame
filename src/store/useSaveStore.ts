@@ -41,12 +41,14 @@ import { ORG_NAMES, saveRegionToProRegion, rlcsSeasonPhase, rlcsSeasonForDate, r
 import { QUEUES } from "@/data/queues";
 import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { useTournamentStore } from "@/store/useTournamentStore";
+import { diminishingGain, fatiguePenalty, estimateRepsFromValue } from "@/data/trainingMath";
+import { derivePlaystyleProfiles } from "@/data/playstyleDerivation";
+import { grantLevelTitles } from "@/data/levelTitles";
 
 // The save is now a live, mutable Zustand store instead of a frozen constant. `mockSave` in data/mockSave.ts
 // still supplies a placeholder shape at module load (before the real active save finishes loading from
 // IndexedDB, see data/saveManager.ts + the app boot flow), every screen reads through this store.
 
-const BASE_TRAINING_GAIN_PER_HOUR = 55;
 const FATIGUE_COST_PER_HOUR = 6;
 const REST_RECOVERY_PER_HOUR = 15;
 const SLEEP_RECOVERY = 45; // a full "End Day" sleep recovers much more than an hourly rest block
@@ -182,41 +184,6 @@ function pickRealOrgTeam(
 function resolveTeammateFriendInfo(name: string, proRegion: ProRegion): { region: string; isPro: boolean } {
   const pro = PRO_PLAYERS.find((p) => p.name === name);
   return pro ? { region: pro.region, isPro: true } : { region: proRegion, isPro: false };
-}
-
-function fatiguePenalty(fatigue: number): number {
-  return Math.max(0.5, 1 - fatigue / 200);
-}
-
-// Past roughly the SSL-floor Game Sense level, returns get noticeably harder to squeeze out on top of the
-// normal curve below — keeping pace once you're already competing near the top costs real, ongoing
-// training investment, not just more of the same easy early gains. Foundation stats/mechanic mastery
-// rarely if ever reach this range in practice, so this only actually bites for Game Sense/Mechanical
-// Consistency at high-SSL-and-up levels, exactly where it's meant to.
-const HIGH_VALUE_STEEPENING_THRESHOLD = 15000;
-
-/** Uncapped stats (game sense, foundation stats, mechanic/concept mastery) all use this same diminishing
- *  curve: big early gains, slow late gains, but never truly capped, and steeper still once a stat is
- *  already deep into SSL-and-up territory (see `HIGH_VALUE_STEEPENING_THRESHOLD`). Scales with hours spent. */
-function diminishingGain(currentValue: number, hours: number, efficiencyPct: number, fatigue: number): number {
-  const highValueFactor = 1 + Math.max(0, currentValue - HIGH_VALUE_STEEPENING_THRESHOLD) / HIGH_VALUE_STEEPENING_THRESHOLD;
-  const diminishing = 3000 / (3000 + currentValue * highValueFactor);
-  const efficiency = efficiencyPct / 100;
-  const gain = BASE_TRAINING_GAIN_PER_HOUR * hours * diminishing * efficiency * fatiguePenalty(fatigue);
-  return Math.max(3, Math.round(gain));
-}
-
-/** Playstyle traits are the odd one out: a deliberately capped 0-100 identity slider (see mockSave.ts's
- *  PlaystyleProfile), not an uncapped skill ceiling, so they get their own bounded formula instead of
- *  diminishingGain above. Reshaping who you are as a player costs a Skill Point per session same as any
- *  other deliberate career decision, and gets harder to push the closer you get to either extreme. */
-const PLAYSTYLE_TRAIT_GAIN_PER_HOUR = 5;
-
-function playstyleShiftGain(currentValue: number, direction: 1 | -1, hours: number, fatigue: number): number {
-  const roomLeft = direction > 0 ? 100 - currentValue : currentValue;
-  const diminishing = Math.max(0.15, roomLeft / 100);
-  const gain = PLAYSTYLE_TRAIT_GAIN_PER_HOUR * hours * diminishing * fatiguePenalty(fatigue);
-  return Math.max(1, Math.round(gain));
 }
 
 export interface MatchResultInput {
@@ -381,26 +348,19 @@ interface SaveStoreState extends SaveData {
   rest: (hours: number) => void;
   sleepToNextDay: () => void;
 
-  /** Freeplay-trainable, no Skill Point cost, just hours + fatigue, same as before. */
-  trainMechanic: (id: string, efficiencyPct: number, hours?: number) => number;
-  /** One freeplay session working several mechanics at once instead of one at a time. The session's
-   *  total hours are split evenly across every selected mechanic (bouncing between them, not each
-   *  getting the full duration), so grouping mechanics together is a convenience, not a way to get more
-   *  total training out of the same block of time. Clock advances once for the whole session, not once
-   *  per mechanic. Returns the gain for each mechanic id. */
-  trainMechanicsGroup: (entries: { id: string; efficiencyPct: number }[], hours?: number) => Record<string, number>;
-  /** Costs 1 Skill Point for the four Tactical categories (boostManagement/offense/defense/passing),
-   *  free for the two Mechanical ones (carControl/aerialControl). Returns 0 without mutating anything
-   *  if a Tactical session is attempted with no Skill Points, callers should check `skillPoints > 0`
-   *  before offering the button in the first place rather than relying on this as the only gate. */
-  trainFoundationStat: (category: FoundationCategory, hours?: number) => number;
-  /** Always costs 1 Skill Point, queue concepts are tactical/mental by definition, same 0-without-Skill-
-   *  Points behavior as the Tactical foundation stats. */
-  trainQueueConcept: (id: string, efficiencyPct: number, hours?: number) => number;
-  /** Nudges one playstyle trait for one queue toward (direction 1) or away from (direction -1) 100, costs
-   *  1 Skill Point per session same as a Tactical/Playlist session. Returns the magnitude actually gained
-   *  (always >= 0, direction decides which way it was applied), or 0 if out of Skill Points. */
-  trainPlaystyleTrait: (queue: QueueMode, trait: keyof PlaystyleProfile, direction: 1 | -1, hours?: number) => number;
+  /** One unified training session covering any mix of foundation stats, mechanics, and queue concepts at
+   *  once (playstyle is no longer manually trained at all - see derivePlaystyleProfiles). The session's
+   *  total hours are split evenly across every selected entry (bouncing between them, not each getting the
+   *  full duration), so selecting more items together is a convenience, not a way to get more total
+   *  training out of the same block of time. Clock/fatigue advance once for the whole session, never once
+   *  per entry. Skill Points are charged 1-per-Tactical-foundation-or-concept-entry, greedily in the given
+   *  order; an entry that can't be afforded is skipped (not trained) rather than aborting the whole
+   *  session. playstyleProfiles is recomputed and written in the same update. */
+  trainSession: (entries: { kind: "mechanic" | "concept" | "foundation"; id: string; efficiencyPct: number }[], hours?: number) => {
+    gains: Record<string, number>;
+    skillPointsSpent: number;
+    skippedIds: string[];
+  };
 
   /** Dev-mode only testing shortcuts, gated behind the Developer Mode toggle in Settings. None of these
    *  cost time, fatigue, or Skill Points, they're for jumping straight to a game state to test against. */
@@ -444,6 +404,11 @@ interface SaveStoreState extends SaveData {
    *  current season" going forward. RLCS's own season numbering (rlcsSeasonForDate) runs on the calendar
    *  year instead and is entirely unaffected either way. */
   devSetSeasonNumber: (seasonNumber: number) => void;
+  /** Dev-only: jumps straight to a player level, resetting xp to 0 and re-deriving xpToNextLevel from the
+   *  same curve applyExp grows it by (so resuming normal play afterward doesn't level up almost instantly
+   *  or take forever). Backfills every level title (see data/levelTitles.ts) that level would have already
+   *  earned, same "fill in everything up to the target" shape devSetRewardLevel uses for reward tiers. */
+  devSetLevel: (level: number) => void;
 }
 
 function rollClock(
@@ -713,7 +678,10 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       ...(() => {
         const expResult = applyExp(state, expGain);
         const spGain = (win ? SKILL_POINTS_PER_WIN : SKILL_POINTS_PER_LOSS) + (isEarlyGame ? EARLY_GAME_SP_BONUS : 0);
-        return { ...expResult, skillPoints: expResult.skillPoints + spGain };
+        // Grey, no-glow titles unlocked by level alone (see data/levelTitles.ts) - granted the same moment
+        // a level-up actually happens, same dedupe-by-id/append shape as processSeasonRollover's titles.
+        const titles = grantLevelTitles(state.titles, expResult.level);
+        return { ...expResult, skillPoints: expResult.skillPoints + spGain, titles };
       })(),
     });
   },
@@ -1339,91 +1307,67 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     });
   },
 
-  trainMechanic: (id, efficiencyPct, hours = 1) => {
+  trainSession: (entries, hours = 1) => {
     const state = get();
-    const current = state.mechanicProgress[id]?.currentValue ?? 0;
-    const gain = diminishingGain(current, hours, efficiencyPct, state.player.fatigue);
-    set({
-      mechanicProgress: { ...state.mechanicProgress, [id]: { currentValue: current + gain } },
-      player: { ...state.player, fatigue: Math.min(100, state.player.fatigue + FATIGUE_COST_PER_HOUR * hours) },
-      totalMinutesPlayed: state.totalMinutesPlayed + hours * 60,
-      ...withDateAdvance(state, hours),
-    });
-    return gain;
-  },
+    if (entries.length === 0) return { gains: {}, skillPointsSpent: 0, skippedIds: [] };
 
-  trainMechanicsGroup: (entries, hours = 1) => {
-    const state = get();
-    if (entries.length === 0) return {};
-    const perMechanicHours = hours / entries.length;
+    const perEntryHours = hours / entries.length;
     const gains: Record<string, number> = {};
-    const nextProgress = { ...state.mechanicProgress };
-    for (const { id, efficiencyPct } of entries) {
-      const current = nextProgress[id]?.currentValue ?? 0;
-      const gain = diminishingGain(current, perMechanicHours, efficiencyPct, state.player.fatigue);
-      nextProgress[id] = { currentValue: current + gain };
-      gains[id] = gain;
+    const skippedIds: string[] = [];
+    let spRemaining = state.skillPoints;
+    let skillPointsSpent = 0;
+    const nextMechanicProgress = { ...state.mechanicProgress };
+    const nextConceptProgress = { ...state.queueConceptProgress };
+    const nextFoundationStats = { ...state.foundationStats };
+
+    for (const { kind, id, efficiencyPct } of entries) {
+      if (kind === "mechanic") {
+        const existing = nextMechanicProgress[id];
+        const current = existing?.currentValue ?? 0;
+        const gain = diminishingGain(current, perEntryHours, efficiencyPct, state.player.fatigue);
+        nextMechanicProgress[id] = { currentValue: current + gain, reps: (existing?.reps ?? 0) + perEntryHours };
+        gains[id] = gain;
+      } else if (kind === "concept") {
+        if (spRemaining < 1) {
+          skippedIds.push(id);
+          continue;
+        }
+        const existing = nextConceptProgress[id];
+        const current = existing?.currentValue ?? 0;
+        const gain = diminishingGain(current, perEntryHours, efficiencyPct, state.player.fatigue);
+        nextConceptProgress[id] = { currentValue: current + gain, reps: (existing?.reps ?? 0) + perEntryHours };
+        gains[id] = gain;
+        spRemaining -= 1;
+        skillPointsSpent += 1;
+      } else {
+        const isTactical = TACTICAL_FOUNDATION_CATEGORIES.includes(id as FoundationCategory);
+        if (isTactical && spRemaining < 1) {
+          skippedIds.push(id);
+          continue;
+        }
+        const category = id as FoundationCategory;
+        const current = nextFoundationStats[category];
+        const gain = diminishingGain(current, perEntryHours, 100, state.player.fatigue);
+        nextFoundationStats[category] = current + gain;
+        gains[id] = gain;
+        if (isTactical) {
+          spRemaining -= 1;
+          skillPointsSpent += 1;
+        }
+      }
     }
+
     set({
-      mechanicProgress: nextProgress,
+      mechanicProgress: nextMechanicProgress,
+      queueConceptProgress: nextConceptProgress,
+      foundationStats: nextFoundationStats,
+      playstyleProfiles: derivePlaystyleProfiles(nextMechanicProgress, nextConceptProgress, nextFoundationStats, state.player.mechanicalConsistency),
       player: { ...state.player, fatigue: Math.min(100, state.player.fatigue + FATIGUE_COST_PER_HOUR * hours) },
+      skillPoints: state.skillPoints - skillPointsSpent,
       totalMinutesPlayed: state.totalMinutesPlayed + hours * 60,
       ...withDateAdvance(state, hours),
     });
-    return gains;
-  },
-
-  trainFoundationStat: (category, hours = 1) => {
-    const state = get();
-    const isTactical = TACTICAL_FOUNDATION_CATEGORIES.includes(category);
-    if (isTactical && state.skillPoints < 1) return 0;
-
-    const current = state.foundationStats[category];
-    const gain = diminishingGain(current, hours, 100, state.player.fatigue);
-    set({
-      foundationStats: { ...state.foundationStats, [category]: current + gain },
-      player: { ...state.player, fatigue: Math.min(100, state.player.fatigue + FATIGUE_COST_PER_HOUR * hours) },
-      skillPoints: isTactical ? state.skillPoints - 1 : state.skillPoints,
-      totalMinutesPlayed: state.totalMinutesPlayed + hours * 60,
-      ...withDateAdvance(state, hours),
-    });
-    return gain;
-  },
-
-  trainQueueConcept: (id, efficiencyPct, hours = 1) => {
-    const state = get();
-    if (state.skillPoints < 1) return 0;
-
-    const current = state.queueConceptProgress[id]?.currentValue ?? 0;
-    const gain = diminishingGain(current, hours, efficiencyPct, state.player.fatigue);
-    set({
-      queueConceptProgress: { ...state.queueConceptProgress, [id]: { currentValue: current + gain } },
-      player: { ...state.player, fatigue: Math.min(100, state.player.fatigue + FATIGUE_COST_PER_HOUR * hours) },
-      skillPoints: state.skillPoints - 1,
-      totalMinutesPlayed: state.totalMinutesPlayed + hours * 60,
-      ...withDateAdvance(state, hours),
-    });
-    return gain;
-  },
-
-  trainPlaystyleTrait: (queue, trait, direction, hours = 1) => {
-    const state = get();
-    if (state.skillPoints < 1) return 0;
-
-    const current = state.playstyleProfiles[queue][trait];
-    const gain = playstyleShiftGain(current, direction, hours, state.player.fatigue);
-    const nextValue = Math.max(0, Math.min(100, current + direction * gain));
-    set({
-      playstyleProfiles: {
-        ...state.playstyleProfiles,
-        [queue]: { ...state.playstyleProfiles[queue], [trait]: nextValue },
-      },
-      player: { ...state.player, fatigue: Math.min(100, state.player.fatigue + FATIGUE_COST_PER_HOUR * hours) },
-      skillPoints: state.skillPoints - 1,
-      totalMinutesPlayed: state.totalMinutesPlayed + hours * 60,
-      ...withDateAdvance(state, hours),
-    });
-    return Math.abs(nextValue - current);
+    return { gains, skillPointsSpent, skippedIds };
   },
 
   devAddGameSense: (queue, amount) => {
@@ -1470,22 +1414,33 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   devMaxMechanics: () => {
     const state = get();
     const maxed = Object.fromEntries(
-      Object.keys(state.mechanicProgress).map((id) => [id, { currentValue: 20000 }])
+      Object.keys(state.mechanicProgress).map((id) => [id, { currentValue: 20000, reps: estimateRepsFromValue(20000) }])
     );
-    set({ mechanicProgress: maxed });
+    set({
+      mechanicProgress: maxed,
+      playstyleProfiles: derivePlaystyleProfiles(maxed, state.queueConceptProgress, state.foundationStats, state.player.mechanicalConsistency),
+    });
   },
 
   devMaxQueueConcepts: () => {
     const state = get();
     const maxed = Object.fromEntries(
-      Object.keys(state.queueConceptProgress).map((id) => [id, { currentValue: 20000 }])
+      Object.keys(state.queueConceptProgress).map((id) => [id, { currentValue: 20000, reps: estimateRepsFromValue(20000) }])
     );
-    set({ queueConceptProgress: maxed });
+    set({
+      queueConceptProgress: maxed,
+      playstyleProfiles: derivePlaystyleProfiles(state.mechanicProgress, maxed, state.foundationStats, state.player.mechanicalConsistency),
+    });
   },
 
   devSetMechanic: (id, value) => {
     const state = get();
-    set({ mechanicProgress: { ...state.mechanicProgress, [id]: { currentValue: Math.max(0, value) } } });
+    const nextValue = Math.max(0, value);
+    const nextProgress = { ...state.mechanicProgress, [id]: { currentValue: nextValue, reps: estimateRepsFromValue(nextValue) } };
+    set({
+      mechanicProgress: nextProgress,
+      playstyleProfiles: derivePlaystyleProfiles(nextProgress, state.queueConceptProgress, state.foundationStats, state.player.mechanicalConsistency),
+    });
   },
 
   devRandomizeMechanics: (min, max) => {
@@ -1493,14 +1448,25 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const lo = Math.max(0, Math.min(min, max));
     const hi = Math.max(min, max);
     const randomized = Object.fromEntries(
-      Object.keys(state.mechanicProgress).map((id) => [id, { currentValue: Math.round(lo + Math.random() * (hi - lo)) }])
+      Object.keys(state.mechanicProgress).map((id) => {
+        const currentValue = Math.round(lo + Math.random() * (hi - lo));
+        return [id, { currentValue, reps: estimateRepsFromValue(currentValue) }];
+      })
     );
-    set({ mechanicProgress: randomized });
+    set({
+      mechanicProgress: randomized,
+      playstyleProfiles: derivePlaystyleProfiles(randomized, state.queueConceptProgress, state.foundationStats, state.player.mechanicalConsistency),
+    });
   },
 
   devSetQueueConcept: (id, value) => {
     const state = get();
-    set({ queueConceptProgress: { ...state.queueConceptProgress, [id]: { currentValue: Math.max(0, value) } } });
+    const nextValue = Math.max(0, value);
+    const nextProgress = { ...state.queueConceptProgress, [id]: { currentValue: nextValue, reps: estimateRepsFromValue(nextValue) } };
+    set({
+      queueConceptProgress: nextProgress,
+      playstyleProfiles: derivePlaystyleProfiles(state.mechanicProgress, nextProgress, state.foundationStats, state.player.mechanicalConsistency),
+    });
   },
 
   devRandomizeQueueConcepts: (min, max) => {
@@ -1508,9 +1474,15 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const lo = Math.max(0, Math.min(min, max));
     const hi = Math.max(min, max);
     const randomized = Object.fromEntries(
-      Object.keys(state.queueConceptProgress).map((id) => [id, { currentValue: Math.round(lo + Math.random() * (hi - lo)) }])
+      Object.keys(state.queueConceptProgress).map((id) => {
+        const currentValue = Math.round(lo + Math.random() * (hi - lo));
+        return [id, { currentValue, reps: estimateRepsFromValue(currentValue) }];
+      })
     );
-    set({ queueConceptProgress: randomized });
+    set({
+      queueConceptProgress: randomized,
+      playstyleProfiles: derivePlaystyleProfiles(state.mechanicProgress, randomized, state.foundationStats, state.player.mechanicalConsistency),
+    });
   },
 
   devSetFoundationStat: (category, value) => {
@@ -1578,5 +1550,19 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
   devSetSeasonNumber: (seasonNumber) => {
     const state = get();
     set({ seasonNumber: Math.max(1, Math.round(seasonNumber)), seasonStartDate: state.currentDate });
+  },
+
+  devSetLevel: (level) => {
+    const state = get();
+    const nextLevel = Math.max(1, Math.round(level));
+    // Same base a fresh save starts at (see saveManager.ts's createFreshSaveData) grown by the same curve
+    // applyExp uses, so xpToNextLevel lands exactly where normal play would have left it at this level.
+    const xpToNextLevel = Math.round(1000 * Math.pow(XP_CURVE_GROWTH, Math.max(0, nextLevel - 1)));
+    set({
+      level: nextLevel,
+      xp: 0,
+      xpToNextLevel,
+      titles: grantLevelTitles(state.titles, nextLevel),
+    });
   },
 }));

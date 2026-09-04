@@ -8,7 +8,7 @@ import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 import { regionalGrinderRoster } from "@/data/regionalGrinders";
 import { STREAMERS } from "@/data/showmatches";
 import { computeOverallRating } from "@/data/matchSim";
-import { flattenProgress } from "@/data/matchSim";
+import { flattenProgress, flattenReps } from "@/data/matchSim";
 import { eraForDate, deriveRankFromMmr, divisionLabel, tierColor, type RankTierId } from "@/data/rankSystem";
 import { daysBetween } from "@/data/dateUtils";
 import { FOUNDATION_LABELS, type FoundationCategory } from "@/data/mechanics";
@@ -912,7 +912,9 @@ function ShowmatchesTab() {
       title: s.titles.find((t) => t.id === s.equippedTitleId) ?? null,
       duelMastery: {
         mechanicMastery: flattenProgress(s.mechanicProgress),
+        mechanicReps: flattenReps(s.mechanicProgress),
         queueConceptMastery: flattenProgress(s.queueConceptProgress),
+        queueConceptReps: flattenReps(s.queueConceptProgress),
         playstyle: s.playstyleProfiles["1v1"],
       },
       orgTag: s.orgContract ? orgTagForOrgName(s.orgContract.orgName) : undefined,

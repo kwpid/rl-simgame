@@ -11,7 +11,7 @@ import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
 import { regionalGrinderRoster } from "@/data/regionalGrinders";
 import { activeProPlayers, PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
-import { flattenProgress } from "@/data/matchSim";
+import { flattenProgress, flattenReps } from "@/data/matchSim";
 import { orgTagForOrgName, saveRegionToProRegion, REGION_LABELS as PRO_REGION_LABELS } from "@/data/tournaments";
 import { seasonEndDate, rewardTierSequence, REWARD_WINS_REQUIRED, AI_PLACEMENT_GAMES_REQUIRED } from "@/data/seasons";
 import { daysBetween, formatSimDate, type SimDate } from "@/data/dateUtils";
@@ -224,7 +224,9 @@ export function RankedScreen() {
         title: s.titles.find((t) => t.id === s.equippedTitleId) ?? null,
         duelMastery: {
           mechanicMastery: flattenProgress(s.mechanicProgress),
+          mechanicReps: flattenReps(s.mechanicProgress),
           queueConceptMastery: flattenProgress(s.queueConceptProgress),
+          queueConceptReps: flattenReps(s.queueConceptProgress),
           playstyle: s.playstyleProfiles[q],
         },
         orgTag: s.orgContract ? orgTagForOrgName(s.orgContract.orgName) : undefined,

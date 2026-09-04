@@ -4,7 +4,6 @@ import { UncappedStat } from "@/ui/components/UncappedStat";
 import { StatBar } from "@/ui/components/StatBar";
 import { SectionShell, LockedSection } from "@/ui/components/LockedSection";
 import { Icon, type IconName } from "@/ui/components/Icon";
-import { TrainButton } from "@/ui/components/TrainButton";
 import { useSaveStore } from "@/store/useSaveStore";
 import {
   FOUNDATION_GROUPS,
@@ -30,6 +29,18 @@ const TABS: { id: TrainingTab; label: string }[] = [
   { id: "playlist", label: "Playlist" },
   { id: "playstyle", label: "Playstyle" },
 ];
+
+// A training session is built by checking off any mix of foundation stats, mechanics, and queue concepts
+// at once (see SessionBuilderBar) - the selection lives here, at the screen level, so it survives switching
+// between tabs instead of resetting per tab.
+type SessionEntryKind = "mechanic" | "concept" | "foundation";
+type SessionSelection = Map<string, SessionEntryKind>;
+
+function labelForEntry(id: string, kind: SessionEntryKind): string {
+  if (kind === "mechanic") return MECHANICS.find((m) => m.id === id)?.label ?? id;
+  if (kind === "concept") return QUEUE_CONCEPTS.find((c) => c.id === id)?.label ?? id;
+  return FOUNDATION_LABELS[id as FoundationCategory] ?? id;
+}
 
 const FOUNDATION_META: Record<FoundationCategory, { icon: IconName; color: string }> = {
   carControl: { icon: "steering", color: "var(--team-blue)" },
@@ -124,19 +135,47 @@ function efficiencyColors(efficiency: number): { bg: string; text: string } {
 
 export function TrainingScreen() {
   const [tab, setTab] = useState<TrainingTab>("foundation");
-  const skillPoints = useSaveStore((s) => s.skillPoints);
+  const s = useSaveStore();
+  const trainSession = useSaveStore((store) => store.trainSession);
+  const [selected, setSelected] = useState<SessionSelection>(new Map());
+
+  function toggleSelected(id: string, kind: SessionEntryKind) {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(id)) next.delete(id);
+      else next.set(id, kind);
+      return next;
+    });
+  }
+
+  function handleTrain(hours: number) {
+    const entries = Array.from(selected.entries()).map(([id, kind]) => {
+      let efficiencyPct = 100;
+      if (kind === "mechanic") {
+        const def = MECHANICS.find((m) => m.id === id)!;
+        efficiencyPct = getMechanicAvailability(def, s.currentDate, s.foundationStats, s.mechanicProgress).efficiency;
+      } else if (kind === "concept") {
+        const def = QUEUE_CONCEPTS.find((c) => c.id === id)!;
+        efficiencyPct = getConceptAvailability(def, s.foundationStats, s.player.gameSense[def.queue], s.queueConceptProgress).efficiency;
+      }
+      return { kind, id, efficiencyPct };
+    });
+    const result = trainSession(entries, hours);
+    setSelected(new Map());
+    return result;
+  }
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
       <header style={{ marginBottom: "var(--space-4)" }}>
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 650 }}>Training</h1>
-        <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>Foundation stats, the mechanic fund, playlist-specific skills, and how you actually play</div>
+        <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>Foundation stats, the mechanic fund, and playlist-specific skills - check off anything you want to work on and train it all in one session</div>
         <div
           className="skill-point-pill"
           style={{ marginTop: "var(--space-2)" }}
           title="Earned by playing ranked. Spent on Tactical stats and Playlist concepts."
         >
-          {skillPoints} SP
+          {s.skillPoints} SP
         </div>
       </header>
 
@@ -154,10 +193,12 @@ export function TrainingScreen() {
         ))}
       </div>
 
+      <SessionBuilderBar selected={selected} onRemove={(id) => setSelected((prev) => { const next = new Map(prev); next.delete(id); return next; })} labelFor={labelForEntry} onTrain={handleTrain} />
+
       <div key={tab} className="fade-in">
-        {tab === "foundation" && <FoundationTab />}
-        {tab === "mechanics" && <MechanicsTab />}
-        {tab === "playlist" && <PlaylistTab />}
+        {tab === "foundation" && <FoundationTab selected={selected} toggleSelected={toggleSelected} />}
+        {tab === "mechanics" && <MechanicsTab selected={selected} toggleSelected={toggleSelected} />}
+        {tab === "playlist" && <PlaylistTab selected={selected} toggleSelected={toggleSelected} />}
         {tab === "playstyle" && <PlaystyleTab />}
       </div>
 
@@ -362,9 +403,6 @@ export function TrainingScreen() {
           border-color: var(--branch-color);
           color: var(--branch-color);
         }
-        .group-session-toggle {
-          margin-left: auto;
-        }
         .group-select-check {
           display: flex;
           align-items: center;
@@ -372,6 +410,10 @@ export function TrainingScreen() {
           font-size: 12px;
           color: var(--text-secondary);
           cursor: pointer;
+        }
+        .group-select-check-disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
         }
         .group-session-bar {
           display: flex;
@@ -426,9 +468,122 @@ export function TrainingScreen() {
   );
 }
 
-function FoundationTab() {
+interface TrainingSessionResult {
+  gains: Record<string, number>;
+  skillPointsSpent: number;
+  skippedIds: string[];
+}
+
+/** The one, unified way to train now: check items off across any of the three tabs below (selection lives
+ *  at the screen level so it survives switching tabs), set a duration, and confirm once. Total hours split
+ *  evenly across everything selected, one shared fatigue/clock charge for the whole session - see
+ *  useSaveStore.ts's trainSession. Stays mounted (rendering nothing) whenever nothing's selected and no
+ *  session is mid-flight, so the "done" summary can display after the parent clears the selection. */
+function SessionBuilderBar({
+  selected,
+  onRemove,
+  labelFor,
+  onTrain,
+}: {
+  selected: SessionSelection;
+  onRemove: (id: string) => void;
+  labelFor: (id: string, kind: SessionEntryKind) => string;
+  onTrain: (hours: number) => TrainingSessionResult;
+}) {
+  const [phase, setPhase] = useState<"idle" | "training" | "done">("idle");
+  const [hours, setHours] = useState(1);
+  const [snapshot, setSnapshot] = useState<[string, SessionEntryKind][]>([]);
+  const [result, setResult] = useState<TrainingSessionResult>({ gains: {}, skillPointsSpent: 0, skippedIds: [] });
+  const entries = Array.from(selected.entries());
+
+  if (phase === "idle" && entries.length === 0) return null;
+
+  if (phase === "done") {
+    return (
+      <div className="group-session-bar group-session-bar-done">
+        Session complete:{" "}
+        {snapshot.map(([id, kind]) => `${labelFor(id, kind)} +${result.gains[id] ?? 0}`).join(", ")}
+        {result.skippedIds.length > 0 &&
+          ` — ${result.skippedIds.length} skipped (not enough Skill Points)`}
+      </div>
+    );
+  }
+
+  return (
+    <div className="group-session-bar">
+      {entries.length === 0 ? (
+        <span className="group-session-hint">Check off items below to add them to this session.</span>
+      ) : (
+        <div className="group-session-chips">
+          {entries.map(([id, kind]) => (
+            <span key={id} className="group-session-chip">
+              {labelFor(id, kind)}
+              <button onClick={() => onRemove(id)} aria-label="Remove">
+                &times;
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {entries.length > 0 && phase === "idle" && (
+        <div className="train-btn-group">
+          {[1, 2, 3].map((h) => (
+            <button
+              key={h}
+              className="train-btn train-btn-hour"
+              onClick={() => {
+                setHours(h);
+                setSnapshot(entries);
+                setPhase("training");
+                setTimeout(() => {
+                  const r = onTrain(h);
+                  setResult(r);
+                  setPhase("done");
+                  setTimeout(() => setPhase("idle"), 2400);
+                }, 550);
+              }}
+            >
+              {h}h
+            </button>
+          ))}
+        </div>
+      )}
+      {phase === "training" && (
+        <span className="group-session-hint">
+          Training {hours}h across {entries.length} item{entries.length === 1 ? "" : "s"}…
+        </span>
+      )}
+    </div>
+  );
+}
+
+interface TabProps {
+  selected: SessionSelection;
+  toggleSelected: (id: string, kind: SessionEntryKind) => void;
+}
+
+function SessionCheckbox({
+  id,
+  kind,
+  selected,
+  toggleSelected,
+  disabled,
+}: TabProps & { id: string; kind: SessionEntryKind; disabled?: boolean }) {
+  return (
+    <label className={"group-select-check" + (disabled ? " group-select-check-disabled" : "")}>
+      <input
+        type="checkbox"
+        checked={selected.has(id)}
+        disabled={disabled}
+        onChange={() => toggleSelected(id, kind)}
+      />
+      Add to session
+    </label>
+  );
+}
+
+function FoundationTab({ selected, toggleSelected }: TabProps) {
   const s = useSaveStore();
-  const trainFoundationStat = useSaveStore((store) => store.trainFoundationStat);
   return (
     <>
       {FOUNDATION_GROUPS.map((group) => (
@@ -457,13 +612,18 @@ function FoundationTab() {
                       style={group.costsSkillPoint ? { justifyContent: "space-between" } : undefined}
                     >
                       {group.costsSkillPoint && <span className="sp-cost-tag">1 SP / session</span>}
-                      {locked ? (
-                        <div className="sp-locked" style={{ flex: 1 }}>
+                      {locked && (
+                        <div className="sp-locked" style={{ marginRight: "var(--space-2)" }}>
                           Play ranked to earn a Skill Point
                         </div>
-                      ) : (
-                        <TrainButton onTrain={(hours) => trainFoundationStat(cat, hours)} />
                       )}
+                      <SessionCheckbox
+                        id={cat}
+                        kind="foundation"
+                        selected={selected}
+                        toggleSelected={toggleSelected}
+                        disabled={locked}
+                      />
                     </div>
                   </div>
                 </Card>
@@ -476,34 +636,16 @@ function FoundationTab() {
   );
 }
 
-function MechanicsTab() {
+function MechanicsTab({ selected, toggleSelected }: TabProps) {
   const s = useSaveStore();
-  const trainMechanic = useSaveStore((store) => store.trainMechanic);
-  const trainMechanicsGroup = useSaveStore((store) => store.trainMechanicsGroup);
   const branches: string[] = [];
   MECHANICS.forEach((m) => {
     if (!branches.includes(m.branch)) branches.push(m.branch);
   });
   const [branch, setBranch] = useState<string>(branches[0]);
-  const [groupMode, setGroupMode] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const meta = BRANCH_META[branch] ?? { icon: "training" as IconName, color: "var(--accent)" };
   const mechanicsInBranch = MECHANICS.filter((m) => m.branch === branch);
   const trainedCount = mechanicsInBranch.filter((m) => (s.mechanicProgress[m.id]?.currentValue ?? 0) > 0).length;
-
-  function toggleSelected(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function exitGroupMode() {
-    setGroupMode(false);
-    setSelected(new Set());
-  }
 
   return (
     <>
@@ -523,33 +665,7 @@ function MechanicsTab() {
             </button>
           );
         })}
-        <button
-          className={"branch-pill group-session-toggle" + (groupMode ? " branch-pill-active" : "")}
-          style={{ ["--branch-color" as string]: "var(--accent)" }}
-          onClick={() => (groupMode ? exitGroupMode() : setGroupMode(true))}
-          title="Select several mechanics and train them all in one freeplay session"
-        >
-          <Icon name="cycle" size={14} />
-          Group Session{selected.size > 0 ? ` (${selected.size})` : ""}
-        </button>
       </div>
-
-      {groupMode && (
-        <GroupSessionBar
-          selected={selected}
-          onRemove={toggleSelected}
-          onTrain={(hours) => {
-            const entries = Array.from(selected).map((id) => {
-              const def = MECHANICS.find((m) => m.id === id)!;
-              const availability = getMechanicAvailability(def, s.currentDate, s.foundationStats, s.mechanicProgress);
-              return { id, efficiencyPct: availability.efficiency };
-            });
-            const gains = trainMechanicsGroup(entries, hours);
-            setSelected(new Set());
-            return gains;
-          }}
-        />
-      )}
 
       <div key={branch} className="fade-in">
         <div className="branch-header">
@@ -618,18 +734,7 @@ function MechanicsTab() {
                         </div>
                       )}
                       <div className="mechanic-footer">
-                        {groupMode ? (
-                          <label className="group-select-check">
-                            <input
-                              type="checkbox"
-                              checked={selected.has(def.id)}
-                              onChange={() => toggleSelected(def.id)}
-                            />
-                            Add to session
-                          </label>
-                        ) : (
-                          <TrainButton onTrain={(hours) => trainMechanic(def.id, availability.efficiency, hours)} />
-                        )}
+                        <SessionCheckbox id={def.id} kind="mechanic" selected={selected} toggleSelected={toggleSelected} />
                       </div>
                     </>
                   )}
@@ -643,78 +748,9 @@ function MechanicsTab() {
   );
 }
 
-function GroupSessionBar({
-  selected,
-  onRemove,
-  onTrain,
-}: {
-  selected: Set<string>;
-  onRemove: (id: string) => void;
-  onTrain: (hours: number) => Record<string, number>;
-}) {
-  const [state, setState] = useState<"idle" | "training" | "done">("idle");
-  const [gains, setGains] = useState<Record<string, number>>({});
-  const [hours, setHours] = useState(1);
-  const ids = Array.from(selected);
-
-  if (state === "done") {
-    return (
-      <div className="group-session-bar group-session-bar-done">
-        Session complete:{" "}
-        {Object.entries(gains)
-          .map(([id, gain]) => `${MECHANICS.find((m) => m.id === id)?.label ?? id} +${gain}`)
-          .join(", ")}
-      </div>
-    );
-  }
-
-  return (
-    <div className="group-session-bar">
-      {ids.length === 0 ? (
-        <span className="group-session-hint">Check off mechanics below to add them to this session.</span>
-      ) : (
-        <div className="group-session-chips">
-          {ids.map((id) => (
-            <span key={id} className="group-session-chip">
-              {MECHANICS.find((m) => m.id === id)?.label ?? id}
-              <button onClick={() => onRemove(id)} aria-label="Remove">
-                &times;
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      {ids.length > 0 && state === "idle" && (
-        <div className="train-btn-group">
-          {[1, 2, 3].map((h) => (
-            <button
-              key={h}
-              className="train-btn train-btn-hour"
-              onClick={() => {
-                setHours(h);
-                setState("training");
-                setTimeout(() => {
-                  const result = onTrain(h);
-                  setGains(result);
-                  setState("done");
-                  setTimeout(() => setState("idle"), 2200);
-                }, 550);
-              }}
-            >
-              {h}h
-            </button>
-          ))}
-        </div>
-      )}
-      {state === "training" && <span className="group-session-hint">Training {hours}h across {ids.length} mechanics…</span>}
-    </div>
-  );
-}
-
-function PlaylistTab() {
+function PlaylistTab({ selected, toggleSelected }: TabProps) {
   const [queue, setQueue] = useState<QueueMode>("2v2");
   const s = useSaveStore();
-  const trainQueueConcept = useSaveStore((store) => store.trainQueueConcept);
 
   const concepts = QUEUE_CONCEPTS.filter((c) => c.queue === queue);
   const categories: ConceptCategory[] = [];
@@ -767,6 +803,7 @@ function PlaylistTab() {
                     const effColors = efficiencyColors(availability.efficiency);
                     const statLabel = def.recommendedStat === "gameSense" ? "Game Sense" : def.recommendedStat ? FOUNDATION_LABELS[def.recommendedStat] : null;
                     const statValue = def.recommendedStat === "gameSense" ? s.player.gameSense[def.queue] : def.recommendedStat ? s.foundationStats[def.recommendedStat] : null;
+                    const locked = s.skillPoints < 1;
 
                     return (
                       <Card key={def.id}>
@@ -803,11 +840,12 @@ function PlaylistTab() {
                           )}
                           <div className="mechanic-footer" style={{ justifyContent: "space-between" }}>
                             <span className="sp-cost-tag">1 SP / session</span>
-                            {s.skillPoints < 1 ? (
-                              <div className="sp-locked">Play ranked to earn a Skill Point</div>
-                            ) : (
-                              <TrainButton onTrain={(hours) => trainQueueConcept(def.id, availability.efficiency, hours)} />
+                            {locked && (
+                              <div className="sp-locked" style={{ marginRight: "var(--space-2)" }}>
+                                Play ranked to earn a Skill Point
+                              </div>
                             )}
+                            <SessionCheckbox id={def.id} kind="concept" selected={selected} toggleSelected={toggleSelected} disabled={locked} />
                           </div>
                         </div>
                       </Card>
@@ -822,51 +860,9 @@ function PlaylistTab() {
   );
 }
 
-/** Two-directional sibling to TrainButton: playstyle traits can be pushed toward 100 OR pulled back toward
- *  0, each direction is its own SP-gated session rather than a single slider drag. */
-function PlaystyleShiftButtons({ onShift }: { onShift: (direction: 1 | -1, hours: number) => number }) {
-  const [state, setState] = useState<"idle" | "training" | "done">("idle");
-  const [gain, setGain] = useState(0);
-  const [dir, setDir] = useState<1 | -1>(1);
-
-  if (state === "training") {
-    return <button className="train-btn train-btn-training">Training…</button>;
-  }
-  if (state === "done") {
-    return (
-      <button className="train-btn train-btn-done" onClick={() => setState("idle")}>
-        {dir > 0 ? "+" : "-"}
-        {gain}
-      </button>
-    );
-  }
-
-  function start(direction: 1 | -1) {
-    setDir(direction);
-    setState("training");
-    setTimeout(() => {
-      setGain(onShift(direction, 1));
-      setState("done");
-      setTimeout(() => setState("idle"), 1300);
-    }, 550);
-  }
-
-  return (
-    <div className="train-btn-group">
-      <button className="train-btn train-btn-hour" onClick={() => start(-1)} title="Pull this trait down">
-        Lower
-      </button>
-      <button className="train-btn train-btn-hour" onClick={() => start(1)} title="Push this trait up">
-        Raise
-      </button>
-    </div>
-  );
-}
-
 function PlaystyleTab() {
   const [queue, setQueue] = useState<QueueMode>("2v2");
   const s = useSaveStore();
-  const trainPlaystyleTrait = useSaveStore((store) => store.trainPlaystyleTrait);
   const profile = s.playstyleProfiles[queue];
 
   return (
@@ -906,13 +902,8 @@ function PlaystyleTab() {
                   <br />
                   Low: {meta.low}
                 </p>
-                <div className="mechanic-footer" style={{ justifyContent: "space-between" }}>
-                  <span className="sp-cost-tag">1 SP / session</span>
-                  {s.skillPoints < 1 ? (
-                    <div className="sp-locked">Play ranked to earn a Skill Point</div>
-                  ) : (
-                    <PlaystyleShiftButtons onShift={(direction, hours) => trainPlaystyleTrait(queue, trait, direction, hours)} />
-                  )}
+                <div className="mechanic-footer" style={{ justifyContent: "flex-end" }}>
+                  <span className="sp-cost-tag">Derived from your training - no direct control</span>
                 </div>
               </div>
             </Card>

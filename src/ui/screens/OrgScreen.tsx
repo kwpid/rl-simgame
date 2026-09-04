@@ -29,7 +29,7 @@ import {
   bootcampIntervalDaysForTier,
 } from "@/data/orgs";
 import { eraForDate, type RankEra } from "@/data/rankSystem";
-import { flattenProgress } from "@/data/matchSim";
+import { flattenProgress, flattenReps } from "@/data/matchSim";
 import { daysBetween, type SimDate } from "@/data/dateUtils";
 import { LB_NAMES, type QueueMode } from "@/data/mockSave";
 import { QUEUE_LABELS } from "@/data/queues";
@@ -186,7 +186,9 @@ export function OrgScreen() {
       title: s.titles.find((t) => t.id === s.equippedTitleId) ?? null,
       duelMastery: {
         mechanicMastery: flattenProgress(s.mechanicProgress),
+        mechanicReps: flattenReps(s.mechanicProgress),
         queueConceptMastery: flattenProgress(s.queueConceptProgress),
+        queueConceptReps: flattenReps(s.queueConceptProgress),
         playstyle: s.playstyleProfiles["3v3"],
       },
       orgTag: orgTagForOrgName(contract.orgName),
@@ -211,7 +213,9 @@ export function OrgScreen() {
       title: s.titles.find((t) => t.id === s.equippedTitleId) ?? null,
       duelMastery: {
         mechanicMastery: flattenProgress(s.mechanicProgress),
+        mechanicReps: flattenReps(s.mechanicProgress),
         queueConceptMastery: flattenProgress(s.queueConceptProgress),
+        queueConceptReps: flattenReps(s.queueConceptProgress),
         playstyle: s.playstyleProfiles["3v3"],
       },
       region: saveRegionToProRegion(s.region),

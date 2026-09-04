@@ -15,6 +15,8 @@ import { exportAiTitleDataForSave, importAiTitleDataForSave } from "@/store/useA
 import { exportProLeaderboardData, importProLeaderboardData } from "@/store/useProLeaderboardStore";
 import { exportFillerLeaderboardData, importFillerLeaderboardData } from "@/store/useLeaderboardFillerStore";
 import { saveRegionToProRegion, exportTeamsCacheDataForSave, importTeamsCacheDataForSave } from "./tournaments";
+import { estimateRepsFromValue } from "./trainingMath";
+import { grantLevelTitles } from "./levelTitles";
 
 /**
  * Saves persisted from an older build can be missing fields the current schema expects, or have fields
@@ -208,6 +210,29 @@ function migrateSaveData(raw: any): SaveData {
   }
   delete data.rewardWinsProgress;
 
+  // mechanicProgress/queueConceptProgress used to be { currentValue } only, reps (training-session
+  // "confidence", see matchSim.ts's moveMasteryValue/conceptMasteryValue) didn't exist before. Backfill an
+  // estimated reps count from currentValue itself so an old save's already-trained mechanics/concepts don't
+  // suddenly read as never-drilled the moment this update lands.
+  for (const progress of [data.mechanicProgress, data.queueConceptProgress]) {
+    for (const entry of Object.values(progress ?? {}) as { currentValue: number; reps?: number }[]) {
+      if (entry.reps === undefined) entry.reps = estimateRepsFromValue(entry.currentValue);
+    }
+  }
+  // New 2v2/3v3 queue concepts added alongside team-chain mechanic awareness — an old save predates them.
+  for (const id of ["2v2_shadow_reads", "2v2_challenge_timing", "3v3_shadow_reads", "3v3_challenge_timing"]) {
+    if (data.queueConceptProgress && data.queueConceptProgress[id] === undefined) {
+      data.queueConceptProgress[id] = { currentValue: 0, reps: 0 };
+    }
+  }
+
+  // Grey, level-milestone titles (see data/levelTitles.ts) are new - an existing save's level may already
+  // be well past several of these thresholds, so backfill everything it would have already earned rather
+  // than making the player wait for their next level-up to see titles they've clearly earned already.
+  if (typeof data.level === "number" && Array.isArray(data.titles)) {
+    data.titles = grantLevelTitles(data.titles, data.level);
+  }
+
   return data as SaveData;
 }
 
@@ -289,8 +314,8 @@ export async function deleteSave(id: string): Promise<void> {
   clearTournamentDataForSave(id);
 }
 
-function zeroRecord<T extends string>(ids: T[]): Record<T, { currentValue: number }> {
-  return Object.fromEntries(ids.map((id) => [id, { currentValue: 0 }])) as Record<T, { currentValue: number }>;
+function zeroRecord<T extends string>(ids: T[]): Record<T, { currentValue: number; reps: number }> {
+  return Object.fromEntries(ids.map((id) => [id, { currentValue: 0, reps: 0 }])) as Record<T, { currentValue: number; reps: number }>;
 }
 
 function createFreshSaveData(config: NewSaveConfig): SaveData {
