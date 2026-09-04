@@ -6,7 +6,7 @@
 // met this AI before", so it must not bleed between unrelated save profiles the way the older stores do.
 
 import { create } from "zustand";
-import { tierMinMmr, mmrEraInflation, realisticOneVOneMmr, type RankEra } from "@/data/rankSystem";
+import { tierMinMmr, mmrEraInflation, type RankEra } from "@/data/rankSystem";
 import { hashString } from "@/data/proPlayers";
 import { estimateGameSenseForMmr, eloExpectedScore, eloKFactor } from "@/data/matchSim";
 import type { QueueMode } from "@/data/mockSave";
@@ -113,22 +113,14 @@ function reseedEntry(
   previous: RosterMmrEntry | undefined
 ): RosterMmrEntry {
   const floor = tierMinMmr(era === "modern" ? "ssl" : "grand_champion", era, queue);
-  // 1v1's own post-compression realisticOneVOneMmr squashes the top of the ladder toward the real-world
-  // record - feeding it a wider raw spread than 2v2/3v3 get is what actually keeps that squash from reading
-  // as "everyone near the top converges on the same 2-3 numbers" (a narrow raw cluster compresses to an
-  // even narrower one, no matter how the compression curve itself is tuned - the fix has to happen before
-  // that step, giving the population genuine variety to begin with).
-  const spreadRange = queue === "1v1" ? BAND_SPREAD[band] * 2.5 : BAND_SPREAD[band];
-  const ceilingSpan = queue === "1v1" ? BAND_CEILING_SPAN * 1.4 : BAND_CEILING_SPAN;
-  const spread = hashString(`${name}${region}${queue}`) % spreadRange;
+  const spread = hashString(`${name}${region}${queue}`) % BAND_SPREAD[band];
   // "low" band deliberately sits out the era creep below — those are just regular ranked-ladder regulars,
   // not remotely leaderboard/RLCS caliber, and shouldn't drift toward SSL+ just because the years pass.
   // Every other band tracks the same rising ceiling real pros get (see proPlayers.ts's seedProMmr), which
   // is what actually makes the Top 50 board's floor climb season over season rather than just the real
   // pros individually pulling away from an otherwise-static grinder pool.
   const inflation = band === "low" ? 0 : mmrEraInflation(currentYear, era);
-  const rawTargetMmr = floor + BAND_FLOOR_FRACTION[band] * ceilingSpan + spread + inflation;
-  const targetMmr = queue === "1v1" ? realisticOneVOneMmr(rawTargetMmr) : rawTargetMmr;
+  const targetMmr = floor + BAND_FLOOR_FRACTION[band] * BAND_CEILING_SPAN + spread + inflation;
   const targetGameSense = estimateGameSenseForMmr(targetMmr, era, queue, currentYear);
   const targetMechanicalConsistency = targetGameSense * 0.9;
 
@@ -224,12 +216,7 @@ function catchUp(
   const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, region, band, queue, era, currentYear, seasonStartDate, existing);
   // Guards against a pre-existing localStorage entry saved before `peakMmr` was tracked at all.
   const safeBase = typeof base.peakMmr === "number" ? base : { ...base, peakMmr: base.mmr };
-  const result = simulateForward(safeBase, name, region, currentDate, seasonStartDate);
-  // simulateForward's own game-by-game ELO walk pulls toward targetMmr (already realistically clamped, see
-  // reseedEntry) but doesn't hard-bound the walk itself - a long enough win streak can still random-walk
-  // past it, so 1v1 needs a final clamp here too.
-  if (queue !== "1v1") return result;
-  return { ...result, mmr: Math.round(realisticOneVOneMmr(result.mmr)), peakMmr: Math.round(realisticOneVOneMmr(result.peakMmr)) };
+  return simulateForward(safeBase, name, region, currentDate, seasonStartDate);
 }
 
 function loadStored(): RosterMmrTable {
@@ -333,8 +320,7 @@ export const useRegionalRosterStore = create<RegionalRosterState>((set, get) => 
     // the same amplified way a real placement result would, not the flat few-point delta an ordinary ranked
     // result gets.
     const effectiveDelta = entry.gamesPlayedThisSeason < PLACEMENT_GAMES ? Math.round(mmrDelta * PLACEMENT_MMR_AMPLIFIER) : mmrDelta;
-    const rawMmr = Math.max(0, entry.mmr + effectiveDelta);
-    const nextMmr = queue === "1v1" ? realisticOneVOneMmr(rawMmr) : rawMmr;
+    const nextMmr = Math.max(0, entry.mmr + effectiveDelta);
     const nextEntry: RosterMmrEntry = { ...entry, mmr: nextMmr, peakMmr: Math.max(entry.peakMmr, nextMmr) };
     const nextTable: RosterMmrTable = { ...state.mmr, [region]: { ...state.mmr[region], [name]: { ...state.mmr[region]?.[name], [queue]: nextEntry } } };
     set({ mmr: nextTable });

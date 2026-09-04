@@ -19,7 +19,7 @@ import {
 } from "@/data/mockSave";
 import { TACTICAL_FOUNDATION_CATEGORIES, type FoundationCategory } from "@/data/mechanics";
 import { addDays, daysBetween, type SimDate } from "@/data/dateUtils";
-import { eraForDate, deriveRankFromMmr, divisionProgressFromMmr, tierRank, realisticOneVOneMmr, type RankTierId, type RankEra } from "@/data/rankSystem";
+import { eraForDate, deriveRankFromMmr, divisionProgressFromMmr, tierRank, type RankTierId, type RankEra } from "@/data/rankSystem";
 import { SEASON_LENGTH_DAYS, seasonEndDate, seasonTitlesFor, softResetMmr, applyRewardProgress, rewardTierSequence, REWARD_WINS_REQUIRED, PLACEMENT_MMR_AMPLIFIER, type TitleEntry } from "@/data/seasons";
 
 export { PLACEMENT_MMR_AMPLIFIER };
@@ -574,8 +574,7 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const placementsRemaining = Math.max(0, profile.placementMatchesRemaining - 1);
     const justFinishedPlacements = inPlacements && placementsRemaining === 0;
 
-    const rawMmr = Math.max(0, Math.round(profile.mmr + mmrDelta * (inPlacements ? PLACEMENT_MMR_AMPLIFIER : 1)));
-    const newMmr = queue === "1v1" ? Math.round(realisticOneVOneMmr(rawMmr)) : rawMmr;
+    const newMmr = Math.max(0, Math.round(profile.mmr + mmrDelta * (inPlacements ? PLACEMENT_MMR_AMPLIFIER : 1)));
     const isNewPeakMmr = newMmr > profile.peakMmr;
     const era = eraForDate(state.currentDate);
     // Tier/division come straight from the new MMR every match (once placements are done), not an

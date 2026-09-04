@@ -8,7 +8,7 @@
 // out skill paired with a still-depressed early-season rating.
 
 import { create } from "zustand";
-import { realisticOneVOneMmr, type RankEra } from "@/data/rankSystem";
+import type { RankEra } from "@/data/rankSystem";
 import { PRO_PLAYERS, seedProMmr, hashString } from "@/data/proPlayers";
 import { proQueueStatCeiling, eloExpectedScore, eloKFactor } from "@/data/matchSim";
 import { rlcsTitleMmrBonus } from "@/data/tournaments";
@@ -217,12 +217,7 @@ function catchUp(
   const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(proName, queue, era, currentYear, seasonStartDate, existing);
   // Guards against a pre-existing localStorage entry saved before `peakMmr` was tracked at all.
   const safeBase = typeof base.peakMmr === "number" ? base : { ...base, peakMmr: base.mmr };
-  const result = simulateForward(safeBase, proName, currentDate, seasonStartDate);
-  // simulateForward's own game-by-game ELO walk pulls toward targetMmr (already realistically clamped, see
-  // seedProMmr) but doesn't hard-bound the walk itself - a long enough win streak can still random-walk
-  // past it, so 1v1 needs a final clamp here too.
-  if (queue !== "1v1") return result;
-  return { ...result, mmr: Math.round(realisticOneVOneMmr(result.mmr)), peakMmr: Math.round(realisticOneVOneMmr(result.peakMmr)) };
+  return simulateForward(safeBase, proName, currentDate, seasonStartDate);
 }
 
 interface ProLeaderboardState {
@@ -298,8 +293,7 @@ export const useProLeaderboardStore = create<ProLeaderboardState>((set, get) => 
     // games use) — a real match played directly against this pro should swing them the same amplified way
     // a real placement result would, not the flat few-point delta an ordinary ranked result gets.
     const effectiveDelta = entry.gamesPlayedThisSeason < PLACEMENT_GAMES ? Math.round(mmrDelta * PLACEMENT_MMR_AMPLIFIER) : mmrDelta;
-    const rawMmr = Math.max(0, entry.mmr + effectiveDelta);
-    const nextMmr = queue === "1v1" ? realisticOneVOneMmr(rawMmr) : rawMmr;
+    const nextMmr = Math.max(0, entry.mmr + effectiveDelta);
     const nextEntry: ProMmrEntry = { ...entry, mmr: nextMmr, peakMmr: Math.max(entry.peakMmr, nextMmr) };
     const nextTable = { ...state.mmr, [proName]: { ...state.mmr[proName], [queue]: nextEntry } };
     set({ mmr: nextTable });

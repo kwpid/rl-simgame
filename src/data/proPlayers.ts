@@ -5,7 +5,7 @@
 // rather than "elite" at that point. A player who debuts in year N is available in every year >= N, same
 // as real careers (a 2018 pro is still around in 2022), this list is never used before its debut year.
 
-import { tierMinMmr, experienceGrowth, mmrEraInflation, realisticOneVOneMmr, type RankEra } from "./rankSystem";
+import { tierMinMmr, experienceGrowth, mmrEraInflation, type RankEra } from "./rankSystem";
 export { experienceGrowth };
 import type { QueueMode } from "./mockSave";
 
@@ -305,9 +305,6 @@ export function seedProMmr(pro: ProPlayer, era: RankEra, currentYear: number): R
     const oneV1Ceiling = tierMinMmr(topAnchor, era, "1v1") + (dualThreat ? 550 + mmrEraInflation(currentYear, era) * 0.5 : 200);
     result["1v1"] = Math.min(result["1v1"], oneV1Ceiling);
   }
-  // Real RL's actual highest-ever recorded 1v1 MMR is 1814 - applies regardless of whether 1v1 is this
-  // pro's primary queue, see realisticOneVOneMmr's own doc comment.
-  result["1v1"] = realisticOneVOneMmr(result["1v1"]);
 
   return result;
 }

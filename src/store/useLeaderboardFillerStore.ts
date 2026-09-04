@@ -6,7 +6,7 @@
 // match opponent sharing that name gets the exact stats the board is showing.
 
 import { create } from "zustand";
-import { tierMinMmr, realisticOneVOneMmr, type RankEra } from "@/data/rankSystem";
+import { tierMinMmr, type RankEra } from "@/data/rankSystem";
 import { hashString } from "@/data/proPlayers";
 import { estimateGameSenseForMmr, eloExpectedScore, eloKFactor } from "@/data/matchSim";
 import { LB_NAMES, type QueueMode } from "@/data/mockSave";
@@ -80,12 +80,8 @@ function reseedEntry(
   previous: FillerMmrEntry | undefined
 ): FillerMmrEntry {
   const floor = tierMinMmr(era === "modern" ? "ssl" : "grand_champion", era, queue);
-  // 1v1 gets a much wider raw spread than 2v2/3v3 - realisticOneVOneMmr's post-compression squash toward
-  // the real-world record only reads as a real spread if the population feeding it has real variety to
-  // begin with (a narrow raw cluster just compresses to an even narrower one).
-  const spread = queue === "1v1" ? hashString(name + queue) % 1100 : hashString(name + queue) % 450;
-  const rawTargetMmr = floor + 100 + spread;
-  const targetMmr = queue === "1v1" ? realisticOneVOneMmr(rawTargetMmr) : rawTargetMmr;
+  const spread = hashString(name + queue) % 450;
+  const targetMmr = floor + 100 + spread;
   const targetGameSense = estimateGameSenseForMmr(targetMmr, era, queue, currentYear);
   const targetMechanicalConsistency = targetGameSense * 0.9;
 
@@ -176,12 +172,7 @@ function catchUp(
 ): FillerMmrEntry {
   const key = seasonKey(seasonStartDate);
   const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, queue, era, currentYear, seasonStartDate, existing);
-  const result = simulateForward(base, name, currentDate, seasonStartDate);
-  // simulateForward's own game-by-game ELO walk pulls toward targetMmr (already realistically clamped, see
-  // reseedEntry) but doesn't hard-bound the walk itself - a long enough win streak can still random-walk
-  // past it, so 1v1 needs a final clamp here too.
-  if (queue !== "1v1") return result;
-  return { ...result, mmr: Math.round(realisticOneVOneMmr(result.mmr)), peakMmr: Math.round(realisticOneVOneMmr(result.peakMmr)) };
+  return simulateForward(base, name, currentDate, seasonStartDate);
 }
 
 function loadStored(): FillerMmrTable {
@@ -284,8 +275,7 @@ export const useLeaderboardFillerStore = create<LeaderboardFillerState>((set, ge
     // the same amplified way a real placement result would, not the flat few-point delta an ordinary
     // ranked result gets.
     const effectiveDelta = entry.gamesPlayedThisSeason < PLACEMENT_GAMES ? Math.round(mmrDelta * PLACEMENT_MMR_AMPLIFIER) : mmrDelta;
-    const rawMmr = Math.max(0, entry.mmr + effectiveDelta);
-    const nextEntry: FillerMmrEntry = { ...entry, mmr: queue === "1v1" ? realisticOneVOneMmr(rawMmr) : rawMmr };
+    const nextEntry: FillerMmrEntry = { ...entry, mmr: Math.max(0, entry.mmr + effectiveDelta) };
     const nextTable = { ...state.mmr, [name]: { ...state.mmr[name], [queue]: nextEntry } };
     set({ mmr: nextTable });
     persist(nextTable);
