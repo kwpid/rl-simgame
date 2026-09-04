@@ -795,18 +795,25 @@ interface MatchStoreState {
    *  on a fast counter. `null` means no forced pick, fall back to the coin flip. */
   duelNextAttacker: "blue" | "orange" | null;
   duelIsCounter: boolean;
+  /** 1v1-only: each side's current boost, 0-100, a real resource now instead of a per-possession coinflip
+   *  — spent on aerials/speedflip kickoff attempts, regenerated a flat amount every possession (see
+   *  data/matchSim.ts's `simulateDuelPossession`/`DUEL_BOOST_REGEN_PER_POSSESSION`). Reset to 100/100 on
+   *  match start, every kickoff, and overtime start. Unused (stays 100) outside 1v1. */
+  duelBoostBlue: number;
+  duelBoostOrange: number;
 
-  /** 2v2/3v3-only: signed momentum, -100..100. Positive = blue is applying sustained pressure (orange
-   *  defending), negative = orange is. Magnitude is how bad the siege is, not just who's attacking — feeds
-   *  both which team is more likely to keep the ball next AND a small real odds nudge (see
-   *  data/matchSim.ts's `simulateTeamChain`), so a prolonged siege reads as genuinely more likely to end in
-   *  a goal, not just narrated that way. Resets to 0 on every goal and whenever a kickoff is next (see
-   *  `needsKickoff`). Unused (stays 0) in 1v1, which has its own separate counter-attack carry-over. */
+  /** Signed momentum, -100..100. Positive = blue is applying sustained pressure (orange defending),
+   *  negative = orange is. Magnitude is how bad the siege is, not just who's attacking — feeds both which
+   *  side is more likely to keep the ball next AND a small real odds nudge (see data/matchSim.ts's
+   *  `simulateTeamChain`/`simulateDuelPossession`, both read/return this now), so a prolonged siege reads as
+   *  genuinely more likely to end in a goal, not just narrated that way. Resets to 0 on every goal and
+   *  whenever a kickoff is next (see `needsKickoff`). */
   pressure: number;
-  /** 2v2/3v3-only: true when the NEXT possession should open with a real kickoff beat (first touch up for
-   *  grabs) instead of a plain live-ball possession — set at match start, after every goal, and the instant
-   *  overtime begins, matching real RL's actual kickoff rules (saves/clears/whiffs never trigger one).
-   *  Consumed and cleared by the next possession tick. */
+  /** True when the NEXT possession should open with a real kickoff beat (first touch up for grabs) instead
+   *  of a plain live-ball possession — set at match start, after every goal, and the instant overtime
+   *  begins, matching real RL's actual kickoff rules (saves/clears/whiffs never trigger one). Consumed and
+   *  cleared by the next possession tick, for every queue including 1v1 now (see
+   *  `simulateDuelKickoffBeat`). */
   needsKickoff: boolean;
 
   /** Which real arena is the background for the CURRENT game (see data/maps.ts), or null before a match
@@ -937,6 +944,8 @@ function startTicking(
     let fieldY = state.fieldY;
     let duelNextAttacker: "blue" | "orange" | null = null;
     let duelIsCounter = false;
+    let duelBoostBlue = state.duelBoostBlue;
+    let duelBoostOrange = state.duelBoostOrange;
     let pressure = state.pressure;
     let needsKickoff = state.needsKickoff;
 
@@ -950,18 +959,39 @@ function startTicking(
       let result: PossessionResult;
 
       if (state.queue === "1v1") {
-        const attackingTeam = state.duelNextAttacker ?? (Math.random() < 0.5 ? "blue" : "orange");
-        const isCounter = state.duelNextAttacker !== null && state.duelIsCounter;
-        const attacker = players.find((p) => p.team === attackingTeam)!;
-        const defender = players.find((p) => p.team !== attackingTeam)!;
-        const duelResult = simulateDuelPossession(attacker, defender, state.fieldY, isCounter);
+        const blue = players.find((p) => p.team === "blue")!;
+        const orange = players.find((p) => p.team === "orange")!;
+        // Kickoff/forced-counter/pressure-biased pickup are all decided INSIDE simulateDuelPossession now
+        // (see its own doc comment) - a real kickoff beat overrides any forced counter-attack carry-over,
+        // matching the team-chain engine's own "a kickoff always starts genuinely neutral" rule.
+        const forcedAttackerSide = needsKickoff ? null : state.duelNextAttacker !== null && state.duelIsCounter ? state.duelNextAttacker : null;
+        // 1v1 overtime going 5+ real minutes should be "very and insanely rare" - ramps from 0 (regulation
+        // pace) to fully decisive by 90 seconds into sudden death, well before the 5-minute mark, so a goal
+        // becomes overwhelmingly likely long before then instead of running exactly like regulation forever.
+        const otIntensity = state.overtime ? Math.min(1, state.otSeconds / 90) : 0;
+        const duelResult = simulateDuelPossession(
+          blue,
+          orange,
+          state.fieldY,
+          pressure,
+          needsKickoff,
+          forcedAttackerSide,
+          state.duelBoostBlue,
+          state.duelBoostOrange,
+          useSaveStore.getState().currentDate,
+          otIntensity
+        );
         result = duelResult;
         fieldX = duelResult.fieldX;
         fieldY = duelResult.outcome === "goal" ? 50 : duelResult.fieldY;
+        pressure = duelResult.pressure;
+        needsKickoff = false;
+        duelBoostBlue = duelResult.boostBlue;
+        duelBoostOrange = duelResult.boostOrange;
         // Whichever side didn't just attack now effectively has the ball (a whiff/save/clear all hand
         // it over), decide whether they push a fast counter next tick instead of resetting neutral.
         if (duelResult.outcome !== "goal") {
-          const winner = defender;
+          const winner = duelResult.attackingSide === "blue" ? orange : blue;
           if (prefersCounterAttack(winner)) {
             duelNextAttacker = winner.team;
             duelIsCounter = true;
@@ -1057,7 +1087,7 @@ function startTicking(
         // Regulation ends level: real RL goes to unlimited sudden-death overtime, not a shootout.
         log = [...log, { id: logIdCounter++, clockLabel: "OT", text: "Overtime! Next goal wins.", emphasis: true }].slice(-60);
         // Ball resets on overtime same as after a goal — the next possession opens with a real kickoff.
-        set({ clockSeconds: 0, overtime: true, otSeconds: 0, players, scoreBlue, scoreOrange, log, selfGoals, selfSaves, fieldX, fieldY, duelNextAttacker, duelIsCounter, pressure: 0, needsKickoff: true });
+        set({ clockSeconds: 0, overtime: true, otSeconds: 0, players, scoreBlue, scoreOrange, log, selfGoals, selfSaves, fieldX, fieldY, duelNextAttacker, duelIsCounter, duelBoostBlue, duelBoostOrange, pressure: 0, needsKickoff: true });
         return;
       }
       clearAllTimers();
@@ -1065,7 +1095,7 @@ function startTicking(
       return;
     }
 
-    set({ clockSeconds: nextClock, otSeconds: nextOtSeconds, players, scoreBlue, scoreOrange, log, selfGoals, selfSaves, fieldX, fieldY, duelNextAttacker, duelIsCounter, pressure, needsKickoff });
+    set({ clockSeconds: nextClock, otSeconds: nextOtSeconds, players, scoreBlue, scoreOrange, log, selfGoals, selfSaves, fieldX, fieldY, duelNextAttacker, duelIsCounter, duelBoostBlue, duelBoostOrange, pressure, needsKickoff });
   }, TICK_MS);
 }
 
@@ -1097,6 +1127,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   fieldY: 50,
   duelNextAttacker: null,
   duelIsCounter: false,
+  duelBoostBlue: 100,
+  duelBoostOrange: 100,
   pressure: 0,
   needsKickoff: true,
   mapId: null,
@@ -1124,6 +1156,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       fieldY: 50,
       duelNextAttacker: null,
       duelIsCounter: false,
+      duelBoostBlue: 100,
+      duelBoostOrange: 100,
       pressure: 0,
       needsKickoff: true,
       estimatedQueueDurationsMs,
@@ -1335,6 +1369,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       fieldY: 50,
       duelNextAttacker: null,
       duelIsCounter: false,
+      duelBoostBlue: 100,
+      duelBoostOrange: 100,
       pressure: 0,
       needsKickoff: true,
       seriesMapIds,
@@ -1402,6 +1438,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       fieldY: 50,
       duelNextAttacker: null,
       duelIsCounter: false,
+      duelBoostBlue: 100,
+      duelBoostOrange: 100,
       pressure: 0,
       needsKickoff: true,
       mapId: state.seriesMapIds[state.seriesGameNumber] ?? state.mapId,
@@ -1435,6 +1473,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       fieldY: 50,
       duelNextAttacker: null,
       duelIsCounter: false,
+      duelBoostBlue: 100,
+      duelBoostOrange: 100,
       pressure: 0,
       needsKickoff: true,
     });

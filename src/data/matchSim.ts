@@ -429,6 +429,18 @@ function statProbability(attackerStat: number, defenderStat: number, spread = 70
   return 1 / (1 + Math.exp(-diff / spread));
 }
 
+/** Real training/stats should decide more of the outcome in 1v1 and 2v2 than in 3v3 — there's no teammate
+ *  to smooth over a mismatch, individual skill is the whole story. A HIGHER number here means a given real
+ *  stat gap swings the finish's shot-vs-save call harder (a smaller statProbability spread), 3v3 stays at
+ *  exactly today's spread (1.0 = no change at all). Only applied to the finish beat's shot-vs-save call
+ *  (see resolveFinish/attemptFinish's own `spread` param) - the single highest-leverage "did the stats
+ *  actually decide this" moment, not every probability check in the engine. */
+const QUEUE_STAT_IMPACT: Record<QueueMode, number> = { "1v1": 1.4, "2v2": 1.15, "3v3": 1 };
+
+function finishSpreadForQueue(queue: QueueMode): number {
+  return 700 / QUEUE_STAT_IMPACT[queue];
+}
+
 /** How often a player botches an attempt regardless of opposition, driven by consistency and by their
  *  own skill in the relevant stat (a low-aerial-control player whiffs aerials more, independent of who's
  *  defending). baseWhiff is the floor difficulty of the move itself (aerials are harder than ground shots). */
@@ -498,7 +510,10 @@ function resolveFinish(
   finishWhiffBase: number,
   /** Scales the keeper's effective save power for this finish only: below 1 when the defense is
    *  stretched thin (a 2v2 last-man situation), above 1 when a teammate's rotated back in support. */
-  keeperPowerMultiplier = 1
+  keeperPowerMultiplier = 1,
+  /** How decisively a real stat gap swings the shot-vs-save call, see QUEUE_STAT_IMPACT's own doc comment.
+   *  Defaults to statProbability's own default (700), i.e. unchanged from before this existed. */
+  spread = 700
 ): PossessionResult {
   function award(name: string, amount: number) {
     pointsAwarded.push({ name, amount });
@@ -540,7 +555,7 @@ function resolveFinish(
       ];
   lines.push({ text: recoveryLines[Math.floor(Math.random() * recoveryLines.length)] });
 
-  if (Math.random() > statProbability(shotPower, savePower)) {
+  if (Math.random() > statProbability(shotPower, savePower, spread)) {
     lines.push({ text: `SAVE! ${keeper.name} gets enough on it to keep it out.` });
     award(keeper.name, 50);
     return { lines, outcome: "save", actorName: keeper.name, pointsAwarded };
@@ -561,7 +576,9 @@ function attemptFinish(
   pointsAwarded: { name: string; amount: number }[],
   kind: ChainKind,
   keeperMultiplier: number,
-  currentDate: SimDate
+  currentDate: SimDate,
+  /** See QUEUE_STAT_IMPACT's own doc comment - passed straight through to every resolveFinish call below. */
+  spread = 700
 ): PossessionResult {
   if (kind === "aerial") {
     // A named mechanic only ever comes up here — never forced into every aerial look. It needs the
@@ -594,10 +611,10 @@ function attemptFinish(
         }
         if (relativeMastery < attemptBar * 1.4) {
           lines.push({ text: `The execution is a bit loose, still on frame but nowhere near clean.` });
-          return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.22, keeperMultiplier * 0.9);
+          return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.22, keeperMultiplier * 0.9, spread);
         }
         lines.push({ text: `${attacker.name} gets a clean, dangerous look on goal.` });
-        return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.16, keeperMultiplier * 1.1);
+        return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.16, keeperMultiplier * 1.1, spread);
       }
     }
     lines.push({ text: `${attacker.name} goes up for an aerial finish.` });
@@ -606,7 +623,7 @@ function attemptFinish(
       lines.push({ text: `${attacker.name} mistimes it and whiffs completely.` });
       return { lines, outcome: "whiff", pointsAwarded };
     }
-    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.3, keeperMultiplier);
+    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.3, keeperMultiplier, spread);
   }
   if (kind === "wall_read") {
     // Mirrors the "aerial" branch above: a named ground mechanic only comes up when it's actually
@@ -623,7 +640,7 @@ function attemptFinish(
           lines.push({ text: `${attacker.name} mistimes the wall read and it skips away.` });
           return { lines, outcome: "whiff", pointsAwarded };
         }
-        return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.18, keeperMultiplier * (relativeMastery > 0.6 ? 1.1 : 1));
+        return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.18, keeperMultiplier * (relativeMastery > 0.6 ? 1.1 : 1), spread);
       }
     }
     lines.push({ text: `${attacker.name} reads it off the wall and drives toward goal.` });
@@ -632,7 +649,7 @@ function attemptFinish(
       lines.push({ text: `${attacker.name} mistimes the wall read and it skips away.` });
       return { lines, outcome: "whiff", pointsAwarded };
     }
-    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.2, keeperMultiplier);
+    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.2, keeperMultiplier, spread);
   }
   if (kind === "ground_flick") {
     const eraPool = GROUND_ATTACK_MOVE_IDS.filter((id) => mechanicUnlockedByDate(id, currentDate));
@@ -647,7 +664,7 @@ function attemptFinish(
           lines.push({ text: `${attacker.name} fumbles the touch and loses the ball.` });
           return { lines, outcome: "whiff", pointsAwarded };
         }
-        return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.22, keeperMultiplier * (relativeMastery > 0.6 ? 1.1 : 1));
+        return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.22, keeperMultiplier * (relativeMastery > 0.6 ? 1.1 : 1), spread);
       }
     }
     lines.push({ text: `${attacker.name} pops it up for a flick.` });
@@ -656,10 +673,10 @@ function attemptFinish(
       lines.push({ text: `${attacker.name} fumbles the touch and loses the ball.` });
       return { lines, outcome: "whiff", pointsAwarded };
     }
-    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.24, keeperMultiplier);
+    return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.24, keeperMultiplier, spread);
   }
   lines.push({ text: `${attacker.name} takes the shot straight on.` });
-  return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.18, keeperMultiplier);
+  return resolveFinish(attacker, defendingTeam, lines, pointsAwarded, 0.18, keeperMultiplier, spread);
 }
 
 // ============================================================================================
@@ -921,6 +938,7 @@ export function simulateTeamChain(
   currentDate: SimDate,
   queue: QueueMode
 ): TeamChainResult {
+  const finishSpread = finishSpreadForQueue(queue);
   const lines: PossessionLogLine[] = [];
   const pointsAwarded: { name: string; amount: number }[] = [];
   function award(name: string, amount: number) {
@@ -983,7 +1001,7 @@ export function simulateTeamChain(
       pressureForAttacker = Math.min(PRESSURE_CAP, pressureForAttacker + 25);
       // A demo opens things up, it shouldn't make the finish nearly automatic — still a real advantage
       // (whoever's left covers alone), just not a guaranteed goal every time it happens.
-      return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), teammateAvailable ? 0.95 : 0.85, currentDate));
+      return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), teammateAvailable ? 0.95 : 0.85, currentDate, finishSpread));
     }
 
     const challengeType = pickChallengeType(roles.challenger, teammateAvailable);
@@ -1015,7 +1033,7 @@ export function simulateTeamChain(
       // Never on the very first beat after a scrappy kickoff pickup — that ball only just came under
       // control, it hasn't earned a clean look at goal yet.
       if (!(beat === 0 && scrappyKickoffFirstBeat) && Math.random() < 0.4) {
-        return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), 1, currentDate));
+        return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), 1, currentDate, finishSpread));
       }
       if (teammateAvailable && Math.random() < 0.5) attacker = pickAttacker(attackingTeam);
       continue;
@@ -1192,13 +1210,13 @@ export function simulateTeamChain(
     // A won hard challenge is the most decisive beat — good odds this converts straight into a shot.
     // Never on the very first beat after a scrappy kickoff pickup, same reasoning as the stall branch.
     if (!(beat === 0 && scrappyKickoffFirstBeat) && Math.random() < 0.3 + beat * 0.15) {
-      return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), teammateAvailable ? 1.05 : 1, currentDate));
+      return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), teammateAvailable ? 1.05 : 1, currentDate, finishSpread));
     }
   }
 
   // Ran out of advance beats without a clean look or a turnover — the attacker cashes in whatever they've
   // built up rather than looping forever, a supported keeper (still contested, no demo/breakaway bonus).
-  return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), 1, currentDate));
+  return pack(attemptFinish(attacker, defendingTeam, lines, pointsAwarded, pickChainKind(attacker), 1, currentDate, finishSpread));
 }
 
 // ============================================================================================
@@ -1236,15 +1254,6 @@ const AERIAL_ATTACK_MOVE_IDS = [
   "ceiling_pinch", "musty_pinch", "kuxir_pinch", "musty_flick", "breezi_flick", "classy_flick",
   "tornado_flick", "mawkzy_flick", "jzr_flick", "slingshot_flick", "delayed_flick", "reverse_flick",
 ];
-const DEFENSE_MOVE_IDS = [
-  "shadow_defense", "fake_challenge", "instant_challenge", "backboard_defense", "prejump_save",
-  "high_aerial_save", "double_jump_save", "wall_save", "corner_clear", "redirect_save",
-  "recovery_save", "panic_clear", "buzzer_save", "air_dribble_bump", "air_dribble_demo", "last_man_positioning",
-];
-// A small movement-mechanic flourish that can dress up a finish ("sees the gap and wavedash shots it"),
-// only shows up when the attacker's actually trained it well.
-const FINISH_FLOURISH_MOVE_IDS = ["wavedash", "zap_dash", "chain_dash", "curved_dash", "hel_jump"];
-
 function moveLabel(id: string): string {
   return MECHANIC_BY_ID.get(id)?.label ?? id;
 }
@@ -1301,18 +1310,124 @@ export interface DuelPossessionResult extends PossessionResult {
    *  Y: 0 sits at blue's own goal line, 100 at orange's, so blue attacks toward higher Y. */
   fieldX: number;
   fieldY: number;
+  /** Updated signed pressure, -100..100, positive = blue applying it - feed back in as `currentPressure`
+   *  on the next call, same shape/spirit TeamChainResult already uses for 2v2/3v3. */
+  pressure: number;
+  /** Updated 0-100 boost for both players - a real persisted resource now (see MatchStoreState's
+   *  duelBoostBlue/duelBoostOrange), not a fresh coinflip re-rolled every possession like before. */
+  boostBlue: number;
+  boostOrange: number;
+  /** Which side actually attacked this possession - kickoffs/forced counters/the pressure-biased pickup are
+   *  all decided INSIDE this function now, so the caller needs this back to know who just defended (for
+   *  `prefersCounterAttack`'s own follow-up decision) rather than re-deriving it. */
+  attackingSide: "blue" | "orange";
 }
 
-/** Resolves one full 1v1 possession as a short chain of named beats (possession -> optional defensive
- *  read -> signature setup move -> defended finish) instead of a single generic stat check, so training
- *  a specific mechanic/queue concept visibly shows up in what actually happens. `isCounterAttack` skips
- *  the defensive-read beat and narrates a fast transition instead, used when the attacker just won the
- *  ball back defensively and (playstyle- or stat-wise) leans toward countering rather than resetting. */
+const DUEL_PRESSURE_CAP = 100;
+/** Flat boost regenerated for BOTH players every possession (pad pickups over its real-time duration) -
+ *  applied once, in `pack`, regardless of outcome. Kept simple/symmetric rather than modeling who exactly
+ *  rotated for which pad; the boost SPENT on aerials/speedflips is what actually varies by player. */
+const DUEL_BOOST_REGEN_PER_POSSESSION = 10;
+
+interface DuelKickoffResult {
+  lines: PossessionLogLine[];
+  winnerSide: "blue" | "orange";
+  /** A non-decisive 50 (or the ball coming loose afterward) means whoever ends up with it only JUST got
+   *  there - the very next beat shouldn't immediately read as a clean, settled possession, same idea
+   *  simulateKickoffBeat's own `scrappy` already captures for 2v2/3v3. */
+  scrappy: boolean;
+  boostBlue: number;
+  boostOrange: number;
+}
+
+/** 1v1's own kickoff beat - just the two of them, no cheating teammate to read the bounce the way 2v2/3v3
+ *  kickoffs have (see simulateKickoffBeat). Reuses the same stat-driven strat weighting (speedflip is close
+ *  to universal once mechanically sharp enough), but "cheat" drops to a much rarer weight - real 1v1 lives
+ *  and dies on speed/standard/the occasional delayed fake, hanging back to bait a challenge is a 2v2/3v3
+ *  team-rotation trick more than a genuine 1v1 read. */
+function simulateDuelKickoffBeat(blue: MatchParticipantStats, orange: MatchParticipantStats, boostBlue: number, boostOrange: number): DuelKickoffResult {
+  const lines: PossessionLogLine[] = [];
+
+  function pickStrat(taker: MatchParticipantStats): KickoffStrat {
+    const skilled = taker.mechanicalConsistency > 6000;
+    const speedWeight = skilled ? 0.85 : Math.max(0.08, taker.mechanicalConsistency / 20000);
+    const cheatWeight = 0.02;
+    const fakeWeight = 0.08;
+    const standardWeight = Math.max(0.03, 1 - speedWeight - cheatWeight - fakeWeight);
+    const total = speedWeight + cheatWeight + fakeWeight + standardWeight;
+    let roll = Math.random() * total;
+    if ((roll -= cheatWeight) <= 0) return "cheat";
+    if ((roll -= fakeWeight) <= 0) return "fake";
+    if ((roll -= speedWeight) <= 0) return "speed";
+    return "standard";
+  }
+
+  const blueStrat = pickStrat(blue);
+  const orangeStrat = pickStrat(orange);
+  lines.push({ text: `Kickoff: ${blue.name} goes with ${KICKOFF_STRAT_LABEL[blueStrat]}, ${orange.name} goes with ${KICKOFF_STRAT_LABEL[orangeStrat]}.` });
+
+  let nextBoostBlue = boostBlue;
+  let nextBoostOrange = boostOrange;
+  function power(taker: MatchParticipantStats, strat: KickoffStrat, side: "blue" | "orange"): number {
+    const base = taker.mechanicalConsistency * 0.5 + taker.foundationStats.carControl * 0.5;
+    if (strat === "speed") {
+      if (side === "blue") nextBoostBlue = Math.max(0, nextBoostBlue - 20);
+      else nextBoostOrange = Math.max(0, nextBoostOrange - 20);
+      if (Math.random() < whiffChance(taker, taker.foundationStats.carControl, 0.16)) {
+        lines.push({ text: `${taker.name} fumbles the speedflip.` });
+        return base * 0.5;
+      }
+      return base * 1.1;
+    }
+    if (strat === "cheat") return base * 0.85;
+    if (strat === "fake") return base * 0.95;
+    return base;
+  }
+
+  const blueEff = power(blue, blueStrat, "blue");
+  const orangeEff = power(orange, orangeStrat, "orange");
+  const p = statProbability(blueEff, orangeEff, 500);
+  const decisive = Math.abs(p - 0.5) > 0.2;
+  const winnerSide: "blue" | "orange" = Math.random() < p ? "blue" : "orange";
+  const winner = winnerSide === "blue" ? blue : orange;
+  lines.push({
+    text: decisive
+      ? `${winner.name} gets there first and wins the initial 50 cleanly.`
+      : `${blue.name} and ${orange.name} challenge it 50/50, the ball squirts loose.`,
+  });
+  // No cheating teammate to read the bounce in 1v1 - a non-decisive 50 is a real coinflip on who actually
+  // ends up WITH the ball, not just who touched it first.
+  if (!decisive && Math.random() < 0.5) {
+    const otherSide: "blue" | "orange" = winnerSide === "blue" ? "orange" : "blue";
+    const other = otherSide === "blue" ? blue : orange;
+    lines.push({ text: `${other.name} recovers it after all.` });
+    return { lines, winnerSide: otherSide, scrappy: true, boostBlue: nextBoostBlue, boostOrange: nextBoostOrange };
+  }
+  return { lines, winnerSide, scrappy: !decisive, boostBlue: nextBoostBlue, boostOrange: nextBoostOrange };
+}
+
+/** Resolves one full 1v1 possession as a variable-length chain of named beats - a kickoff (if `isKickoff`)
+ *  or a pressure-biased pickup decides who's attacking, then an occasional demo, a real shadow/fake/hard
+ *  defensive read (reusing `pickChallengeType` - `teammateAvailable` is always false in 1v1, which already
+ *  naturally rules out its "stall" option), a signature setup move, and a defended finish through the same
+ *  shared `attemptFinish`/`resolveFinish` 2v2/3v3 already use. `forcedAttackerSide` carries over a counter-
+ *  attack the PREVIOUS possession's defender decided on (see `prefersCounterAttack`) - skips the pickup/
+ *  defensive-read beats and narrates a fast transition instead. Boost is a real persisted 0-100 resource per
+ *  side now, spent on aerials/speedflips and regenerated a flat amount each possession, not a fresh
+ *  coinflip re-rolled every time. `otIntensity` (0-1, see useMatchStore.ts's own OT-rarity comment) sharpens
+ *  the finish beat's decisiveness as 1v1 overtime drags on, so a 5+ minute 1v1 OT stays "very and insanely
+ *  rare" instead of running exactly like regulation forever - left at 0 outside overtime, no effect. */
 export function simulateDuelPossession(
-  attacker: MatchParticipantStats,
-  defender: MatchParticipantStats,
+  blue: MatchParticipantStats,
+  orange: MatchParticipantStats,
   currentFieldY: number,
-  isCounterAttack: boolean
+  currentPressure: number,
+  isKickoff: boolean,
+  forcedAttackerSide: "blue" | "orange" | null,
+  boostBlue: number,
+  boostOrange: number,
+  currentDate: SimDate,
+  otIntensity = 0
 ): DuelPossessionResult {
   const lines: PossessionLogLine[] = [];
   const pointsAwarded: { name: string; amount: number }[] = [];
@@ -1320,92 +1435,168 @@ export function simulateDuelPossession(
     pointsAwarded.push({ name, amount });
   }
 
+  // The longer 1v1 overtime drags on, the more desperate/decisive every finish gets - a shrinking spread
+  // lets the real stat edge swing harder, and the keeper's effective save power actually drops, together
+  // making a goal overwhelmingly likely well before 5 real minutes of sudden death (see useMatchStore.ts's
+  // own otIntensity computation). Applies equally to a demo's near-open-net look and a normal finish.
+  const otSpread = finishSpreadForQueue("1v1") * (1 - otIntensity * 0.5);
+  const otKeeperRelief = 1 - otIntensity * 0.35;
+
+  let boost = { blue: boostBlue, orange: boostOrange };
+  function spend(side: "blue" | "orange", amount: number) {
+    boost = { ...boost, [side]: Math.max(0, boost[side] - amount) };
+  }
+
+  const isCounterAttack = !isKickoff && forcedAttackerSide !== null;
+  let attackingSide: "blue" | "orange";
+  let scrappy = false;
+
+  if (isKickoff) {
+    const kickoff = simulateDuelKickoffBeat(blue, orange, boost.blue, boost.orange);
+    lines.push(...kickoff.lines);
+    attackingSide = kickoff.winnerSide;
+    scrappy = kickoff.scrappy;
+    boost = { blue: kickoff.boostBlue, orange: kickoff.boostOrange };
+  } else if (forcedAttackerSide) {
+    attackingSide = forcedAttackerSide;
+  } else {
+    // Pressure biases who's more likely to have the ball this possession, same idea simulateTeamChain
+    // already uses for 2v2/3v3 - never removes the coinflip entirely.
+    const blueChance = Math.max(0.12, Math.min(0.88, 0.5 + currentPressure / 400));
+    attackingSide = Math.random() < blueChance ? "blue" : "orange";
+  }
+
+  const attacker = attackingSide === "blue" ? blue : orange;
+  const defender = attackingSide === "blue" ? orange : blue;
   const attackDirection = attacker.team === "blue" ? 1 : -1;
   const retreatY = () => (attackDirection > 0 ? Math.max(0, currentFieldY - 15) : Math.min(100, currentFieldY + 15));
   const attackerStyle = effectivePlaystyle(attacker);
 
-  // Beat 1: possession and situation (side of the field, boost level).
-  const lowBoost = Math.random() < (isCounterAttack ? 0.15 : 0.28);
+  let pressureForAttacker = isKickoff ? 0 : attackingSide === "blue" ? currentPressure : -currentPressure;
+  function pack(result: PossessionResult, fieldX: number, fieldY: number): DuelPossessionResult {
+    const signed = attackingSide === "blue" ? pressureForAttacker : -pressureForAttacker;
+    return {
+      ...result,
+      fieldX,
+      fieldY,
+      pressure: Math.max(-DUEL_PRESSURE_CAP, Math.min(DUEL_PRESSURE_CAP, signed)),
+      boostBlue: Math.min(100, boost.blue + DUEL_BOOST_REGEN_PER_POSSESSION),
+      boostOrange: Math.min(100, boost.orange + DUEL_BOOST_REGEN_PER_POSSESSION),
+      attackingSide,
+    };
+  }
+
   const side = FIELD_SIDES[Math.floor(Math.random() * FIELD_SIDES.length)];
   const fieldX = side === "left" ? 15 + Math.random() * 15 : side === "right" ? 70 + Math.random() * 15 : 40 + Math.random() * 20;
-  lines.push({
-    text: isCounterAttack
-      ? `${attacker.name} wins it back and pushes forward immediately on the counter.`
-      : `${attacker.name} takes possession on the ${side} side of the field${lowBoost ? ", low on boost" : ""}.`,
-  });
+  const attackerLowBoost = boost[attackingSide] < 30;
+  if (!isKickoff) {
+    lines.push({
+      text: isCounterAttack
+        ? `${attacker.name} wins it back and pushes forward immediately on the counter.`
+        : `${attacker.name} takes possession on the ${side} side of the field${attackerLowBoost ? ", low on boost" : ""}.`,
+    });
+  }
 
-  // Beat 2: defensive read, skipped on a fast counter so it actually reads as a quick transition.
-  let defenseBoost = 0;
-  if (!isCounterAttack && Math.random() < 0.55) {
-    const defRead = pickWeightedMove(DEFENSE_MOVE_IDS, defender);
-    const readMastery = moveMasteryValue(defRead.id, defender);
-    lines.push({ text: `${defender.name} rotates for boost and shadows.` });
-    defenseBoost = Math.min(900, 200 + readMastery * 0.15);
-    // A very well-trained read can jump the passing lane before the attacker even sets up.
-    const jumpChance = Math.max(0, Math.min(0.15, (readMastery - 3000) / 20000));
-    if (Math.random() < jumpChance) {
-      lines.push({ text: `${defender.name} reads it early and clears the danger before it develops.` });
-      award(defender.name, 25);
-      return { lines, outcome: "clear", pointsAwarded, fieldX, fieldY: retreatY() };
+  // Beat: demo attempt, only on a genuine first look (never right off a scrappy kickoff pickup - that ball
+  // only just came under control). 1v1 has no cover at all once the defender's gone, so this is rolled more
+  // often, and lands much closer to a true open net than 2v2's version of the same beat (brief: "demo + free
+  // net is extremely strong and should happen more often than in 2v2").
+  if (!scrappy) {
+    const demo = attemptDemo(attacker, defender, "lines up and demos");
+    if (demo.demoed) {
+      lines.push(...demo.lines);
+      pressureForAttacker = Math.min(DUEL_PRESSURE_CAP, pressureForAttacker + 30);
+      const result = attemptFinish(attacker, [defender], lines, pointsAwarded, pickChainKind(attacker), 0.45 * otKeeperRelief, currentDate, otSpread);
+      return pack(result, fieldX, result.outcome === "goal" ? 50 : retreatY());
     }
   }
 
-  // Beat 3: signature setup move, low boost restricts the pool to what's realistic without a full tank.
-  // A more aggressive/flairy player reaches for the aerial (flashier, higher-risk) pool more often.
+  // Beat: the defender's real read - shadow/fake/hard (never "stall", teammateAvailable is always false in
+  // 1v1) - skipped on a fast counter, that's a genuine quick transition, not a settled defensive look yet.
+  let defenseMasteryBoost = 0;
+  if (!isCounterAttack) {
+    const challengeType = pickChallengeType(defender, false);
+    if (challengeType === "fake") {
+      lines.push({ text: `${defender.name} throws a soft fake challenge at ${attacker.name}.` });
+      const readThrough = statProbability(
+        attacker.gameSense + attacker.foundationStats.carControl * 0.2,
+        defender.gameSense + defender.foundationStats.defense * 0.15,
+        500
+      );
+      if (Math.random() > readThrough) {
+        lines.push({ text: `${attacker.name} bites on it and gives the ball away.` });
+        award(defender.name, 25);
+        return pack({ lines, outcome: "clear", pointsAwarded }, fieldX, retreatY());
+      }
+      lines.push({ text: `${attacker.name} sees through the fake and pushes on.` });
+      pressureForAttacker = Math.min(DUEL_PRESSURE_CAP, pressureForAttacker + 15);
+    } else if (challengeType === "hard") {
+      // The only 1v1 read that can end the possession outright right here, same as a real committed hard
+      // challenge whiff/win in-game.
+      lines.push({ text: `${defender.name} steps up for a hard challenge.` });
+      const readMastery = moveMasteryValue("instant_challenge", defender);
+      const winChance = statProbability(
+        defender.gameSense + defender.foundationStats.defense * 0.2 + readMastery * 0.1,
+        attacker.gameSense + attacker.foundationStats.offense * 0.15,
+        550
+      );
+      if (Math.random() < winChance) {
+        lines.push({ text: `${defender.name} wins the challenge and clears the danger.` });
+        award(defender.name, 30);
+        return pack({ lines, outcome: "clear", pointsAwarded }, fieldX, retreatY());
+      }
+      lines.push({ text: `${attacker.name} wins the challenge and keeps control.` });
+      defenseMasteryBoost = readMastery * 0.05;
+      pressureForAttacker = Math.min(DUEL_PRESSURE_CAP, pressureForAttacker + 20);
+    } else {
+      // "shadow" (or the never-reachable "stall", teammateAvailable is always false here) - the default good
+      // 1v1 defense, patient and goalside, genuinely hard to beat cleanly.
+      lines.push({ text: `${defender.name} shadows, staying goalside and patient.` });
+      const readMastery = moveMasteryValue("shadow_defense", defender);
+      defenseMasteryBoost = Math.min(900, 250 + readMastery * 0.15);
+    }
+  }
+
+  // Beat: signature setup move - low boost restricts the pool to what's realistic without a full tank, a
+  // more aggressive/flairy player reaches for the aerial (flashier, higher-risk) pool more often. A named
+  // mechanic only ever gets NAMED once relative mastery clears a real bar (same pattern attemptFinish's own
+  // named-mechanic gate already uses) - otherwise this reads as a generic, lower-quality touch instead of
+  // claiming a mechanic the player hasn't actually earned yet.
   const aerialPoolChance = 0.6 + (attackerStyle.aggression + attackerStyle.mechanicalFlair - 100) / 300;
-  const pool = lowBoost ? GROUND_ATTACK_MOVE_IDS : Math.random() < aerialPoolChance ? AERIAL_ATTACK_MOVE_IDS : GROUND_ATTACK_MOVE_IDS;
-  const setupMove = pickWeightedMove(pool, attacker);
+  const pool = attackerLowBoost ? GROUND_ATTACK_MOVE_IDS : Math.random() < aerialPoolChance ? AERIAL_ATTACK_MOVE_IDS : GROUND_ATTACK_MOVE_IDS;
+  const isAerialSetup = pool === AERIAL_ATTACK_MOVE_IDS;
+  const eraSetupPool = pool.filter((id) => mechanicUnlockedByDate(id, currentDate));
+  const setupPool = eraSetupPool.length > 0 ? eraSetupPool : pool;
+  const setupMove = pickWeightedMove(setupPool, attacker);
   const setupMastery = moveMasteryValue(setupMove.id, attacker);
-  const isAerialSetup = AERIAL_ATTACK_MOVE_IDS.includes(setupMove.id);
+  const relativeSetupMastery = setupMastery / Math.max(1, attacker.mechanicalConsistency);
+  const setupAttemptBar = isAerialSetup ? 0.4 : 0.3;
+  const namesMove = relativeSetupMastery > setupAttemptBar;
   const fieldY = attackDirection > 0 ? Math.min(92, currentFieldY + 25) : Math.max(8, currentFieldY - 25);
 
-  const lowBoostOffenseMastery = lowBoost ? conceptMasteryValue("1v1_low_boost_offense", attacker, attacker.foundationStats.offense) : 0;
-  const setupWhiffBase = isAerialSetup ? 0.34 : 0.2;
+  const lowBoostOffenseMastery = attackerLowBoost ? conceptMasteryValue("1v1_low_boost_offense", attacker, attacker.foundationStats.offense) : 0;
+  const setupWhiffBase = isAerialSetup ? (namesMove ? 0.22 : 0.34) : namesMove ? 0.14 : 0.2;
   const setupWhiff = whiffChance(attacker, setupMastery + attacker.foundationStats.carControl * 0.3 + lowBoostOffenseMastery * 0.3, setupWhiffBase);
-  lines.push({ text: `${attacker.name} goes for a ${setupMove.label}${lowBoost ? " despite the low boost" : ""}.` });
+  lines.push({
+    text: namesMove
+      ? `${attacker.name} goes for a ${setupMove.label}${attackerLowBoost ? " despite the low boost" : ""}.`
+      : `${attacker.name} tries to keep it up under control${attackerLowBoost ? " despite the low boost" : ""}.`,
+  });
+  if (isAerialSetup) spend(attackingSide, 15);
   if (Math.random() < setupWhiff) {
     lines.push({ text: `${attacker.name} can't quite pull it off and loses the touch.` });
-    return { lines, outcome: "whiff", pointsAwarded, fieldX, fieldY };
+    return pack({ lines, outcome: "whiff", pointsAwarded }, fieldX, fieldY);
   }
-  lines.push({ text: `${attacker.name} pulls off the ${setupMove.label} cleanly.` });
+  lines.push({ text: namesMove ? `${attacker.name} pulls off the ${setupMove.label} cleanly.` : `${attacker.name} keeps it under control.` });
 
-  // Beat 4: defensive positioning, then the defended finish.
+  // Beat: defended finish - the same shared attemptFinish/resolveFinish 2v2/3v3 already use, so 1v1 gets the
+  // identical "clean vs loose execution" narration tiers for free instead of a duplicated inline version.
   const post = Math.random() < 0.5 ? "left" : "right";
-  const defMove = pickWeightedMove(DEFENSE_MOVE_IDS, defender);
-  const defMastery = moveMasteryValue(defMove.id, defender) + defenseBoost;
   lines.push({ text: `${defender.name} defends from the ${post} post.` });
-
-  const flourish = pickWeightedMove(FINISH_FLOURISH_MOVE_IDS, attacker);
-  const flourishMastery = moveMasteryValue(flourish.id, attacker);
-  // Mechanical Flair is exactly the trained tendency to show off with a mastered mechanic instead of
-  // taking the plain shot, Aggression pushes the same way (a bolder player takes the riskier look).
-  const useFlourish = flourishMastery > 1200 && Math.random() < 0.35 + (attackerStyle.mechanicalFlair + attackerStyle.aggression - 100) / 300;
-
-  const shotSelectionMastery = conceptMasteryValue("1v1_shot_selection", attacker, attacker.gameSense);
-  const finishWhiffBase = isAerialSetup ? 0.3 : 0.2;
-  const finishWhiff = whiffChance(attacker, attacker.foundationStats.offense + shotSelectionMastery * 0.2, finishWhiffBase);
-  if (Math.random() < finishWhiff) {
-    lines.push({ text: `${attacker.name} skies the finish over the bar.` });
-    return { lines, outcome: "whiff", pointsAwarded, fieldX, fieldY };
-  }
-
-  const shotPower = attacker.foundationStats.offense + attacker.mechanicalConsistency * 0.15 + setupMastery * 0.1 + (useFlourish ? flourishMastery * 0.1 : 0);
-  const savePower = defender.foundationStats.defense + defender.mechanicalConsistency * 0.15 + defMastery * 0.12;
-  lines.push({
-    text: useFlourish
-      ? `${attacker.name} sees the gap and hits a ${flourish.label} shot behind ${defender.name}.`
-      : `${attacker.name} takes the shot on goal.`,
-  });
-
-  if (Math.random() > statProbability(shotPower, savePower)) {
-    lines.push({ text: `SAVE! ${defender.name} gets enough on it to keep it out.` });
-    award(defender.name, 50);
-    return { lines, outcome: "save", actorName: defender.name, pointsAwarded, fieldX, fieldY };
-  }
-
-  lines.push({ text: `GOAL! ${attacker.name} finishes it past ${defender.name}.` });
-  award(attacker.name, 100);
-  return { lines, outcome: "goal", scoringTeam: attacker.team, actorName: attacker.name, pointsAwarded, fieldX, fieldY };
+  const keeperMultiplier = 1 + defenseMasteryBoost / 6000 + (scrappy ? -0.1 : 0);
+  const finishKind: ChainKind = isAerialSetup ? "aerial" : "ground_flick";
+  const result = attemptFinish(attacker, [defender], lines, pointsAwarded, finishKind, keeperMultiplier * otKeeperRelief, currentDate, otSpread);
+  return pack(result, fieldX, result.outcome === "goal" ? 50 : fieldY);
 }
 
 /** Whether the side that just won the ball defensively should counter-attack immediately (skip the
