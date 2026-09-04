@@ -2,6 +2,7 @@ import { Card } from "@/ui/components/Card";
 import { SectionShell } from "@/ui/components/LockedSection";
 import { useSaveStore } from "@/store/useSaveStore";
 import type { TitleGlow } from "@/data/seasons";
+import { formatSimDate } from "@/data/dateUtils";
 
 const GLOW_STYLES: Record<TitleGlow, { color: string; shadow: string; border: string }> = {
   none: { color: "var(--text-secondary)", shadow: "none", border: "var(--border-subtle)" },
@@ -57,6 +58,28 @@ export function LockerScreen() {
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 650 }}>Locker</h1>
         <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>Titles and cosmetics for {s.displayName}</div>
       </header>
+
+      <SectionShell title="Wallet">
+        <Card>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "var(--accent-positive, #4caf50)", marginBottom: "var(--space-3)" }}>
+            ${s.cash.toLocaleString()}
+          </div>
+          {s.cashHistory.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--text-tertiary)" }}>No earnings yet.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {s.cashHistory.slice(0, 10).map((entry, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                  <span style={{ color: "var(--text-secondary)" }}>
+                    {entry.source} <span style={{ color: "var(--text-tertiary)" }}>· {formatSimDate(entry.date)}</span>
+                  </span>
+                  <span style={{ fontWeight: 600, color: "var(--accent-positive, #4caf50)" }}>+${entry.amount.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </SectionShell>
 
       <SectionShell title="Equipped Title">
         <Card>

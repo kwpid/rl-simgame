@@ -7,11 +7,15 @@ export function ClockWidget() {
   const currentDate = useSaveStore((s) => s.currentDate);
   const clockHour = useSaveStore((s) => s.clockHour);
   const clockMinute = useSaveStore((s) => s.clockMinute);
+  const cash = useSaveStore((s) => s.cash);
   const screen = useAppStore((s) => s.screen);
   const setScreen = useAppStore((s) => s.setScreen);
 
   return (
     <div className="top-bar">
+      <div className="wallet-widget" title="Wallet balance - see Locker for earnings history">
+        <span className="wallet-widget-amount">${cash.toLocaleString()}</span>
+      </div>
       <div className="clock-widget">
         <Icon name="clock" size={14} />
         <span className="clock-widget-time">{formatClockHour(clockHour, clockMinute)}</span>
@@ -53,6 +57,20 @@ export function ClockWidget() {
         }
         .clock-widget-date {
           color: var(--text-tertiary);
+        }
+        .wallet-widget {
+          display: flex;
+          align-items: center;
+          background: var(--bg-surface);
+          border: 1px solid var(--border-subtle);
+          border-radius: 999px;
+          padding: 6px 12px;
+          font-size: 12px;
+        }
+        .wallet-widget-amount {
+          font-weight: 700;
+          color: var(--accent-positive, #4caf50);
+          font-variant-numeric: tabular-nums;
         }
         .settings-btn {
           display: flex;

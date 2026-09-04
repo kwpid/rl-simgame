@@ -166,6 +166,15 @@ export interface ShowmatchResultEntry {
   date: SimDate;
 }
 
+/** One line of the wallet's earnings log — see useSaveStore.ts's addCash. `source` is a free-text label
+ *  ("Shadow Showmatch Win", "1v1 Split 2 — NA (3rd place)") rather than a structured reason code, same
+ *  spirit as ShowmatchResultEntry not needing one either. */
+export interface CashHistoryEntry {
+  source: string;
+  amount: number;
+  date: SimDate;
+}
+
 /** One line of a replayable match log — see RecentMatchEntry.log and HomeScreen.tsx's replay modal. Kept
  *  deliberately minimal (just what's actually shown), unlike useMatchStore.ts's own live MatchLogLine which
  *  also carries an `id`/`emphasis` only the live screen needs. */
@@ -483,6 +492,11 @@ export const mockSave = {
   pendingShowmatchInvite: null as ShowmatchInvite | null,
   showmatchHistory: [] as ShowmatchResultEntry[],
   lastShowmatchInviteCheckDate: DEMO_CURRENT_DATE,
+
+  // Wallet: real cash earned from showmatches and 1v1 RLCS placements (see useSaveStore.ts's addCash).
+  // Every fresh save starts with $100. Earn-side only for now, nothing spends it yet.
+  cash: 100,
+  cashHistory: [] as CashHistoryEntry[],
   // A friend proactively inviting the player to party up, see PartyInvite's own doc comment.
   pendingPartyInvite: null as PartyInvite | null,
   lastPartyInviteCheckDate: DEMO_CURRENT_DATE,

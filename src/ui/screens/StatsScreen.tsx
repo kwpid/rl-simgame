@@ -7,6 +7,7 @@ import { RadarChart } from "@/ui/components/RadarChart";
 import type { QueueMode } from "@/data/mockSave";
 import { gameSenseHint } from "@/ui/gameSense";
 import { useSaveStore } from "@/store/useSaveStore";
+import { useWorldRecordStore } from "@/store/useWorldRecordStore";
 import { computeOverallRating } from "@/data/matchSim";
 import { TIER_LABELS, divisionLabel, tierRank, eraForDate, deriveRankFromMmr, rankDistribution, RANKED_POPULATION_BY_QUEUE, type RankTierId } from "@/data/rankSystem";
 import { QUEUE_LABELS } from "@/data/queues";
@@ -484,6 +485,7 @@ function RankedTab() {
 
 function CareerTab() {
   const s = useSaveStore();
+  const worldRecords = useWorldRecordStore((store) => store.records);
   return (
     <>
       <SectionShell title="Skill Tree Summary">
@@ -511,6 +513,27 @@ function CareerTab() {
                   label="Peak MMR"
                   value={`${s.rankedProfiles[q].peakMmr} (Season ${s.rankedProfiles[q].peakMmrSeason})`}
                 />
+              </Card>
+            );
+          })}
+        </div>
+      </SectionShell>
+
+      <SectionShell title="World Records">
+        <div className="stats-grid">
+          {QUEUES.map((q) => {
+            const record = worldRecords[q];
+            return (
+              <Card key={q} title={q}>
+                {record ? (
+                  <>
+                    <StatRow label="Record MMR" value={record.mmr} />
+                    <StatRow label="Held by" value={record.holderName} />
+                    <StatRow label="Set in" value={`Season ${record.seasonNumber} (${record.year})`} />
+                  </>
+                ) : (
+                  <div style={{ fontSize: 13, color: "var(--text-tertiary)" }}>No record set yet — visit the Ranked leaderboard.</div>
+                )}
               </Card>
             );
           })}

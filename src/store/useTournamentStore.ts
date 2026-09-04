@@ -31,7 +31,9 @@ import {
   EARLY_ERA_WORLDS_STAGES,
   RLCS_REGIONS,
   RLCS_1V1_REGIONS,
+  RLCS_1V1_MAIN_REGIONS,
   RLCS_1V1_INTRODUCED_SEASON,
+  RLCS_1V1_WORLDS_STAGES,
   type ScheduledTournament,
   type TournamentKind,
 } from "@/data/tournaments";
@@ -731,6 +733,29 @@ export function getModernWorldsReadiness(table: InstanceTable, discipline: RlcsD
   return { kind: "scheduled", scheduledStart: addDays(latestDate(completionDates), WORLDS_DELAY_DAYS) };
 }
 
+export type OneVOneWorldsReadiness =
+  | { kind: "scheduled"; scheduledStart: SimDate }
+  | { kind: "awaiting_opens"; missingRegions: ProRegion[] };
+
+/** 1v1 equivalent of getModernWorldsReadiness, purely for UI display before the instance itself exists.
+ *  Ready once every RLCS_1V1_MAIN_REGIONS region's Open has crowned a champion this season
+ *  (championForSeason - the same helper 3v3's own regional-champion lookups use). 1v1 Worlds is meant to
+ *  ride the same day 3v3 Worlds concludes (see ensureOneVOneWorlds/findParent3v3Worlds), but the two tracks
+ *  run fully independently - nothing guarantees 3v3 Worlds finishes AFTER all 4 main regions' Opens do.
+ *  Taking the LATER of "3v3 Worlds concluded" and "every region's Open actually finished" is what keeps
+ *  Worlds from ever appearing to be scheduled before the Opens that feed it. */
+export function getOneVOneWorldsReadiness(table: InstanceTable, currentDate: SimDate): OneVOneWorldsReadiness {
+  const { seasonNumber } = rlcsSeasonForDate(currentDate);
+  const champs = RLCS_1V1_MAIN_REGIONS.map((region) => championForSeason(table, "1v1", region, seasonNumber));
+  const missingRegions = RLCS_1V1_MAIN_REGIONS.filter((_, i) => champs[i] === null);
+  if (missingRegions.length > 0) return { kind: "awaiting_opens", missingRegions };
+  const readyChamps = champs as ChampionInfo[];
+  const parent3v3Worlds = findParent3v3Worlds(table);
+  const candidateDates = readyChamps.map((c) => c.completionDate);
+  if (parent3v3Worlds) candidateDates.push(parent3v3Worlds.stageStartDate);
+  return { kind: "scheduled", scheduledStart: latestDate(candidateDates) };
+}
+
 export interface ProjectedScheduleEntry {
   id: string;
   label: string;
@@ -783,9 +808,6 @@ export function projectedSeasonSchedule(seasonNumber: number, seasonStartDate: S
     const majorStart = addDays(lastRegionalEnd, MAJOR_DELAY_DAYS);
     majorStarts.push(majorStart);
     entries.push({ id: `major_3v3_${group.id}_projected_s${seasonNumber}`, label: `${majorLocationForSeason(group.id, seasonNumber)} Major Season ${seasonNumber} (3v3)`, date: majorStart, estimated: true });
-    if (oneVOneUnlocked) {
-      entries.push({ id: `major_1v1_${group.id}_projected_s${seasonNumber}`, label: `${majorLocationForSeason(group.id, seasonNumber)} Major Season ${seasonNumber} (1v1)`, date: majorStart, estimated: true });
-    }
   }
   const lastMajorEnd = addDays(latestDate(majorStarts), totalStageDays(MAJOR_STAGES));
   const worldsStart = addDays(lastMajorEnd, WORLDS_DELAY_DAYS);
@@ -828,7 +850,12 @@ function ensureMajorsAndWorldsForDiscipline(table: InstanceTable, currentDate: S
   // champions instead of from two completed majors.
   const noMajorsThisSeason = rlcsStructureEra(seasonNumber) === "early";
 
-  if (!noMajorsThisSeason) {
+  // 1v1 no longer has majors at all (see ensureOneVOneWorlds) — its Worlds path is fed directly by each
+  // main region's Open champion instead. getMajorReadiness/findParent3v3Major/groupRegionsForDiscipline are
+  // left fully intact
+  // rather than stripped down to 3v3-only, since sanitizeMajorsAndWorlds still needs them to clean up any
+  // stale 1v1 major instances a save from before this change might still be carrying.
+  if (!noMajorsThisSeason && discipline === "3v3") {
     for (const group of MAJOR_GROUPS) {
       const activeId = Object.keys(table).find((id) => table[id].kind === "rlcs_major" && id.startsWith(`${majorIdPrefix}${group.id}_`) && !table[id].completed);
       if (activeId) {
@@ -854,7 +881,7 @@ function ensureMajorsAndWorldsForDiscipline(table: InstanceTable, currentDate: S
       table[id] = ensureStageBracketBuilt({
         id,
         kind: "rlcs_major",
-        label: `RLCS ${startDate.year} ${majorLocationForSeason(group.id, startDate.year)} Major${discipline === "1v1" ? " (1v1)" : ""}`,
+        label: `RLCS ${startDate.year} ${majorLocationForSeason(group.id, startDate.year)} Major`,
         region: null,
         startDate,
         stages: MAJOR_STAGES,
@@ -901,41 +928,6 @@ function ensureMajorsAndWorldsForDiscipline(table: InstanceTable, currentDate: S
     if (table[worldsId]) return changed; // this exact cycle's Worlds already ran
     startDate = readiness.scheduledStart;
     entrants = readiness.champs;
-    playInEntrants = entrants;
-  } else if (discipline === "1v1") {
-    // 1v1 Worlds rides the same event weekend as 3v3 Worlds (see findParent3v3Worlds) - hosted the same
-    // day, right after 3v3 Worlds actually concludes, not on its own independent WORLDS_DELAY_DAYS timer.
-    const parent3v3Worlds = findParent3v3Worlds(table);
-    if (!parent3v3Worlds) return changed;
-
-    const completedMajors = MAJOR_GROUPS.map((group) => {
-      let best: TournamentInstance | null = null;
-      for (const inst of Object.values(table)) {
-        if (inst.kind !== "rlcs_major" || !inst.id.startsWith(`${majorIdPrefix}${group.id}_`) || !inst.completed || !inst.championName) continue;
-        if (!best || daysBetween(best.stageStartDate, inst.stageStartDate) > 0) best = inst;
-      }
-      return best;
-    });
-    if (completedMajors.some((m) => m === null)) return changed; // both 1v1 majors have to be played first
-
-    const [major1, major2] = completedMajors as TournamentInstance[];
-    const readinessDate = latestDate([major1.stageStartDate, major2.stageStartDate, parent3v3Worlds.stageStartDate]);
-    worldsId = `${worldsIdPrefix}${dateKey(readinessDate)}`;
-    if (table[worldsId]) return changed; // this exact cycle's Worlds already ran
-
-    startDate = parent3v3Worlds.stageStartDate;
-    if (daysBetween(startDate, currentDate) < 0) return changed;
-
-    // 1v1 Worlds keeps the simpler pre-rework 4-team shape (champion + runner-up per major) - the 20-team
-    // Play-In/Group Stage/LCQ structure below is 3v3-specific, this discipline never uses stageByeTeams.
-    const majorEntrants = (major: TournamentInstance) =>
-      major.lastStandings
-        .filter((s) => s.placement === 1 || s.placement === 2)
-        .map((s) => ({ team: s.team, completionDate: major.stageStartDate, isPlayerChampion: major.playerTeamId === s.team.id && major.playerFinalPlacement === s.placement }));
-    const major1Entrants = majorEntrants(major1);
-    const major2Entrants = majorEntrants(major2);
-    if (major1Entrants.length < 2 || major2Entrants.length < 2) return changed;
-    entrants = [...major1Entrants, ...major2Entrants];
     playInEntrants = entrants;
   } else {
     const completedMajors = MAJOR_GROUPS.map((group) => {
@@ -1008,11 +1000,73 @@ function ensureMajorsAndWorldsForDiscipline(table: InstanceTable, currentDate: S
   return true;
 }
 
+/** 1v1's Worlds path, entirely separate from ensureMajorsAndWorldsForDiscipline (1v1 doesn't have majors -
+ *  its Worlds field comes directly from each RLCS_1V1_MAIN_REGIONS region's Open champion instead, real
+ *  RLCS 2025 1v1's own shape). Rides the same event weekend as 3v3 Worlds (findParent3v3Worlds), hosted the
+ *  same day, right after 3v3 Worlds actually concludes - same "same event weekend" mechanism 3v3's own
+ *  Worlds already uses. */
+function ensureOneVOneWorlds(table: InstanceTable, currentDate: SimDate): boolean {
+  const worldsIdPrefix = "worlds_1v1_";
+  const activeWorldsId = Object.keys(table).find((id) => table[id].kind === "rlcs_worlds" && id.startsWith(worldsIdPrefix) && !table[id].completed);
+  if (activeWorldsId) {
+    const advanced = advanceInstance(table[activeWorldsId], currentDate);
+    if (advanced !== table[activeWorldsId]) {
+      table[activeWorldsId] = advanced;
+      return true;
+    }
+    return false;
+  }
+
+  const parent3v3Worlds = findParent3v3Worlds(table);
+  if (!parent3v3Worlds) return false;
+
+  const { seasonNumber } = rlcsSeasonForDate(parent3v3Worlds.startDate);
+  const champs = RLCS_1V1_MAIN_REGIONS.map((region) => championForSeason(table, "1v1", region, seasonNumber));
+  if (champs.some((c) => c === null)) return false; // every main region's Open has to be done first
+  const readyChamps = champs as ChampionInfo[];
+
+  // Rides the same day 3v3 Worlds concludes ONLY when that day is already at or after every main region's
+  // Open finishing - the two tracks run fully independently, nothing guarantees 3v3 Worlds happens to land
+  // after 1v1's own Opens are done. Taking the later of the two is what actually keeps this "hosted after
+  // 3v3 Worlds" instead of sometimes dating itself before the Opens that feed it even ran.
+  const readinessDate = latestDate([...readyChamps.map((c) => c.completionDate), parent3v3Worlds.stageStartDate]);
+  const worldsId = `${worldsIdPrefix}${dateKey(readinessDate)}`;
+  if (table[worldsId]) return false; // this exact cycle's Worlds already ran
+
+  const startDate = readinessDate;
+  if (daysBetween(startDate, currentDate) < 0) return false;
+
+  const playerChamp = readyChamps.find((c) => c.isPlayerChampion) ?? null;
+  table[worldsId] = ensureStageBracketBuilt({
+    id: worldsId,
+    kind: "rlcs_worlds",
+    label: `RLCS ${startDate.year} World Championship (1v1)`,
+    region: null,
+    startDate,
+    stages: RLCS_1V1_WORLDS_STAGES,
+    stageIndex: 0,
+    stageStartDate: startDate,
+    currentTeams: readyChamps.map((c) => c.team),
+    lastStandings: [],
+    completed: false,
+    championName: null,
+    playerTeamId: playerChamp?.team.id ?? null,
+    playerBracket: playerChamp ? { teamId: playerChamp.team.id, wins: 0, losses: 0, eliminated: false, facedTeamIds: [] } : null,
+    pendingMatch: null,
+    playerFinalPlacement: null,
+    stageBrackets: {},
+    stageByeTeams: {},
+  });
+  return true;
+}
+
 function ensureMajorsAndWorlds(table: InstanceTable, currentDate: SimDate): boolean {
-  // 3v3 must run first: 1v1's major readiness (getMajorReadiness) looks up the parent 3v3 major in the
-  // SAME table, so it needs 3v3's pass to have already landed this cycle's major before 1v1 checks it.
+  // 3v3 must run first: 1v1 Worlds (ensureOneVOneWorlds) rides the same event weekend as 3v3 Worlds via
+  // findParent3v3Worlds, so it needs 3v3's pass to have already landed this cycle's Worlds completion
+  // before 1v1 checks it. 1v1 no longer has majors of its own (see ensureOneVOneWorlds's doc comment) - its
+  // Worlds field comes directly from each main region's Open champion instead.
   const b = ensureMajorsAndWorldsForDiscipline(table, currentDate, "3v3");
-  const a = ensureMajorsAndWorldsForDiscipline(table, currentDate, "1v1");
+  const a = ensureOneVOneWorlds(table, currentDate);
   return a || b;
 }
 

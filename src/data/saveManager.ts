@@ -14,6 +14,7 @@ import { exportRegionalRosterDataForSave, importRegionalRosterDataForSave } from
 import { exportAiTitleDataForSave, importAiTitleDataForSave } from "@/store/useAiTitleStore";
 import { exportProLeaderboardData, importProLeaderboardData } from "@/store/useProLeaderboardStore";
 import { exportFillerLeaderboardData, importFillerLeaderboardData } from "@/store/useLeaderboardFillerStore";
+import { exportWorldRecordDataForSave, importWorldRecordDataForSave } from "@/store/useWorldRecordStore";
 import { saveRegionToProRegion, exportTeamsCacheDataForSave, importTeamsCacheDataForSave } from "./tournaments";
 import { estimateRepsFromValue } from "./trainingMath";
 import { grantLevelTitles } from "./levelTitles";
@@ -139,6 +140,10 @@ function migrateSaveData(raw: any): SaveData {
   if (data.pendingShowmatchInvite === undefined) data.pendingShowmatchInvite = null;
   if (data.showmatchHistory === undefined) data.showmatchHistory = [];
   if (data.lastShowmatchInviteCheckDate === undefined) data.lastShowmatchInviteCheckDate = data.currentDate;
+  // Wallet didn't exist before - an old save didn't miss out on the fresh-save $100, it just hasn't had a
+  // chance to earn any yet, so backfill the same starting balance rather than 0.
+  if (data.cash === undefined) data.cash = 100;
+  if (data.cashHistory === undefined) data.cashHistory = [];
   if (data.recentlyPlayedWith === undefined) data.recentlyPlayedWith = [];
   if (data.partyMembers === undefined) data.partyMembers = [];
 
@@ -405,6 +410,8 @@ function createFreshSaveData(config: NewSaveConfig): SaveData {
     pendingShowmatchInvite: null,
     showmatchHistory: [],
     lastShowmatchInviteCheckDate: startDate,
+    cash: 100,
+    cashHistory: [],
     pendingPartyInvite: null,
     lastPartyInviteCheckDate: startDate,
     playerPfp: null,
@@ -448,6 +455,7 @@ export interface SaveExportBundle {
   proLeaderboard?: string | null;
   leaderboardFiller?: string | null;
   teamsCache?: string | null;
+  worldRecords?: string | null;
 }
 
 /** Builds the full export bundle for a save (see `SaveExportBundle`) — call with the save's own id (from
@@ -465,6 +473,7 @@ export function exportSaveBundle(saveId: string, data: SaveData): SaveExportBund
     proLeaderboard: exportProLeaderboardData(),
     leaderboardFiller: exportFillerLeaderboardData(),
     teamsCache: exportTeamsCacheDataForSave(saveId),
+    worldRecords: exportWorldRecordDataForSave(saveId),
   };
 }
 
@@ -504,6 +513,7 @@ export async function importSaveFile(raw: unknown): Promise<SaveSummary> {
     importProLeaderboardData(bundle.proLeaderboard);
     importFillerLeaderboardData(bundle.leaderboardFiller);
     importTeamsCacheDataForSave(id, bundle.teamsCache);
+    importWorldRecordDataForSave(id, bundle.worldRecords);
   }
 
   return (await listSaves()).find((s) => s.id === id)!;

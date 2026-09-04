@@ -6,7 +6,7 @@
 // met this AI before", so it must not bleed between unrelated save profiles the way the older stores do.
 
 import { create } from "zustand";
-import { tierMinMmr, mmrEraInflation, type RankEra } from "@/data/rankSystem";
+import { tierMinMmr, mmrEraInflation, realisticOneVOneMmr, type RankEra } from "@/data/rankSystem";
 import { hashString } from "@/data/proPlayers";
 import { estimateGameSenseForMmr, eloExpectedScore, eloKFactor } from "@/data/matchSim";
 import type { QueueMode } from "@/data/mockSave";
@@ -109,7 +109,8 @@ function reseedEntry(
   // is what actually makes the Top 50 board's floor climb season over season rather than just the real
   // pros individually pulling away from an otherwise-static grinder pool.
   const inflation = band === "low" ? 0 : mmrEraInflation(currentYear, era);
-  const targetMmr = floor + BAND_FLOOR_FRACTION[band] * BAND_CEILING_SPAN + spread + inflation;
+  const rawTargetMmr = floor + BAND_FLOOR_FRACTION[band] * BAND_CEILING_SPAN + spread + inflation;
+  const targetMmr = queue === "1v1" ? realisticOneVOneMmr(rawTargetMmr) : rawTargetMmr;
   const targetGameSense = estimateGameSenseForMmr(targetMmr, era, queue, currentYear);
   const targetMechanicalConsistency = targetGameSense * 0.9;
 
@@ -204,7 +205,12 @@ function catchUp(
   const base = existing && existing.seasonStartKey === key ? existing : reseedEntry(name, region, band, queue, era, currentYear, seasonStartDate, existing);
   // Guards against a pre-existing localStorage entry saved before `peakMmr` was tracked at all.
   const safeBase = typeof base.peakMmr === "number" ? base : { ...base, peakMmr: base.mmr };
-  return simulateForward(safeBase, name, region, currentDate, seasonStartDate);
+  const result = simulateForward(safeBase, name, region, currentDate, seasonStartDate);
+  // simulateForward's own game-by-game ELO walk pulls toward targetMmr (already realistically clamped, see
+  // reseedEntry) but doesn't hard-bound the walk itself - a long enough win streak can still random-walk
+  // past it, so 1v1 needs a final clamp here too.
+  if (queue !== "1v1") return result;
+  return { ...result, mmr: Math.round(realisticOneVOneMmr(result.mmr)), peakMmr: Math.round(realisticOneVOneMmr(result.peakMmr)) };
 }
 
 function loadStored(): RosterMmrTable {
@@ -308,7 +314,8 @@ export const useRegionalRosterStore = create<RegionalRosterState>((set, get) => 
     // the same amplified way a real placement result would, not the flat few-point delta an ordinary ranked
     // result gets.
     const effectiveDelta = entry.gamesPlayedThisSeason < PLACEMENT_GAMES ? Math.round(mmrDelta * PLACEMENT_MMR_AMPLIFIER) : mmrDelta;
-    const nextMmr = Math.max(0, entry.mmr + effectiveDelta);
+    const rawMmr = Math.max(0, entry.mmr + effectiveDelta);
+    const nextMmr = queue === "1v1" ? realisticOneVOneMmr(rawMmr) : rawMmr;
     const nextEntry: RosterMmrEntry = { ...entry, mmr: nextMmr, peakMmr: Math.max(entry.peakMmr, nextMmr) };
     const nextTable: RosterMmrTable = { ...state.mmr, [region]: { ...state.mmr[region], [name]: { ...state.mmr[region]?.[name], [queue]: nextEntry } } };
     set({ mmr: nextTable });

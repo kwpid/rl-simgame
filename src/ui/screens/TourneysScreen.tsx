@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSaveStore } from "@/store/useSaveStore";
-import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, getModernWorldsReadiness, projectedSeasonSchedule, effectiveRlcsSeason, type TournamentInstance, type RlcsDiscipline, type MajorReadiness, type EarlyEraWorldsReadiness, type ModernWorldsReadiness } from "@/store/useTournamentStore";
+import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, getModernWorldsReadiness, getOneVOneWorldsReadiness, projectedSeasonSchedule, effectiveRlcsSeason, type TournamentInstance, type RlcsDiscipline, type MajorReadiness, type EarlyEraWorldsReadiness, type ModernWorldsReadiness, type OneVOneWorldsReadiness } from "@/store/useTournamentStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
 import { TournamentBracket } from "./TournamentBracket";
 import {
@@ -23,6 +23,9 @@ import {
   lcqTitlesEarned,
   LCQ_REGIONS,
   RLCS_1V1_INTRODUCED_SEASON,
+  RLCS_1V1_MAIN_REGIONS,
+  openCashForPlacement,
+  oneVOneWorldsCashForPlacement,
   isLanEvent,
   worldsHostRegion,
 } from "@/data/tournaments";
@@ -121,6 +124,32 @@ function titlesEarnedForInstance(instance: TournamentInstance, placement: number
   return [];
 }
 
+/** Real cash payout for a completed instance's placement - scoped to exactly the two 1v1 events that
+ *  actually pay (Opens and 1v1 Worlds), everything else returns 0 (3v3 regional/major/Worlds/LCQ/Rival
+ *  Series aren't touched in this pass). */
+function cashForInstance(instance: TournamentInstance, placement: number): number {
+  if (instance.kind === "rlcs_1v1_regional") {
+    return openCashForPlacement(placement, !!instance.region && RLCS_1V1_MAIN_REGIONS.includes(instance.region));
+  }
+  if (instance.kind === "rlcs_worlds" && instance.id.startsWith("worlds_1v1_")) {
+    return oneVOneWorldsCashForPlacement(placement);
+  }
+  return 0;
+}
+
+function placementOrdinal(placement: number): string {
+  if (placement % 100 >= 11 && placement % 100 <= 13) return `${placement}th`;
+  const suffix = ["th", "st", "nd", "rd"][placement % 10] ?? "th";
+  return `${placement}${suffix}`;
+}
+
+function cashSourceLabelForInstance(instance: TournamentInstance, placement: number): string {
+  if (instance.kind === "rlcs_1v1_regional") {
+    return `1v1 Open — ${instance.region ? REGION_LABELS[instance.region] : "?"} (${placementOrdinal(placement)} place)`;
+  }
+  return "1v1 World Championship";
+}
+
 /** What the live match screen shows for a tournament series (see useMatchStore.ts's seriesLabel) - names
  *  the actual event/stage the player's about to play so it reads like a real broadcast graphic instead of
  *  a generic match. */
@@ -160,6 +189,7 @@ export function TourneysScreen() {
   const startTournamentSeries = useMatchStore((m) => m.startTournamentSeries);
   const matchPhase = useMatchStore((m) => m.phase);
   const addTitle = useSaveStore((st) => st.addTitle);
+  const addCash = useSaveStore((st) => st.addCash);
   const setTravelWindow = useSaveStore((st) => st.setTravelWindow);
   const clearExpiredTravelWindow = useSaveStore((st) => st.clearExpiredTravelWindow);
 
@@ -199,7 +229,17 @@ export function TourneysScreen() {
   useEffect(() => {
     for (const inst of Object.values(instances)) {
       if (!inst.completed || !inst.playerTeamId || inst.playerFinalPlacement === null) continue;
-      titlesEarnedForInstance(inst, inst.playerFinalPlacement).forEach((title) => addTitle(title));
+      const titles = titlesEarnedForInstance(inst, inst.playerFinalPlacement);
+      // Titles dedupe by id (addTitle no-ops on a title already held) - reusing that same guard here is
+      // what makes it safe to grant cash from this same reliably-every-tick sweep instead of a separate
+      // one-shot hook: if every title this placement earns is already in the collection, cash for it was
+      // already granted on an earlier tick too, so skip re-granting it.
+      const alreadyGranted = titles.length > 0 && titles.every((t) => s.titles.some((held) => held.id === t.id));
+      titles.forEach((title) => addTitle(title));
+      if (!alreadyGranted) {
+        const cash = cashForInstance(inst, inst.playerFinalPlacement);
+        if (cash > 0) addCash(cash, cashSourceLabelForInstance(inst, inst.playerFinalPlacement));
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentDate.year, currentDate.month, currentDate.day, instances]);
@@ -268,13 +308,18 @@ export function TourneysScreen() {
     return bestId;
   }
   const discipline: RlcsDiscipline = mode === "3v3" ? "3v3" : "1v1";
-  const majorIds = MAJOR_GROUPS.map((g) => latestInstanceId((inst) => inst.kind === "rlcs_major" && inst.id.startsWith(`major_${discipline}_${g.id}_`)));
+  // 1v1 no longer has majors at all (see useTournamentStore.ts's ensureOneVOneWorlds) - only 3v3 computes
+  // the majors-shaped readiness below, 1v1 gets its own Open-champion-based readiness instead.
+  const majorIds = discipline === "3v3" ? MAJOR_GROUPS.map((g) => latestInstanceId((inst) => inst.kind === "rlcs_major" && inst.id.startsWith(`major_3v3_${g.id}_`))) : [];
   const worldsId = latestInstanceId((inst) => inst.kind === "rlcs_worlds" && inst.id.startsWith(`worlds_${discipline}_`));
-  const majorReadiness = MAJOR_GROUPS.map((g) => getMajorReadiness(instances, discipline, g, currentDate));
+  const majorReadiness = discipline === "3v3" ? MAJOR_GROUPS.map((g) => getMajorReadiness(instances, "3v3", g, currentDate)) : [];
   // Early era (2015-2019) had no Major concept at all, Worlds forms straight from every region's regional
-  // champion instead, see getEarlyEraWorldsReadiness's doc comment.
-  const earlyEraWorldsReadiness = rlcsStructureEraNow === "early" ? getEarlyEraWorldsReadiness(instances, discipline, currentDate) : null;
-  const modernWorldsReadiness = rlcsStructureEraNow !== "early" ? getModernWorldsReadiness(instances, discipline, currentDate) : null;
+  // champion instead, see getEarlyEraWorldsReadiness's doc comment. 1v1 never runs in the early era (it
+  // doesn't exist before RLCS_1V1_INTRODUCED_SEASON, which is already the modern era), so both of these
+  // stay 3v3-only.
+  const earlyEraWorldsReadiness = discipline === "3v3" && rlcsStructureEraNow === "early" ? getEarlyEraWorldsReadiness(instances, "3v3", currentDate) : null;
+  const modernWorldsReadiness = discipline === "3v3" && rlcsStructureEraNow !== "early" ? getModernWorldsReadiness(instances, "3v3", currentDate) : null;
+  const oneVOneWorldsReadiness = discipline === "1v1" ? getOneVOneWorldsReadiness(instances, currentDate) : null;
   // LCQ is 3v3-only (its instance ids carry no discipline segment) and only exists from the modern era onward.
   const lcqIds =
     discipline === "3v3" && rlcsStructureEraNow !== "early"
@@ -523,7 +568,7 @@ export function TourneysScreen() {
         </div>
       )}
 
-      <div className="tourney-section-label">RLCS Season {rlcsSeasonNumber} — {mode} Regional (Your Region)</div>
+      <div className="tourney-section-label">RLCS Season {rlcsSeasonNumber} — {mode === "1v1" ? "1v1 Open" : "3v3 Regional"} (Your Region)</div>
       <div className="tourney-grid">
         {rlcsSchedule.map((item) => {
           const instance = instances[item.id];
@@ -641,10 +686,49 @@ export function TourneysScreen() {
             </button>
           </div>
         </>
+      ) : discipline === "1v1" ? (
+        <>
+          <div className="tourney-section-label" style={{ marginTop: "var(--space-5)" }}>
+            World Championship (1v1)
+          </div>
+          <div className="tourney-grid">
+            {!RLCS_1V1_MAIN_REGIONS.includes(playerProRegion) && (
+              <button className="tourney-tile" style={{ cursor: "default" }}>
+                <div className="tourney-tile-region">Your Region</div>
+                <div className="tourney-tile-status">{REGION_LABELS[playerProRegion]} isn't a Worlds-qualifying region — your Open still pays real cash, it just doesn't send a Worlds seed</div>
+              </button>
+            )}
+            <button
+              className={"tourney-tile" + (worldsId && selectedId === worldsId ? " tourney-tile-active" : "")}
+              onClick={() => worldsId && setSelectedId(worldsId)}
+            >
+              <div className="tourney-tile-region">
+                World Championship{worldsId && instances[worldsId]?.playerTeamId ? " ★" : ""}
+              </div>
+              <div className="tourney-tile-status">
+                {!worldsId || !instances[worldsId]
+                  ? oneVOneWorldsReadiness?.kind === "scheduled"
+                    ? (() => {
+                        const daysAway = daysBetween(currentDate, oneVOneWorldsReadiness.scheduledStart);
+                        return daysAway > 0 ? `Starts in ${daysAway}d` : "Starting soon";
+                      })()
+                    : oneVOneWorldsReadiness?.kind === "awaiting_opens"
+                      ? `Awaiting: ${oneVOneWorldsReadiness.missingRegions.map((r) => REGION_LABELS[r]).join(", ")}`
+                      : "Awaiting the regional Opens"
+                  : instances[worldsId].completed
+                    ? `World Champion: ${instances[worldsId].championName}`
+                    : `${instances[worldsId].stages[instances[worldsId].stageIndex].label}`}
+              </div>
+              {worldsId && instances[worldsId]?.playerTeamId && !instances[worldsId].completed && (
+                <div className="tourney-tile-qualified">This is Worlds — you're playing in it</div>
+              )}
+            </button>
+          </div>
+        </>
       ) : (
         <>
           <div className="tourney-section-label" style={{ marginTop: "var(--space-5)" }}>
-            Majors &amp; World Championship {mode === "1v1" ? "(1v1)" : "(3v3)"}
+            Majors &amp; World Championship (3v3)
           </div>
           <div className="tourney-grid">
             {MAJOR_GROUPS.map((group, i) => {

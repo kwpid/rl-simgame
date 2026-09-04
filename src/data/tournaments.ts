@@ -460,6 +460,12 @@ export function generateGlobalTeams(currentYear: number, seasonNumber: number, r
 
 export const RLCS_1V1_REGIONS: ProRegion[] = ["NA", "EU", "SAM", "OCE", "MENA", "APAC", "SSA"];
 
+/** Only these 4 regions' Open champion earns a 1v1 Worlds seed (see championForSeason usage in
+ *  useTournamentStore.ts's ensureOneVOneWorlds). The other 3 (OCE, APAC, SSA) still run Opens and pay real
+ *  cash, they just don't feed Worlds — a smaller/thinner-region consolation tier, same spirit as real
+ *  RLCS's own uneven region strength. */
+export const RLCS_1V1_MAIN_REGIONS: ProRegion[] = ["NA", "EU", "SAM", "MENA"];
+
 /** Builds a regional field of solo entrants: real active pros from that region fill in first (one per
  *  slot, no grouping), everything else is a generic filler player at amateur strength. */
 export function generateSoloEntrantsForRegion(region: ProRegion, currentYear: number, fieldSize: number, idPrefix: string): TournamentTeam[] {
@@ -492,12 +498,54 @@ export function generateSoloEntrantsForRegion(region: ProRegion, currentYear: nu
   return teams;
 }
 
-export const RLCS_1V1_REGIONAL_STAGES: StageConfig[] = [
-  { format: "double_elim", label: "Regional Open", entrants: 64, advanceCount: 16, days: 2 },
-  { format: "swiss", label: "Swiss Stage", entrants: 16, advanceCount: 8, days: 1 },
-  { format: "single_elim", label: "Regional Playoffs", entrants: 8, advanceCount: 1, days: 1 },
+/** Mirrors real RLCS 2025 1v1's own shape directly (per the design chat), built entirely from the engine's
+ *  existing 4 bracket formats — no new bracket-topology work, same "approximate with existing formats"
+ *  call made for the Worlds/LCQ rework. One Open per region per season (not the earlier 3-splits design,
+ *  which felt like busywork padding rather than a real event): Open double-elim -> Swiss -> GSL group ->
+ *  Playoffs, spread across real days (6 total) rather than resolving same-day. Games are Bo5 until the
+ *  Bo7 Playoffs, matching the real format exactly. */
+export const RLCS_1V1_OPEN_STAGES: StageConfig[] = [
+  { format: "double_elim", label: "Open Bracket", entrants: 64, advanceCount: 16, days: 2, bestOf: 5 },
+  { format: "swiss", label: "Swiss Stage", entrants: 16, advanceCount: 8, days: 1, bestOf: 5 },
+  { format: "gsl_group", label: "GSL Stage", entrants: 8, advanceCount: 4, days: 1, bestOf: 5 },
+  { format: "single_elim", label: "Playoffs", entrants: 4, advanceCount: 1, days: 2, bestOf: 7 },
 ];
-export const RLCS_1V1_REGIONAL_FIELD_SIZE = 64;
+export const RLCS_1V1_OPEN_FIELD_SIZE = 64;
+
+/** Day offset from the season's start date the Open starts (real RLCS runs 1v1 Opens in the gap after the
+ *  2nd 3v3 Major and before Worlds), and each region's own tighter stagger (7 regions, one Open each,
+ *  unlike 3v3's 5-region RLCS_REGION_STAGGER_DAYS) - together timed so the LAST region's Open (6-day
+ *  bracket included) finishes right around when 3v3 Worlds typically does (~day 126-132, see
+ *  MAJOR_DELAY_DAYS/WORLDS_DELAY_DAYS in useTournamentStore.ts), keeping 1v1 Worlds riding the same day
+ *  under normal pacing - ensureOneVOneWorlds's own "always after the Opens" guard is the real safety net. */
+export const RLCS_1V1_OPEN_OFFSET_DAYS = 95;
+const RLCS_1V1_OPEN_REGION_STAGGER_DAYS = 5;
+
+/** Flat cash tiers by placement bracket for a single region's Open (64-entrant field, paid deep - real
+ *  RLCS pays well past just the top few). Main regions (RLCS_1V1_MAIN_REGIONS) pay more than the smaller/
+ *  thinner secondary regions, same as real RLCS's own uneven region strength. */
+export function openCashForPlacement(placement: number, isMainRegion: boolean): number {
+  if (placement === 1) return isMainRegion ? 500 : 300;
+  if (placement === 2) return isMainRegion ? 300 : 180;
+  if (placement <= 4) return isMainRegion ? 150 : 90;
+  if (placement <= 8) return isMainRegion ? 80 : 50;
+  if (placement <= 16) return isMainRegion ? 40 : 25;
+  if (placement <= 32) return isMainRegion ? 20 : 15;
+  return 10;
+}
+
+/** 1v1 Worlds: single-elim, 4 entrants (each RLCS_1V1_MAIN_REGIONS's Open winner), all Bo7. */
+export const RLCS_1V1_WORLDS_STAGES: StageConfig[] = [
+  { format: "single_elim", label: "World Championship", entrants: 4, advanceCount: 1, days: 1, bestOf: 7 },
+];
+
+/** 1v1 Worlds prize pool, exactly as specified: $85,000 total. */
+export function oneVOneWorldsCashForPlacement(placement: number): number {
+  if (placement === 1) return 50000;
+  if (placement === 2) return 25000;
+  if (placement <= 4) return 5000;
+  return 0;
+}
 
 // --- Rival Series (2015-2019 only): the real developmental league beneath RLCS proper, a lower-stakes
 // on-ramp for teams that aren't ready for the main regional field yet. Deliberately amateur-only (no named
@@ -840,20 +888,23 @@ export function buildSeasonSchedule(seasonNumber: number, seasonStartDate: SimDa
 
   // 1v1 RLCS doesn't exist yet as its own discipline before RLCS_1V1_INTRODUCED_SEASON — 3v3 is the only
   // RLCS discipline for the sim's early years (real 2v2 wasn't added until later still and isn't built at
-  // all yet, a separate future addition). Once 1v1 does exist, it's a genuinely separate, parallel track —
-  // its own Opens/Majors/Worlds path, entirely independent of the 3v3 regional flow, not sequenced before
-  // or after it — so it staggers across its own (larger, 7-region) list from the same season start date
-  // 3v3 does, same as any other independent discipline.
+  // all yet, a separate future addition). Once 1v1 does exist, it mirrors real RLCS 2025 1v1's own shape:
+  // one multi-day Open per region per season (see RLCS_1V1_OPEN_STAGES), timed to land after 3v3's own
+  // majors wrap up (real RLCS runs its 1v1 Opens in the gap between the 2nd 3v3 Major and Worlds) and
+  // finish shortly before 3v3 Worlds typically does (~day 126-132, see MAJOR_DELAY_DAYS/WORLDS_DELAY_DAYS
+  // in useTournamentStore.ts) so 1v1 Worlds still rides the same day as intended under normal pacing -
+  // ensureOneVOneWorlds's own "always after the Opens" guard is the real safety net if a season ever runs
+  // unusually slow/fast.
   if (seasonNumber >= RLCS_1V1_INTRODUCED_SEASON) {
     RLCS_1V1_REGIONS.forEach((region, i) => {
       schedule.push({
         id: `rlcs1v1_s${seasonNumber}_${region}`,
         kind: "rlcs_1v1_regional" as const,
-        label: `1v1 Regional Season ${seasonNumber} — ${REGION_LABELS[region]}`,
+        label: `1v1 Open Season ${seasonNumber} — ${REGION_LABELS[region]}`,
         region,
-        startDate: addDays(seasonStartDate, i * RLCS_REGION_STAGGER_DAYS),
-        stages: RLCS_1V1_REGIONAL_STAGES,
-        fieldSize: RLCS_1V1_REGIONAL_FIELD_SIZE,
+        startDate: addDays(seasonStartDate, RLCS_1V1_OPEN_OFFSET_DAYS + i * RLCS_1V1_OPEN_REGION_STAGGER_DAYS),
+        stages: RLCS_1V1_OPEN_STAGES,
+        fieldSize: RLCS_1V1_OPEN_FIELD_SIZE,
       });
     });
   }

@@ -9,6 +9,7 @@ import { useMatchStore } from "@/store/useMatchStore";
 import { useSaveStore } from "@/store/useSaveStore";
 import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
+import { useWorldRecordStore } from "@/store/useWorldRecordStore";
 import { regionalGrinderRoster } from "@/data/regionalGrinders";
 import { activeProPlayers, PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
 import { flattenProgress, flattenReps } from "@/data/matchSim";
@@ -83,6 +84,7 @@ export function RankedScreen() {
   const ensureProsSeeded = useProLeaderboardStore((store) => store.ensureSeeded);
   const regionalRosterMmrTable = useRegionalRosterStore((store) => store.mmr);
   const ensureRegionalRosterSeeded = useRegionalRosterStore((store) => store.ensureSeeded);
+  const reportLeader = useWorldRecordStore((store) => store.reportLeader);
   const currentYear = s.currentDate.year;
   const activePros = activeProPlayers(currentYear);
   const friendList = Object.values(s.friends);
@@ -157,6 +159,19 @@ export function RankedScreen() {
     : leaderboardFilter === "region" ? `${PRO_REGION_LABELS[playerProRegion]} Leaderboard`
     : "Friends Leaderboard";
   const topRankTier = era === "modern" ? "ssl" : "grand_champion";
+
+  // World record check: whoever's genuinely #1 worldwide right now (independent of whichever leaderboard
+  // filter tab happens to be selected - region/friends only show a subset, not the true global #1), so the
+  // player doesn't have to specifically be looking at the Global tab for a new record to register.
+  const globalTop = (profile.placementMatchesRemaining > 0 ? [...proRows, ...grinderRows] : [...proRows, ...grinderRows, selfRow]).sort(
+    (a, b) => b.mmr - a.mmr
+  )[0];
+  useEffect(() => {
+    if (globalTop && globalTop.mmr > 0) {
+      reportLeader(queue, globalTop.mmr, globalTop.name, s.seasonNumber, s.currentDate.year);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, globalTop?.name, globalTop?.mmr]);
 
   const matchPhase = useMatchStore((m) => m.phase);
   const queuedModes = useMatchStore((m) => m.queuedModes);

@@ -8,6 +8,7 @@ import {
   type ShowmatchInvite,
   type PartyInvite,
   type ShowmatchResultEntry,
+  type CashHistoryEntry,
   type OrgInvite,
   type OrgTryout,
   type OrgNewsEntry,
@@ -18,7 +19,7 @@ import {
 } from "@/data/mockSave";
 import { TACTICAL_FOUNDATION_CATEGORIES, type FoundationCategory } from "@/data/mechanics";
 import { addDays, daysBetween, type SimDate } from "@/data/dateUtils";
-import { eraForDate, deriveRankFromMmr, divisionProgressFromMmr, tierRank, type RankTierId, type RankEra } from "@/data/rankSystem";
+import { eraForDate, deriveRankFromMmr, divisionProgressFromMmr, tierRank, realisticOneVOneMmr, type RankTierId, type RankEra } from "@/data/rankSystem";
 import { SEASON_LENGTH_DAYS, seasonEndDate, seasonTitlesFor, softResetMmr, applyRewardProgress, rewardTierSequence, REWARD_WINS_REQUIRED, PLACEMENT_MMR_AMPLIFIER, type TitleEntry } from "@/data/seasons";
 
 export { PLACEMENT_MMR_AMPLIFIER };
@@ -40,7 +41,7 @@ import {
 import { ORG_NAMES, saveRegionToProRegion, rlcsSeasonPhase, rlcsSeasonForDate, realTeamsForRegion } from "@/data/tournaments";
 import { QUEUES } from "@/data/queues";
 import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
-import { useTournamentStore, effectiveRlcsSeason, projectedSeasonSchedule, REGISTRATION_WINDOW_DAYS } from "@/store/useTournamentStore";
+import { useTournamentStore, effectiveRlcsSeason, projectedSeasonSchedule, REGISTRATION_WINDOW_DAYS, findRealRlcsTitlesForPlayer } from "@/store/useTournamentStore";
 import { diminishingGain, fatiguePenalty, estimateRepsFromValue } from "@/data/trainingMath";
 import { derivePlaystyleProfiles } from "@/data/playstyleDerivation";
 import { grantLevelTitles } from "@/data/levelTitles";
@@ -113,6 +114,7 @@ const FRIEND_MOMENTS_LIMIT = 6;
 const SHOWMATCH_INVITE_CHECK_INTERVAL_DAYS = 3;
 const SHOWMATCH_INVITE_EXPIRY_DAYS = 5;
 const SHOWMATCH_HISTORY_LIMIT = 20;
+const CASH_HISTORY_LIMIT = 30;
 
 // A brand-new friend isn't a stranger (you presumably got along well enough to add them), but hasn't
 // built real queue-buddy chemistry yet either — that only comes from actually partying up and playing
@@ -294,6 +296,11 @@ interface SaveStoreState extends SaveData {
   /** Grants the Fame reward and logs the result, called once the exhibition match itself (run through
    *  useMatchStore like a tournament series) actually completes. */
   recordShowmatchResult: (win: boolean) => void;
+
+  /** Adds (or, in principle, subtracts with a negative amount, though nothing does that yet) to the
+   *  player's wallet and logs why, newest-first, capped the same way showmatchHistory is. Earn-side only
+   *  for now — no spend sink exists yet, same as how Fame has none either. */
+  addCash: (amount: number, source: string) => void;
 
   /** Org/pro-scene track, entirely separate from ranked (see mockSave.ts's OrgContract doc comment).
    *  Date-gated same as showmatches: 2v2 rank is a simple hard gate (meetsOrgRankRequirement), then the
@@ -567,7 +574,8 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     const placementsRemaining = Math.max(0, profile.placementMatchesRemaining - 1);
     const justFinishedPlacements = inPlacements && placementsRemaining === 0;
 
-    const newMmr = Math.max(0, Math.round(profile.mmr + mmrDelta * (inPlacements ? PLACEMENT_MMR_AMPLIFIER : 1)));
+    const rawMmr = Math.max(0, Math.round(profile.mmr + mmrDelta * (inPlacements ? PLACEMENT_MMR_AMPLIFIER : 1)));
+    const newMmr = queue === "1v1" ? Math.round(realisticOneVOneMmr(rawMmr)) : rawMmr;
     const isNewPeakMmr = newMmr > profile.peakMmr;
     const era = eraForDate(state.currentDate);
     // Tier/division come straight from the new MMR every match (once placements are done), not an
@@ -928,7 +936,12 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     if (daysBetween(state.lastShowmatchInviteCheckDate, currentDate) < SHOWMATCH_INVITE_CHECK_INTERVAL_DAYS) return;
 
     const profile = state.rankedProfiles["1v1"];
-    const candidates = profile.placementMatchesRemaining > 0 ? [] : eligibleStreamers(profile.mmr, profile.rankTier, era);
+    const profile2v2 = state.rankedProfiles["2v2"];
+    const hasRealRlcsTitle = findRealRlcsTitlesForPlayer(state.displayName, currentYear).length > 0;
+    const candidates =
+      profile.placementMatchesRemaining > 0
+        ? []
+        : eligibleStreamers(profile.mmr, profile.rankTier, era, profile2v2.mmr, profile2v2.rankTier, hasRealRlcsTitle);
     const picked = candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : null;
     const streamer = picked && Math.random() < picked.inviteChance ? picked : null;
 
@@ -966,6 +979,19 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       pendingShowmatchInvite: null,
       showmatchHistory: [entry, ...state.showmatchHistory].slice(0, SHOWMATCH_HISTORY_LIMIT),
       player: { ...state.player, fame: state.player.fame + fameGained },
+    });
+    if (win && streamer) {
+      const [min, max] = streamer.cashReward.win;
+      get().addCash(Math.round(min + Math.random() * (max - min)), `${streamer.name} Showmatch Win`);
+    }
+  },
+
+  addCash: (amount, source) => {
+    const state = get();
+    const entry: CashHistoryEntry = { source, amount, date: state.currentDate };
+    set({
+      cash: Math.max(0, state.cash + amount),
+      cashHistory: [entry, ...state.cashHistory].slice(0, CASH_HISTORY_LIMIT),
     });
   },
 
