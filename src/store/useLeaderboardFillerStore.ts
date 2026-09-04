@@ -73,7 +73,10 @@ function reseedEntry(
   previous: FillerMmrEntry | undefined
 ): FillerMmrEntry {
   const floor = tierMinMmr(era === "modern" ? "ssl" : "grand_champion", era, queue);
-  const spread = hashString(name + queue) % 450;
+  // 1v1 gets a much wider raw spread than 2v2/3v3 - realisticOneVOneMmr's post-compression squash toward
+  // the real-world record only reads as a real spread if the population feeding it has real variety to
+  // begin with (a narrow raw cluster just compresses to an even narrower one).
+  const spread = queue === "1v1" ? hashString(name + queue) % 1100 : hashString(name + queue) % 450;
   const rawTargetMmr = floor + 100 + spread;
   const targetMmr = queue === "1v1" ? realisticOneVOneMmr(rawTargetMmr) : rawTargetMmr;
   const targetGameSense = estimateGameSenseForMmr(targetMmr, era, queue, currentYear);

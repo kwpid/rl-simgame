@@ -102,14 +102,21 @@ function reseedEntry(
   previous: RosterMmrEntry | undefined
 ): RosterMmrEntry {
   const floor = tierMinMmr(era === "modern" ? "ssl" : "grand_champion", era, queue);
-  const spread = hashString(`${name}${region}${queue}`) % BAND_SPREAD[band];
+  // 1v1's own post-compression realisticOneVOneMmr squashes the top of the ladder toward the real-world
+  // record - feeding it a wider raw spread than 2v2/3v3 get is what actually keeps that squash from reading
+  // as "everyone near the top converges on the same 2-3 numbers" (a narrow raw cluster compresses to an
+  // even narrower one, no matter how the compression curve itself is tuned - the fix has to happen before
+  // that step, giving the population genuine variety to begin with).
+  const spreadRange = queue === "1v1" ? BAND_SPREAD[band] * 2.5 : BAND_SPREAD[band];
+  const ceilingSpan = queue === "1v1" ? BAND_CEILING_SPAN * 1.4 : BAND_CEILING_SPAN;
+  const spread = hashString(`${name}${region}${queue}`) % spreadRange;
   // "low" band deliberately sits out the era creep below — those are just regular ranked-ladder regulars,
   // not remotely leaderboard/RLCS caliber, and shouldn't drift toward SSL+ just because the years pass.
   // Every other band tracks the same rising ceiling real pros get (see proPlayers.ts's seedProMmr), which
   // is what actually makes the Top 50 board's floor climb season over season rather than just the real
   // pros individually pulling away from an otherwise-static grinder pool.
   const inflation = band === "low" ? 0 : mmrEraInflation(currentYear, era);
-  const rawTargetMmr = floor + BAND_FLOOR_FRACTION[band] * BAND_CEILING_SPAN + spread + inflation;
+  const rawTargetMmr = floor + BAND_FLOOR_FRACTION[band] * ceilingSpan + spread + inflation;
   const targetMmr = queue === "1v1" ? realisticOneVOneMmr(rawTargetMmr) : rawTargetMmr;
   const targetGameSense = estimateGameSenseForMmr(targetMmr, era, queue, currentYear);
   const targetMechanicalConsistency = targetGameSense * 0.9;

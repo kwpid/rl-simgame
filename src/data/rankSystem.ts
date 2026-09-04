@@ -135,7 +135,7 @@ function rankBrackets(era: RankEra, queue: RankQueue): RankBracket[] {
       { tier: "diamond", min: 860 },
       { tier: "champion", min: 1060 },
       { tier: "grand_champion", min: 1300 },
-      { tier: "ssl", min: 1600 },
+      { tier: "ssl", min: 1400 },
     ],
     "2v2": [
       { tier: "bronze", min: 0 },
@@ -203,12 +203,18 @@ export function experienceGrowth(years: number, perYear: number, diminishingScal
  *  asymptote, so only the most extreme rolls ever land anywhere close to it ("very very rarely" exceed
  *  ~1800, matching the design chat). */
 export const ONE_V_ONE_MMR_RECORD = 1814;
-const ONE_V_ONE_MMR_SOFT_FLOOR = 1650;
+// Matches the SSL floor below (1400) - anyone whose raw seed doesn't even clear it passes through
+// untouched, same as before. The softness denominator (900, not 250) is deliberately wide: a narrower one
+// squashed the whole practical raw range (1500-3000+) into a tiny ~50-point band right above the floor,
+// which read as the Top 100 all bunching on 2-3 exact numbers instead of a real spread. A wider denominator
+// means a genuinely stronger raw seed still ends up meaningfully higher, not just asymptotically the same
+// as everyone else - real separation across the ladder, still never reaching the record.
+const ONE_V_ONE_MMR_SOFT_FLOOR = 1400;
 export function realisticOneVOneMmr(raw: number): number {
   if (raw <= ONE_V_ONE_MMR_SOFT_FLOOR) return raw;
   const excess = raw - ONE_V_ONE_MMR_SOFT_FLOOR;
   const span = ONE_V_ONE_MMR_RECORD - ONE_V_ONE_MMR_SOFT_FLOOR;
-  return ONE_V_ONE_MMR_SOFT_FLOOR + span * (excess / (excess + 250));
+  return ONE_V_ONE_MMR_SOFT_FLOOR + span * (excess / (excess + 900));
 }
 
 /** How much the competitive MMR ceiling has crept up since the Sept 2020 relaunch, independent of any one
