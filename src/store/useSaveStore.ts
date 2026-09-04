@@ -415,6 +415,10 @@ interface SaveStoreState extends SaveData {
    *  screen's own schedule panel reads, so it lands exactly where that panel says the next event is.
    *  No-op if nothing's scheduled ahead of the current date (shouldn't happen in practice). */
   devSkipToNextRlcsEvent: () => void;
+  /** Dev-only: jumps the save's current date straight to a given year, keeping the same month/day. Doesn't
+   *  touch any other date-derived state (season numbers, event schedules, etc.) - those all just re-derive
+   *  from the new currentDate the same way they would from a normal multi-year clock advance. */
+  devSetYear: (year: number) => void;
 }
 
 function rollClock(
@@ -1589,5 +1593,10 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
     if (!next) return;
     const targetDate = next.estimated ? next.date : addDays(next.date, -REGISTRATION_WINDOW_DAYS);
     get().advanceClock(daysBetween(state.currentDate, targetDate) * 24);
+  },
+
+  devSetYear: (year) => {
+    const state = get();
+    set({ currentDate: { ...state.currentDate, year: Math.max(1, Math.round(year)) } });
   },
 }));

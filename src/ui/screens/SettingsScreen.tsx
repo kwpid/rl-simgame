@@ -467,6 +467,7 @@ function DeveloperToolsSection() {
   const devSetCareerStats = useSaveStore((store) => store.devSetCareerStats);
   const devSetSeasonNumber = useSaveStore((store) => store.devSetSeasonNumber);
   const devSetLevel = useSaveStore((store) => store.devSetLevel);
+  const devSetYear = useSaveStore((store) => store.devSetYear);
   const resetProLeaderboard = useProLeaderboardStore((store) => store.resetAll);
   const resetFillerLeaderboard = useLeaderboardFillerStore((store) => store.resetAll);
   const resetRegionalRoster = useRegionalRosterStore((store) => store.resetAll);
@@ -490,6 +491,7 @@ function DeveloperToolsSection() {
   const [rewardWins, setRewardWins] = useState("0");
   const [seasonNumberValue, setSeasonNumberValue] = useState(String(s.seasonNumber));
   const [levelValue, setLevelValue] = useState(String(s.level));
+  const [yearValue, setYearValue] = useState(String(s.currentDate.year));
   const [titleSeasonValue, setTitleSeasonValue] = useState(String(s.seasonNumber));
   const [titleTier, setTitleTier] = useState<"grand_champion" | "ssl">("ssl");
   const [careerStatsQueue, setCareerStatsQueue] = useState<QueueMode>("2v2");
@@ -842,6 +844,23 @@ function DeveloperToolsSection() {
               />
               <button className="dev-btn" onClick={() => devSetLevel(Number(levelValue) || 1)}>
                 Set (grants every level title you'd have earned by then)
+              </button>
+            </div>
+          </div>
+
+          <div className="dev-tools-group">
+            <span className="dev-tools-label">Change Year</span>
+            <div className="dev-tools-row">
+              <input
+                className="dev-input"
+                type="number"
+                min={1}
+                value={yearValue}
+                onChange={(e) => setYearValue(e.target.value)}
+                title="Current save year (month/day unchanged)"
+              />
+              <button className="dev-btn" onClick={() => devSetYear(Number(yearValue) || s.currentDate.year)}>
+                Set
               </button>
             </div>
           </div>
