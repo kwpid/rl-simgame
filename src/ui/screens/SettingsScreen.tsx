@@ -14,7 +14,7 @@ import { useProLeaderboardStore } from "@/store/useProLeaderboardStore";
 import { useLeaderboardFillerStore } from "@/store/useLeaderboardFillerStore";
 import { useTournamentStore } from "@/store/useTournamentStore";
 import { useRegionalRosterStore } from "@/store/useRegionalRosterStore";
-import { rlcsSeasonForDate } from "@/data/tournaments";
+import { rlcsSeasonForDate, titlesEarnedForKind, LCQ_REGIONS, REGION_LABELS as PRO_REGION_LABELS, type TournamentKind } from "@/data/tournaments";
 import { seasonTitleFor } from "@/data/seasons";
 import { activeProPlayers, type ProRegion } from "@/data/proPlayers";
 import { usePfpStore } from "@/store/usePfpStore";
@@ -494,6 +494,12 @@ function DeveloperToolsSection() {
   const [yearValue, setYearValue] = useState(String(s.currentDate.year));
   const [titleSeasonValue, setTitleSeasonValue] = useState(String(s.seasonNumber));
   const [titleTier, setTitleTier] = useState<"grand_champion" | "ssl">("ssl");
+  const [tourneyTitleKind, setTourneyTitleKind] = useState<TournamentKind>("rlcs_regional");
+  const [tourneyTitleYear, setTourneyTitleYear] = useState(String(s.currentDate.year));
+  const [tourneyTitlePlacement, setTourneyTitlePlacement] = useState("1");
+  const [tourneyTitleDiscipline, setTourneyTitleDiscipline] = useState<"3v3" | "1v1">("3v3");
+  const [tourneyTitleMajorLocation, setTourneyTitleMajorLocation] = useState("Major");
+  const [tourneyTitleLcqRegion, setTourneyTitleLcqRegion] = useState<ProRegion>(LCQ_REGIONS[0]);
   const [careerStatsQueue, setCareerStatsQueue] = useState<QueueMode>("2v2");
   const [careerWinsValue, setCareerWinsValue] = useState(String(s.careerStats["2v2"].wins));
   const [careerLossesValue, setCareerLossesValue] = useState(String(s.careerStats["2v2"].losses));
@@ -893,6 +899,79 @@ function DeveloperToolsSection() {
                 }}
               >
                 Grant Season Title
+              </button>
+            </div>
+          </div>
+
+          <div className="dev-tools-group">
+            <span className="dev-tools-label">Grant Tournament Title (any year)</span>
+            <div className="dev-tools-row">
+              <select className="dev-select" value={tourneyTitleKind} onChange={(e) => setTourneyTitleKind(e.target.value as TournamentKind)}>
+                <option value="rlcs_regional">Regional</option>
+                <option value="rlcs_major">Major</option>
+                <option value="rlcs_worlds">World Championship</option>
+                <option value="rlrs_regional">Rival Series</option>
+                <option value="rlcs_lcq">Last Chance Qualifier</option>
+              </select>
+              <input
+                className="dev-input"
+                type="number"
+                min={1}
+                value={tourneyTitleYear}
+                onChange={(e) => setTourneyTitleYear(e.target.value)}
+                title="Which year this title is for"
+              />
+              <input
+                className="dev-input"
+                type="number"
+                min={1}
+                value={tourneyTitlePlacement}
+                onChange={(e) => setTourneyTitlePlacement(e.target.value)}
+                title="Final placement (1 = champion)"
+              />
+            </div>
+            <div className="dev-tools-row">
+              {tourneyTitleKind !== "rlrs_regional" && tourneyTitleKind !== "rlcs_lcq" && (
+                <select className="dev-select" value={tourneyTitleDiscipline} onChange={(e) => setTourneyTitleDiscipline(e.target.value as "3v3" | "1v1")}>
+                  <option value="3v3">3v3</option>
+                  <option value="1v1">1v1</option>
+                </select>
+              )}
+              {tourneyTitleKind === "rlcs_major" && (
+                <input
+                  className="dev-input"
+                  type="text"
+                  value={tourneyTitleMajorLocation}
+                  onChange={(e) => setTourneyTitleMajorLocation(e.target.value)}
+                  title="Major location (e.g. London)"
+                />
+              )}
+              {tourneyTitleKind === "rlcs_lcq" && (
+                <select className="dev-select" value={tourneyTitleLcqRegion} onChange={(e) => setTourneyTitleLcqRegion(e.target.value as ProRegion)}>
+                  {LCQ_REGIONS.map((region) => (
+                    <option key={region} value={region}>
+                      {PRO_REGION_LABELS[region]}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                className="dev-btn"
+                onClick={() => {
+                  const year = Math.max(1, Math.round(Number(tourneyTitleYear) || s.currentDate.year));
+                  const placement = Math.max(1, Math.round(Number(tourneyTitlePlacement) || 1));
+                  const titles = titlesEarnedForKind(
+                    tourneyTitleKind,
+                    year,
+                    placement,
+                    tourneyTitleMajorLocation,
+                    tourneyTitleDiscipline,
+                    tourneyTitleLcqRegion
+                  );
+                  titles.forEach((title) => addTitle(title));
+                }}
+              >
+                Grant (also grants any lower cascade tiers earned along the way)
               </button>
             </div>
           </div>
