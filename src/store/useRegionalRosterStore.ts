@@ -79,6 +79,17 @@ export interface RosterMmrEntry {
 type RegionMmrTable = Record<string, Partial<Record<QueueMode, RosterMmrEntry>>>;
 type RosterMmrTable = Partial<Record<ProRegion, RegionMmrTable>>;
 
+/** Deterministic stand-in for Math.random() in the catch-up walk below - same seed always produces the
+ *  same [0,1) roll. The catch-up walk gets re-run from the same starting point more often than a purely
+ *  in-memory simulation would (any read while off-season/mid-catch-up recomputes it), so using REAL
+ *  Math.random() there meant re-visiting a leaderboard could reroll the same batch of "already happened"
+ *  games and land on a genuinely different final MMR each time - the exact "everyone's numbers keep
+ *  changing" bug this fixes. Keying by the game's own absolute index makes the whole walk a pure function
+ *  of the starting entry, so replaying it is idempotent no matter how many times it's re-triggered. */
+function seededRoll(seed: string): number {
+  return (hashString(seed) % 1_000_000) / 1_000_000;
+}
+
 function seasonKey(seasonStartDate: SimDate): string {
   return `${seasonStartDate.year}-${seasonStartDate.month}-${seasonStartDate.day}`;
 }
@@ -174,11 +185,12 @@ function simulateForward(entry: RosterMmrEntry, name: string, region: ProRegion,
   let { mmr, gameSense, mechanicalConsistency, gamesPlayedThisSeason, peakMmr } = entry;
   for (let i = 0; i < gamesBehind; i++) {
     const isPlacement = gamesPlayedThisSeason < PLACEMENT_GAMES;
-    const oppRating = mmr + (Math.random() - 0.5) * 2 * 350;
+    const gameSeed = `${name}${region}#catchup#${gamesPlayedThisSeason}`;
+    const oppRating = mmr + (seededRoll(gameSeed + "#opp") - 0.5) * 2 * 350;
     const expected = eloExpectedScore(mmr, oppRating);
     const skillPull = (entry.targetMmr - mmr) / 1600;
     const winProb = Math.max(0.05, Math.min(0.95, expected + skillPull));
-    const won = Math.random() < winProb;
+    const won = seededRoll(gameSeed + "#win") < winProb;
     const k = isPlacement ? ELO_K_PLACEMENT : eloKFactor(mmr);
     mmr = Math.max(0, mmr + k * ((won ? 1 : 0) - expected));
     gameSense += (entry.targetGameSense - gameSense) * STAT_CLOSE_RATE;

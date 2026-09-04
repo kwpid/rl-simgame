@@ -43,6 +43,13 @@ interface ProMmrEntry {
 
 type ProMmrTable = Record<string, Partial<Record<QueueMode, ProMmrEntry>>>;
 
+/** Deterministic stand-in for Math.random() in the catch-up walk below - see useRegionalRosterStore.ts's
+ *  identical helper for why (re-running the same walk from the same starting point must always land on
+ *  the same result, or a leaderboard visit can reroll "already happened" games into a different MMR). */
+function seededRoll(seed: string): number {
+  return (hashString(seed) % 1_000_000) / 1_000_000;
+}
+
 function seasonKey(seasonStartDate: SimDate): string {
   return `${seasonStartDate.year}-${seasonStartDate.month}-${seasonStartDate.day}`;
 }
@@ -170,13 +177,14 @@ function simulateForward(entry: ProMmrEntry, proName: string, currentDate: SimDa
   let { mmr, gameSense, mechanicalConsistency, gamesPlayedThisSeason, peakMmr } = entry;
   for (let i = 0; i < gamesBehind; i++) {
     const isPlacement = gamesPlayedThisSeason < PLACEMENT_GAMES;
-    const oppRating = mmr + (Math.random() - 0.5) * 2 * 350;
+    const gameSeed = `${proName}#catchup#${gamesPlayedThisSeason}`;
+    const oppRating = mmr + (seededRoll(gameSeed + "#opp") - 0.5) * 2 * 350;
     const expected = eloExpectedScore(mmr, oppRating);
     // A slight pull toward their real target skill so they trend the right direction over a season
     // instead of a pure random walk, without ever guaranteeing a given game's result.
     const skillPull = (entry.targetMmr - mmr) / 1600;
     const winProb = Math.max(0.05, Math.min(0.95, expected + skillPull));
-    const won = Math.random() < winProb;
+    const won = seededRoll(gameSeed + "#win") < winProb;
     const k = isPlacement ? ELO_K_PLACEMENT : eloKFactor(mmr);
     mmr = Math.max(0, mmr + k * ((won ? 1 : 0) - expected));
     gameSense += (entry.targetGameSense - gameSense) * STAT_CLOSE_RATE;
