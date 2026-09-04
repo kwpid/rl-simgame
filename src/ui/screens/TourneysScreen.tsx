@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useSaveStore } from "@/store/useSaveStore";
-import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, projectedSeasonSchedule, effectiveRlcsSeason, type TournamentInstance, type RlcsDiscipline, type MajorReadiness, type EarlyEraWorldsReadiness } from "@/store/useTournamentStore";
+import { useTournamentStore, REGISTRATION_WINDOW_DAYS, getMajorReadiness, getEarlyEraWorldsReadiness, getModernWorldsReadiness, projectedSeasonSchedule, effectiveRlcsSeason, type TournamentInstance, type RlcsDiscipline, type MajorReadiness, type EarlyEraWorldsReadiness, type ModernWorldsReadiness } from "@/store/useTournamentStore";
 import { useMatchStore, type SelfStats } from "@/store/useMatchStore";
 import { TournamentBracket } from "./TournamentBracket";
 import {
   REGION_LABELS,
   regionalSlotLabel,
   MAJOR_GROUPS,
+  majorLocationForSeason,
   buildSeasonSchedule,
   rlcsStructureEra,
   saveRegionToProRegion,
@@ -18,6 +19,9 @@ import {
   worldsTitlesEarned,
   rivalSeriesTitleFor,
   rivalSeriesTitlesEarned,
+  lcqTitleFor,
+  lcqTitlesEarned,
+  LCQ_REGIONS,
   RLCS_1V1_INTRODUCED_SEASON,
   isLanEvent,
   worldsHostRegion,
@@ -52,7 +56,7 @@ function regionalOverviewStatus(instance: TournamentInstance | undefined, startD
 /** Same idea as `regionalOverviewStatus` but for a Major/Worlds group, which isn't calendar-scheduled —
  *  it only has a real `startDate` once its prerequisites are actually done (see `MajorReadiness`/
  *  `EarlyEraWorldsReadiness`), otherwise it shows what it's still waiting on. */
-function majorOverviewStatus(instance: TournamentInstance | undefined, readiness: MajorReadiness | EarlyEraWorldsReadiness, currentDate: SimDate): string {
+function majorOverviewStatus(instance: TournamentInstance | undefined, readiness: MajorReadiness | EarlyEraWorldsReadiness | ModernWorldsReadiness, currentDate: SimDate): string {
   if (instance) {
     if (instance.completed) return `Champion: ${instance.championName}`;
     return `${instance.stages[instance.stageIndex].label} · ${instance.currentTeams.length} left`;
@@ -62,6 +66,7 @@ function majorOverviewStatus(instance: TournamentInstance | undefined, readiness
     return daysAway > 0 ? `Starts in ${daysAway}d` : "Starting soon";
   }
   if (readiness.kind === "awaiting_3v3_major") return "Awaiting the 3v3 Major to conclude";
+  if (readiness.kind === "awaiting_majors") return `Awaiting: ${readiness.missingLocations.join(", ")} Major${readiness.missingLocations.length > 1 ? "s" : ""}`;
   return `Awaiting: ${readiness.missingRegions.map((r) => REGION_LABELS[r]).join(", ")}`;
 }
 
@@ -90,10 +95,11 @@ function titleForInstance(instance: TournamentInstance, placement: number | null
   if (instance.kind === "rlcs_major") {
     const groupId = instance.id.split("_")[2];
     const group = MAJOR_GROUPS.find((g) => g.id === groupId);
-    return majorTitleFor(year, placement, group?.location ?? "Major", discipline);
+    return majorTitleFor(year, placement, group ? majorLocationForSeason(group.id, year) : "Major", discipline);
   }
   if (instance.kind === "rlcs_worlds") return worldsTitleFor(year, placement, discipline);
   if (instance.kind === "rlrs_regional") return rivalSeriesTitleFor(year, placement);
+  if (instance.kind === "rlcs_lcq" && instance.region) return lcqTitleFor(year, instance.region, placement);
   return null;
 }
 
@@ -107,11 +113,33 @@ function titlesEarnedForInstance(instance: TournamentInstance, placement: number
   if (instance.kind === "rlcs_major") {
     const groupId = instance.id.split("_")[2];
     const group = MAJOR_GROUPS.find((g) => g.id === groupId);
-    return majorTitlesEarned(year, placement, group?.location ?? "Major", discipline);
+    return majorTitlesEarned(year, placement, group ? majorLocationForSeason(group.id, year) : "Major", discipline);
   }
   if (instance.kind === "rlcs_worlds") return worldsTitlesEarned(year, placement, discipline);
   if (instance.kind === "rlrs_regional") return rivalSeriesTitlesEarned(year, placement);
+  if (instance.kind === "rlcs_lcq" && instance.region) return lcqTitlesEarned(year, instance.region, placement);
   return [];
+}
+
+/** What the live match screen shows for a tournament series (see useMatchStore.ts's seriesLabel) - names
+ *  the actual event/stage the player's about to play so it reads like a real broadcast graphic instead of
+ *  a generic match. */
+function officialSeriesLabel(kind: TournamentKind, instanceLabel: string, stageLabel: string): string {
+  switch (kind) {
+    case "rlcs_regional":
+    case "rlcs_1v1_regional":
+      return `Official RLCS Qualifier — ${stageLabel}`;
+    case "rlrs_regional":
+      return `Official Rival Series — ${stageLabel}`;
+    case "rlcs_major":
+      return `Official RLCS Major — ${stageLabel}`;
+    case "rlcs_worlds":
+      return `Official World Championship — ${stageLabel}`;
+    case "rlcs_lcq":
+      return `Official Last Chance Qualifier`;
+    default:
+      return instanceLabel;
+  }
 }
 
 export function TourneysScreen() {
@@ -153,11 +181,25 @@ export function TourneysScreen() {
       const group = inst.kind === "rlcs_major" ? MAJOR_GROUPS.find((g) => inst.id.includes(`_${g.id}_`)) : undefined;
       const hostRegion = inst.kind === "rlcs_major" ? group?.hostRegion : worldsHostRegion(instSeasonNumber);
       if (!hostRegion) continue;
-      const eventLabel = inst.kind === "rlcs_major" ? `the ${group?.location ?? "Major"} Major` : "Worlds";
+      const eventLabel = inst.kind === "rlcs_major" ? `the ${group ? majorLocationForSeason(group.id, instSeasonNumber) : "Major"} Major` : "Worlds";
       const startDate = addDays(inst.startDate, -7);
       const endDate = addDays(inst.startDate, 14);
       if (s.travelWindow?.eventLabel === eventLabel && s.travelWindow?.region === hostRegion && s.travelWindow?.startDate.year === startDate.year) continue;
       setTravelWindow({ region: hostRegion, startDate, endDate, eventLabel });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentDate.year, currentDate.month, currentDate.day, instances]);
+
+  // Defensive backfill: titles are meant to be granted the moment handlePlayMatch's onSeriesComplete
+  // callback resolves a completed instance, but that's a single live-flow moment with real conditions to
+  // line up (network of state reads right after resolvePlayerMatch's set()) - if anything ever slips
+  // through that one moment for any reason, this sweep catches it on the very next date tick regardless,
+  // scanning every completed instance the player was actually in. addTitle already dedupes by id, so
+  // re-running this against an instance that's already fully titled is a harmless no-op from then on.
+  useEffect(() => {
+    for (const inst of Object.values(instances)) {
+      if (!inst.completed || !inst.playerTeamId || inst.playerFinalPlacement === null) continue;
+      titlesEarnedForInstance(inst, inst.playerFinalPlacement).forEach((title) => addTitle(title));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentDate.year, currentDate.month, currentDate.day, instances]);
@@ -193,7 +235,7 @@ export function TourneysScreen() {
     for (const item of orgSchedule) {
       const instance = instances[item.id];
       if (isRegistrationOpen(instance)) {
-        registerPlayer(item.id, s.displayName, playerProRegion, orgPower, s.orgContract.teammates);
+        registerPlayer(item.id, s.displayName, playerProRegion, orgPower, s.orgContract.teammates, s.orgContract.orgName);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -232,6 +274,12 @@ export function TourneysScreen() {
   // Early era (2015-2019) had no Major concept at all, Worlds forms straight from every region's regional
   // champion instead, see getEarlyEraWorldsReadiness's doc comment.
   const earlyEraWorldsReadiness = rlcsStructureEraNow === "early" ? getEarlyEraWorldsReadiness(instances, discipline, currentDate) : null;
+  const modernWorldsReadiness = rlcsStructureEraNow !== "early" ? getModernWorldsReadiness(instances, discipline, currentDate) : null;
+  // LCQ is 3v3-only (its instance ids carry no discipline segment) and only exists from the modern era onward.
+  const lcqIds =
+    discipline === "3v3" && rlcsStructureEraNow !== "early"
+      ? LCQ_REGIONS.map((region) => latestInstanceId((inst) => inst.kind === "rlcs_lcq" && inst.region === region))
+      : [];
 
   // The Season Overview always shows the 3v3 storyline specifically, regardless of which discipline tab
   // is currently selected — 3v3 is the main draw a lower-rank/uninvolved player would actually want a
@@ -241,6 +289,7 @@ export function TourneysScreen() {
   const overviewWorldsId = latestInstanceId((inst) => inst.kind === "rlcs_worlds" && inst.id.startsWith("worlds_3v3_"));
   const overviewMajorReadiness = MAJOR_GROUPS.map((g) => getMajorReadiness(instances, "3v3", g, currentDate));
   const overviewEarlyEraWorldsReadiness = rlcsStructureEraNow === "early" ? getEarlyEraWorldsReadiness(instances, "3v3", currentDate) : null;
+  const overviewModernWorldsReadiness = rlcsStructureEraNow !== "early" ? getModernWorldsReadiness(instances, "3v3", currentDate) : null;
 
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(false);
@@ -302,7 +351,14 @@ export function TourneysScreen() {
     // opponent could show a completely different (and wrong) [TAG] every round. 1v1 entrants are real
     // individual players (see tournaments.ts's entrantsFromNames), never an org, so this never applies there.
     const opponentOrgTag = pendingDiscipline === "3v3" ? orgTagForOrgName(pendingMatch.opponentName) : undefined;
-    startTournamentSeries(self, [pendingMatch.opponentName], pendingMatch.seriesFormat, era, rankedSeasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
+    const stageLabelNow = pendingInstance?.stages[pendingInstance.stageIndex]?.label ?? "";
+    const seriesLabel = pendingInstance ? officialSeriesLabel(pendingInstance.kind, instanceLabel, stageLabelNow) : undefined;
+    // 3v3 org-signed teammates fill out the player's own side of the series too - without this the player
+    // stood in alone against the opponent's full roster, playing what was effectively a 1v1 even in a 3v3
+    // regional. `pendingMatch.opponentPlayers` is the opposing TEAM's real roster (opponentName alone is
+    // just that team's display/org name, not a player).
+    const teammateNames = pendingDiscipline === "3v3" ? s.orgContract?.teammates : undefined;
+    startTournamentSeries(self, pendingMatch.opponentPlayers, pendingMatch.seriesFormat, era, rankedSeasonNumber, currentYear, s.currentDate, s.seasonStartDate, (wonSeries) => {
       const before = useTournamentStore.getState().instances[pendingInstanceId];
       const stageLabelBefore = before?.stages[before.stageIndex]?.label;
       // The real per-game log (win/loss + map) from the live series just played, so the player's own
@@ -311,7 +367,10 @@ export function TourneysScreen() {
       resolvePlayerMatch(pendingInstanceId, wonSeries, currentDate, gameLog);
       const after = useTournamentStore.getState().instances[pendingInstanceId];
       if (!after) return;
-      const wonItAll = after.completed && after.championName === s.displayName;
+      // playerFinalPlacement (not a championName/displayName string match) is what actually reflects the
+      // human player's own result - championName is the TEAM's display name, which for an org-signed 3v3
+      // entry is the org's name, not the player's own username (see registerPlayer's teamName param).
+      const wonItAll = after.completed && after.playerFinalPlacement === 1;
       const finalPlacement = wonItAll ? 1 : after.playerFinalPlacement;
       if (finalPlacement !== null) {
         // A Champion also earned Contender and Challenger along the way, they're all kept as separate
@@ -327,7 +386,7 @@ export function TourneysScreen() {
       } else {
         setResultMessage(wonSeries ? `Series won (${stageLabelBefore}), more matches to come in this stage.` : "Series lost, but you're still alive in this stage.");
       }
-    }, stageProgress, undefined, opponentOrgTag, venue);
+    }, stageProgress, teammateNames, opponentOrgTag, venue, seriesLabel);
   }
 
   return (
@@ -392,16 +451,18 @@ export function TourneysScreen() {
                 <>
                   {MAJOR_GROUPS.map((g, i) => (
                     <div key={g.id} className="schedule-panel-row">
-                      <span className="schedule-panel-date">{g.location} Major</span>
+                      <span className="schedule-panel-date">{majorLocationForSeason(g.id, rlcsSeasonNumber)} Major</span>
                       <span>{majorOverviewStatus(overviewMajorIds[i] ? instances[overviewMajorIds[i]!] : undefined, overviewMajorReadiness[i], currentDate)}</span>
                     </div>
                   ))}
                   <div className="schedule-panel-row">
                     <span className="schedule-panel-date">World Championship</span>
                     <span>
-                      {overviewWorldsId && instances[overviewWorldsId]
-                        ? majorOverviewStatus(instances[overviewWorldsId], overviewMajorReadiness[0], currentDate)
-                        : "Awaiting both Major champions"}
+                      {majorOverviewStatus(
+                        overviewWorldsId ? instances[overviewWorldsId] : undefined,
+                        overviewModernWorldsReadiness!,
+                        currentDate
+                      )}
                     </span>
                   </div>
                 </>
@@ -423,6 +484,19 @@ export function TourneysScreen() {
           </button>
         </div>
       )}
+
+      {!pendingMatch &&
+        matchPhase === "idle" &&
+        (() => {
+          const next = projectedSeasonSchedule(rlcsSeasonNumber, rlcsSeasonStartDate).find((entry) => daysBetween(currentDate, entry.date) > 0);
+          if (!next) return null;
+          const days = daysBetween(currentDate, next.date);
+          return (
+            <div className="next-event-banner">
+              Next up: {next.label} in {days} day{days === 1 ? "" : "s"}
+            </div>
+          );
+        })()}
 
       {resultMessage && (
         <div className="result-message-banner">
@@ -585,7 +659,7 @@ export function TourneysScreen() {
                   onClick={() => id && instance && setSelectedId(id)}
                 >
                   <div className="tourney-tile-region">
-                    {group.location} Major{playerQualified ? " ★" : ""}
+                    {majorLocationForSeason(group.id, rlcsSeasonNumber)} Major{playerQualified ? " ★" : ""}
                   </div>
                   <div className="tourney-tile-status">
                     {instance
@@ -614,7 +688,7 @@ export function TourneysScreen() {
               </div>
               <div className="tourney-tile-status">
                 {!worldsId || !instances[worldsId]
-                  ? "Awaiting both Major champions"
+                  ? majorOverviewStatus(undefined, modernWorldsReadiness!, currentDate)
                   : instances[worldsId].completed
                     ? `World Champion: ${instances[worldsId].championName}`
                     : `${instances[worldsId].stages[instances[worldsId].stageIndex].label}`}
@@ -624,6 +698,35 @@ export function TourneysScreen() {
               )}
             </button>
           </div>
+          {discipline === "3v3" && (
+            <>
+              <div className="tourney-section-label" style={{ marginTop: "var(--space-5)" }}>
+                Last Chance Qualifiers
+              </div>
+              <div className="tourney-grid">
+                {LCQ_REGIONS.map((region, i) => {
+                  const id = lcqIds[i];
+                  const instance = id ? instances[id] : undefined;
+                  return (
+                    <button
+                      key={region}
+                      className={"tourney-tile" + (id && selectedId === id ? " tourney-tile-active" : "")}
+                      onClick={() => id && instance && setSelectedId(id)}
+                    >
+                      <div className="tourney-tile-region">{REGION_LABELS[region]} LCQ</div>
+                      <div className="tourney-tile-status">
+                        {instance
+                          ? instance.completed
+                            ? `Winner: ${instance.championName}`
+                            : `${instance.stages[instance.stageIndex].label} · ${instance.currentTeams.length} left`
+                          : "Not yet scheduled"}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </>
       )}
 
@@ -707,6 +810,15 @@ export function TourneysScreen() {
           min-width: 72px;
           font-weight: 600;
           color: var(--text-primary);
+        }
+        .next-event-banner {
+          font-size: 12px;
+          color: var(--text-secondary);
+          background: var(--bg-surface);
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--radius-md);
+          padding: 8px 14px;
+          margin-bottom: var(--space-3);
         }
         .result-message-banner {
           display: flex;

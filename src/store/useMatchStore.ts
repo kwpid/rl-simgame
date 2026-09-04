@@ -823,6 +823,11 @@ interface MatchStoreState {
    *  Set once at match start (finalizeFoundMatch always passes "online"; startTournamentSeries's caller
    *  computes the real value), unchanged for the rest of a series since venue doesn't change game to game. */
   matchVenue: "online" | "lan";
+  /** What this series actually is, shown alongside the map/venue on the live match screen (e.g. "OFFICIAL
+   *  RLCS REGIONAL — SWISS STAGE", "OFFICIAL RLCS MAJOR", "OFFICIAL RIVAL SERIES"). Set once at match start
+   *  by whichever caller knows the context (startTournamentSeries's `seriesLabel` param); null for ranked
+   *  and anything else with no tournament identity worth calling out. */
+  seriesLabel: string | null;
 
   /** Best-of-N series support (tournament matches): ranked play always stays at seriesFormat 1, decided
    *  after its one game, so none of this changes ranked behavior. A tournament match sets seriesFormat
@@ -889,7 +894,11 @@ interface MatchStoreState {
     opponentOrgTag?: string,
     /** "online" or "lan" (see data/tournaments.ts's isLanEvent) — only Majors/Worlds can ever be "lan",
      *  every other caller omits this and gets the "online" default. */
-    venue?: "online" | "lan"
+    venue?: "online" | "lan",
+    /** What this series actually is, shown on the live match screen (see MatchStoreState.seriesLabel) -
+     *  e.g. "OFFICIAL RLCS REGIONAL — SWISS STAGE". Omitted (null) for contexts with no tournament
+     *  identity worth surfacing, like org scrims. */
+    seriesLabel?: string
   ) => void;
   /** The "Continue" action for a series match's post-game screen: starts the next game on the same
    *  roster if the series isn't decided yet, otherwise fires `onSeriesComplete` and returns to idle. */
@@ -1093,6 +1102,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   mapId: null,
   seriesMapIds: [],
   matchVenue: "online",
+  seriesLabel: null,
 
   startQueue: (requests, hourOfDay, era, seasonNumber, currentYear, currentDate, seasonStartDate, partyMemberNames, partyFriendStats, rlcsTeamsResetSeed = 0) => {
     clearAllTimers();
@@ -1156,6 +1166,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         mapId: randomMapForDate(currentDate).id,
         seriesMapIds: [],
         matchVenue: "online",
+        seriesLabel: null,
       });
       foundTimer = setTimeout(() => {
         get().acknowledgeFound();
@@ -1231,7 +1242,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     startTicking(set, get);
   },
 
-  startTournamentSeries: (self, opponentNames, seriesFormat, era, seasonNumber, currentYear, currentDate, seasonStartDate, onSeriesComplete, stageProgress = 0, teammateNames = [], opponentOrgTag, venue = "online") => {
+  startTournamentSeries: (self, opponentNames, seriesFormat, era, seasonNumber, currentYear, currentDate, seasonStartDate, onSeriesComplete, stageProgress = 0, teammateNames = [], opponentOrgTag, venue = "online", seriesLabel) => {
     clearAllTimers();
     const perTeam = opponentNames.length;
     const queue = perTeam === 1 ? "1v1" : perTeam === 2 ? "2v2" : "3v3";
@@ -1329,6 +1340,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       seriesMapIds,
       mapId: seriesMapIds[0] ?? null,
       matchVenue: venue,
+      seriesLabel: seriesLabel ?? null,
     });
     foundTimer = setTimeout(() => {
       get().acknowledgeFound();

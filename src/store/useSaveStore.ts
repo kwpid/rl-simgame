@@ -40,7 +40,7 @@ import {
 import { ORG_NAMES, saveRegionToProRegion, rlcsSeasonPhase, rlcsSeasonForDate, realTeamsForRegion } from "@/data/tournaments";
 import { QUEUES } from "@/data/queues";
 import { PRO_PLAYERS, type ProRegion } from "@/data/proPlayers";
-import { useTournamentStore } from "@/store/useTournamentStore";
+import { useTournamentStore, effectiveRlcsSeason, projectedSeasonSchedule, REGISTRATION_WINDOW_DAYS } from "@/store/useTournamentStore";
 import { diminishingGain, fatiguePenalty, estimateRepsFromValue } from "@/data/trainingMath";
 import { derivePlaystyleProfiles } from "@/data/playstyleDerivation";
 import { grantLevelTitles } from "@/data/levelTitles";
@@ -409,6 +409,12 @@ interface SaveStoreState extends SaveData {
    *  or take forever). Backfills every level title (see data/levelTitles.ts) that level would have already
    *  earned, same "fill in everything up to the target" shape devSetRewardLevel uses for reward tiers. */
   devSetLevel: (level: number) => void;
+  /** Dev-only: jumps the clock straight to the start date of whichever RLCS-relevant event (regional,
+   *  Rival Series, projected Major/Worlds) comes up next on the schedule, so a dev doesn't have to grind
+   *  through daily ticks waiting for one to open. Uses the same `projectedSeasonSchedule` the Tourneys
+   *  screen's own schedule panel reads, so it lands exactly where that panel says the next event is.
+   *  No-op if nothing's scheduled ahead of the current date (shouldn't happen in practice). */
+  devSkipToNextRlcsEvent: () => void;
 }
 
 function rollClock(
@@ -1564,5 +1570,24 @@ export const useSaveStore = create<SaveStoreState>((set, get) => ({
       xpToNextLevel,
       titles: grantLevelTitles(state.titles, nextLevel),
     });
+  },
+
+  devSkipToNextRlcsEvent: () => {
+    const state = get();
+    const { seasonNumber, seasonStartDate } = effectiveRlcsSeason(state.currentDate, state.startDate.year);
+    const schedule = projectedSeasonSchedule(seasonNumber, seasonStartDate);
+    // Landing exactly ON a real (non-estimated) event's start date skips straight past its own
+    // registration window - that window opens REGISTRATION_WINDOW_DAYS earlier and the auto-register
+    // effect only ever fires reactively on a date change, so jumping past the whole window in one big
+    // leap means nothing was ever there to catch it open. Target the window's OPENING instead, so landing
+    // here still leaves the org-signed auto-register effect a real (already-open) window to fire into.
+    // Majors/Worlds (`estimated: true`) have no registration window at all - jump straight to those.
+    const next = schedule.find((entry) => {
+      const targetDate = entry.estimated ? entry.date : addDays(entry.date, -REGISTRATION_WINDOW_DAYS);
+      return daysBetween(state.currentDate, targetDate) > 0;
+    });
+    if (!next) return;
+    const targetDate = next.estimated ? next.date : addDays(next.date, -REGISTRATION_WINDOW_DAYS);
+    get().advanceClock(daysBetween(state.currentDate, targetDate) * 24);
   },
 }));

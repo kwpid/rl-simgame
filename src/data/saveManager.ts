@@ -442,6 +442,7 @@ export interface SaveExportBundle {
   save: SaveData;
   tournamentInstances?: string | null;
   tournamentRestartAnchor?: string | null;
+  tournamentWorldsCompletionAnchor?: string | null;
   regionalRoster?: string | null;
   aiTitleChoices?: string | null;
   proLeaderboard?: string | null;
@@ -458,6 +459,7 @@ export function exportSaveBundle(saveId: string, data: SaveData): SaveExportBund
     save: data,
     tournamentInstances: tournament.instances,
     tournamentRestartAnchor: tournament.restartAnchor,
+    tournamentWorldsCompletionAnchor: tournament.worldsCompletionAnchor,
     regionalRoster: exportRegionalRosterDataForSave(saveId),
     aiTitleChoices: exportAiTitleDataForSave(saveId),
     proLeaderboard: exportProLeaderboardData(),
@@ -492,7 +494,11 @@ export async function importSaveFile(raw: unknown): Promise<SaveSummary> {
 
   if (isBundle) {
     const bundle = raw as SaveExportBundle;
-    importTournamentDataForSave(id, { instances: bundle.tournamentInstances, restartAnchor: bundle.tournamentRestartAnchor });
+    importTournamentDataForSave(id, {
+      instances: bundle.tournamentInstances,
+      restartAnchor: bundle.tournamentRestartAnchor,
+      worldsCompletionAnchor: bundle.tournamentWorldsCompletionAnchor,
+    });
     importRegionalRosterDataForSave(id, bundle.regionalRoster);
     importAiTitleDataForSave(id, bundle.aiTitleChoices);
     importProLeaderboardData(bundle.proLeaderboard);

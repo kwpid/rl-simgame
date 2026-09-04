@@ -19,7 +19,7 @@ import { estimateGameSenseForMmr, computeOverallRating } from "./matchSim";
 import { meetsOrgRankRequirement } from "./orgs";
 import { FOUNDATION_LABELS, type FoundationCategory } from "./mechanics";
 
-export type TournamentKind = "rlcs_regional" | "ewc" | "eleague" | "rlcs_1v1_regional" | "rlcs_major" | "rlcs_worlds" | "rlrs_regional";
+export type TournamentKind = "rlcs_regional" | "ewc" | "eleague" | "rlcs_1v1_regional" | "rlcs_major" | "rlcs_worlds" | "rlrs_regional" | "rlcs_lcq";
 
 /** Majors/Worlds are LAN events from this RLCS season onward, online before it — regionals/Rival Series/1v1
  *  regionals are always online, real RLCS never runs those as LAN. A simple year cutoff rather than
@@ -209,7 +209,7 @@ function jitterRankOrder<T>(sortedDesc: T[], seedKey: string): T[] {
   return arr;
 }
 
-function fillWithAmateurTeams(teams: TournamentTeam[], region: ProRegion, fieldSize: number, idPrefix: string): TournamentTeam[] {
+export function fillWithAmateurTeams(teams: TournamentTeam[], region: ProRegion, fieldSize: number, idPrefix: string): TournamentTeam[] {
   let teamIdx = teams.length;
   while (teams.length < fieldSize) {
     const seed = teamIdx * 7919 + idPrefix.length;
@@ -221,6 +221,49 @@ function fillWithAmateurTeams(teams: TournamentTeam[], region: ProRegion, fieldS
       region,
       power: Math.round(AMATEUR_TEAM_POWER_MIN + Math.random() * AMATEUR_TEAM_POWER_SPREAD),
       players: [`${namePick}1`, `${namePick}2`, `${namePick}3`],
+    });
+    teamIdx++;
+  }
+  return teams;
+}
+
+/** Same padding role as `fillWithAmateurTeams`, but for the MAIN regional field specifically: a thin
+ *  region's real-org count is capped by how many org names it has (`ORG_NAMES`, often well under 128)
+ *  regardless of how many eligible players exist, so padding is still needed there even though
+ *  `eligibleRealPlayersForRegion` already folds in mid-band ranked grinders. Rather than the throwaway
+ *  `${name}1/2/3` placeholders `fillWithAmateurTeams` uses (fine for Rival Series, which is explicitly
+ *  amateur-only by design), each padded team's ROSTER is real tracked grinder identities from
+ *  `regionalGrinders.ts` — the same persistent AI names the region's ranked ladder itself uses — so a
+ *  filler slot still reads as an actual player, not decorative text. Falls back to a synthetic name only
+ *  once the region's whole (small, fixed-size) grinder pool is exhausted. Team NAME stays a random
+ *  org-style name regardless — grinders don't organize under real orgs the way signed pros do. */
+export function fillWithGrinderTeams(teams: TournamentTeam[], region: ProRegion, fieldSize: number, idPrefix: string, currentYear: number): TournamentTeam[] {
+  const pool = regionalGrinderRoster(region, currentYear);
+  const used = new Set(teams.flatMap((t) => t.players));
+  function pickGrinderName(seed: number): string {
+    for (let i = 0; i < pool.length; i++) {
+      const candidate = pool[(seed + i) % pool.length].name;
+      if (!used.has(candidate)) {
+        used.add(candidate);
+        return candidate;
+      }
+    }
+    const fallback = `${LB_NAMES[Math.abs(seed) % LB_NAMES.length]}${used.size}`;
+    used.add(fallback);
+    return fallback;
+  }
+  let teamIdx = teams.length;
+  while (teams.length < fieldSize) {
+    const seed = teamIdx * 7919 + idPrefix.length;
+    const roster = [0, 1, 2].map((j) => pickGrinderName(seed + j * 131));
+    const namePick = LB_NAMES[Math.abs(seed) % LB_NAMES.length];
+    const suffix = hashPick(FILLER_ORG_SUFFIXES, seed);
+    teams.push({
+      id: `${idPrefix}_${teamIdx}`,
+      name: `${namePick} ${suffix}`,
+      region,
+      power: Math.round(AMATEUR_TEAM_POWER_MIN + Math.random() * AMATEUR_TEAM_POWER_SPREAD),
+      players: roster,
     });
     teamIdx++;
   }
@@ -475,21 +518,36 @@ export function generateRivalSeriesTeamsForRegion(region: ProRegion, fieldSize: 
 
 interface MajorGroup {
   id: "major1" | "major2";
-  location: string;
   regions: ProRegion[];
   /** Where the LAN event itself physically is — see the travel system (useTournamentStore.ts's
    *  qualifyForTravel and RankedScreen.tsx's travel banner): a team from ANY of `regions` above still only
    *  travels to this one host region, they don't get to matchmake against their own region's players just
-   *  for showing up to their own major. */
+   *  for showing up to their own major. The exact CITY within that host region varies year to year, see
+   *  `majorLocationForSeason` — real majors don't run in the same city every single season. */
   hostRegion: ProRegion;
 }
 
 /** Major 1 runs in Europe with EU/SAM/APAC's regional champions, Major 2 runs in the US with NA/MENA/
  *  OCE/SSA's, matching the two-major structure described in the design chat. */
 export const MAJOR_GROUPS: MajorGroup[] = [
-  { id: "major1", location: "London", regions: ["EU", "SAM", "APAC"], hostRegion: "EU" },
-  { id: "major2", location: "Las Vegas", regions: ["NA", "MENA", "OCE", "SSA"], hostRegion: "NA" },
+  { id: "major1", regions: ["EU", "SAM", "APAC"], hostRegion: "EU" },
+  { id: "major2", regions: ["NA", "MENA", "OCE", "SSA"], hostRegion: "NA" },
 ];
+
+// Well-known real cities per major group's host region — cycles deterministically per RLCS season number
+// (never random) so reloading a save never reshuffles which city an already-scheduled/completed major used,
+// but consecutive seasons still land in different, real, recognizable cities, same as real majors actually
+// moving venues year to year instead of parking in the same city forever.
+const MAJOR_CITY_POOLS: Record<"major1" | "major2", string[]> = {
+  major1: ["London", "Paris", "Berlin", "Amsterdam", "Stockholm", "Copenhagen", "Barcelona"],
+  major2: ["Las Vegas", "Los Angeles", "Dallas", "Chicago", "New York", "Toronto", "Miami"],
+};
+
+/** The real city hosting a given major group's event for a specific RLCS season — see `MAJOR_CITY_POOLS`. */
+export function majorLocationForSeason(groupId: "major1" | "major2", seasonNumber: number): string {
+  const pool = MAJOR_CITY_POOLS[groupId];
+  return pool[((seasonNumber % pool.length) + pool.length) % pool.length];
+}
 
 /** Worlds alternates host region by year for a bit of real-calendar variety — not tied to any one major
  *  group since every region's own champion (via whichever major they came through) converges on Worlds
@@ -498,8 +556,40 @@ export function worldsHostRegion(year: number): ProRegion {
   return year % 2 === 0 ? "NA" : "EU";
 }
 
-export const MAJOR_STAGES: StageConfig[] = [{ format: "single_elim", label: "Major Bracket", entrants: 8, advanceCount: 1, days: 3 }];
-export const WORLDS_STAGES: StageConfig[] = [{ format: "single_elim", label: "World Championship Final", entrants: 2, advanceCount: 1, days: 1 }];
+export const MAJOR_STAGES: StageConfig[] = [{ format: "single_elim", label: "Major Bracket", entrants: 16, advanceCount: 1, days: 3 }];
+
+/** The 4 major-2 regions (NA/MENA/OCE/SSA) each get their own Last Chance Qualifier — an independent,
+ *  AI-only 16-team bracket (see generateLcqTeamsForRegion) giving a real second shot at a Worlds seat to
+ *  teams outside the direct major slots. Winner advances into Worlds' Play-In field. */
+export const LCQ_REGIONS: ProRegion[] = ["NA", "MENA", "OCE", "SSA"];
+export const LCQ_STAGES: StageConfig[] = [{ format: "single_elim", label: "Last Chance Qualifier", entrants: 16, advanceCount: 1, days: 2 }];
+export const LCQ_FIELD_SIZE = 16;
+
+/** Builds one LCQ region's field: entirely ranked-grinder identities (see fillWithGrinderTeams), an
+ *  independent generated pool rather than literally "whoever just missed the regional cut" - simpler,
+ *  same "real tracked AI, not throwaway filler" treatment the main regional's own padding already uses. */
+export function generateLcqTeamsForRegion(region: ProRegion, idPrefix: string, currentYear: number): TournamentTeam[] {
+  return fillWithGrinderTeams([], region, LCQ_FIELD_SIZE, idPrefix, currentYear);
+}
+
+// Modern era (post-major-structure): 20 teams total - each major sends its top 8 finishers (12 direct
+// Group Stage seeds + 4 Play-In entrants across both majors), plus 4 Last Chance Qualifier winners fill
+// out Play-In to 8 (see useTournamentStore.ts's ensureMajorsAndWorldsForDiscipline for exactly how the
+// field is assembled and how the 12 direct seeds join at Group Stage via `stageByeTeams`). Approximates
+// the real Worlds shape (Play-In -> Group Stage -> Playoffs) using the same proven double-elim/GSL-group
+// builders every other bracket in this game already uses, rather than a bespoke new topology. Early era
+// (pre-2019, no Majors at all) still forms straight from every region's regional champion instead - see
+// getEarlyEraWorldsReadiness, a different-sized field entirely, unaffected by this constant.
+export const WORLDS_STAGES: StageConfig[] = [
+  { format: "double_elim", label: "Play-In", entrants: 8, advanceCount: 4, days: 1, bestOf: 5 },
+  { format: "gsl_group", label: "Group Stage", entrants: 16, advanceCount: 12, days: 2, bestOf: 5 },
+  { format: "double_elim", label: "Playoffs", entrants: 12, advanceCount: 1, days: 3, bestOf: 7 },
+];
+
+// Early era (2015-2019, see getEarlyEraWorldsReadiness) has no Majors/LCQ at all - Worlds forms directly
+// from every region's regional champion (5 for 3v3, 7 for 1v1), a field far too small for the modern
+// 20-team WORLDS_STAGES above. Keeps the simple single-bracket shape the game always used pre-rework.
+export const EARLY_ERA_WORLDS_STAGES: StageConfig[] = [{ format: "single_elim", label: "World Championship Final", entrants: 8, advanceCount: 1, days: 2 }];
 
 /** Builds a small bracket directly from a fixed list of named entrants (major/worlds fields are built
  *  from regional/major champions rather than generated fresh, so this skips the pro-roster generation
@@ -581,6 +671,19 @@ export function rivalSeriesTitlesEarned(year: number, placement: number): TitleE
   return titles;
 }
 
+/** Last Chance Qualifier: only the outright winner earns anything (it's a single elimination bracket
+ *  whose entire point is "win it or don't", no partial-credit Contender/Challenger tiers the way a full
+ *  regional's bigger field gets). */
+export function lcqTitleFor(year: number, region: ProRegion, placement: number): TitleEntry | null {
+  if (placement !== 1) return null;
+  return { id: `rlcs_${year}_lcq_${region}_champ`, label: `RLCS ${year} ${REGION_LABELS[region]} LCQ WINNER`, glow: RLCS_GLOW };
+}
+
+export function lcqTitlesEarned(year: number, region: ProRegion, placement: number): TitleEntry[] {
+  const title = lcqTitleFor(year, region, placement);
+  return title ? [title] : [];
+}
+
 /** Dispatches to the right cascade by tournament kind, given only primitive fields (not the full
  *  TournamentInstance type, which lives in the store, to avoid a store->data circular import). Used both
  *  for granting the player's own title collection and for querying an AI/pro's real earned history. */
@@ -589,24 +692,29 @@ export function titlesEarnedForKind(
   year: number,
   placement: number,
   majorLocation: string | null,
-  discipline: "1v1" | "3v3" = "3v3"
+  discipline: "1v1" | "3v3" = "3v3",
+  lcqRegion: ProRegion | null = null
 ): TitleEntry[] {
   if (kind === "rlcs_regional" || kind === "rlcs_1v1_regional") return regionalTitlesEarned(year, placement, discipline);
   if (kind === "rlcs_major") return majorTitlesEarned(year, placement, majorLocation ?? "Major", discipline);
   if (kind === "rlcs_worlds") return worldsTitlesEarned(year, placement, discipline);
   if (kind === "rlrs_regional") return rivalSeriesTitlesEarned(year, placement);
+  if (kind === "rlcs_lcq" && lcqRegion) return lcqTitlesEarned(year, lcqRegion, placement);
   return [];
 }
 
-/** Real RLCS Open structure: a large Stage 1 field gets cut down by loss-count elimination, then Swiss,
- *  then GSL groups, then a playoff bracket that crowns the regional champion and sets final placements. */
+/** Real RLCS Open structure: one straight single-elim bracket crowns the regional champion and sets final
+ *  placements. Used to run Stage 1 -> Swiss -> GSL Group -> Playoffs (four stages against a 128-team
+ *  field, then briefly Stage 1 double-elim -> Playoffs against 64) — real RLCS itself doesn't run a
+ *  regional as several separate stages in one event, and every extra stage/the double-elim losers-bracket
+ *  run meant winning a regional outright took a lot of individual series for the player to personally
+ *  click through (15-20, then still ~7-8 after the first cut). A single 32-team single-elim bracket is
+ *  5 rounds total (32->16->8->4->2->1) - real speed, at the cost of losing double-elim's "one bad series
+ *  doesn't end your run" forgiveness entirely, one loss anywhere and you're out. */
 export const RLCS_OPEN_STAGES: StageConfig[] = [
-  { format: "double_elim", label: "Stage 1", entrants: 128, advanceCount: 32, days: 2 },
-  { format: "swiss", label: "Swiss Stage", entrants: 32, advanceCount: 16, days: 1 },
-  { format: "gsl_group", label: "Group Stage", entrants: 16, advanceCount: 8, days: 1 },
-  { format: "single_elim", label: "Playoffs", entrants: 8, advanceCount: 1, days: 2 },
+  { format: "single_elim", label: "Regional Bracket", entrants: 32, advanceCount: 1, days: 3 },
 ];
-export const RLCS_OPEN_FIELD_SIZE = 128;
+export const RLCS_OPEN_FIELD_SIZE = 32;
 
 /** WORK IN PROGRESS, currently unused — see buildSeasonSchedule's doc comment. Kept in place for when
  *  EWC/ELEAGUE get their real data model (a per-region squad + a qualifier bracket for a spot on it,
@@ -692,7 +800,7 @@ export function pickFictionalPastRlcsTitle(pro: { name: string; debutYear: numbe
   if (skillScore >= 100 && roll < 0.15 + talentBonus * 0.15) return worldsTitlesEarned(pastYear, 4);
   if (skillScore >= 70 && roll < 0.3 + talentBonus * 0.15) {
     const group = MAJOR_GROUPS[hashString(pro.name + "#history_major") % MAJOR_GROUPS.length];
-    return majorTitlesEarned(pastYear, 1, group.location);
+    return majorTitlesEarned(pastYear, 1, majorLocationForSeason(group.id, pastYear));
   }
   if (skillScore >= 40 && roll < 0.55) return regionalTitlesEarned(pastYear, 1);
   return regionalTitlesEarned(pastYear, 8);
@@ -763,6 +871,24 @@ export function buildSeasonSchedule(seasonNumber: number, seasonStartDate: SimDa
         startDate: addDays(seasonStartDate, i * RLCS_REGION_STAGGER_DAYS + 3),
         stages: RIVAL_SERIES_STAGES,
         fieldSize: RIVAL_SERIES_FIELD_SIZE,
+      });
+    });
+  }
+
+  // Last Chance Qualifiers: modern-era only (this is the new 20-team Worlds structure), one per
+  // LCQ_REGIONS entry, staggered the same way the main regional is but offset so it doesn't share an
+  // exact start date with anything else — finishes with plenty of room before Worlds' own
+  // MAJOR_DELAY_DAYS/WORLDS_DELAY_DAYS buffers (45/35 days).
+  if (rlcsStructureEra(seasonStartDate.year) !== "early") {
+    LCQ_REGIONS.forEach((region, i) => {
+      schedule.push({
+        id: `rlcs_lcq_s${seasonNumber}_${region}`,
+        kind: "rlcs_lcq" as const,
+        label: `Last Chance Qualifier Season ${seasonNumber} — ${REGION_LABELS[region]}`,
+        region,
+        startDate: addDays(seasonStartDate, i * RLCS_REGION_STAGGER_DAYS + 5),
+        stages: LCQ_STAGES,
+        fieldSize: LCQ_FIELD_SIZE,
       });
     });
   }

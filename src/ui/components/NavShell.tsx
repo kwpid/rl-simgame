@@ -5,6 +5,7 @@ import { QueueBanner } from "./QueueBanner";
 import { ClockWidget } from "./ClockWidget";
 import { useMatchStore } from "@/store/useMatchStore";
 import { useSaveStore } from "@/store/useSaveStore";
+import { useTournamentStore } from "@/store/useTournamentStore";
 import { daysBetween } from "@/data/dateUtils";
 
 export function NavShell({ children }: { children: ReactNode }) {
@@ -27,7 +28,12 @@ export function NavShell({ children }: { children: ReactNode }) {
     pendingOrgInvite !== null ||
     pendingOrgTryout !== null ||
     (orgContract !== null && daysBetween(orgContract.nextScrimDate, currentDate) >= 0);
-  const dotForScreen: Partial<Record<ScreenId, boolean>> = { org: orgNeedsAttention };
+  // A live tournament match ready to play (see useTournamentStore's pendingMatch) lights up the Tourneys
+  // tab the same way an org invite/scrim lights up Org — otherwise nothing tells the player their next
+  // RLCS series is waiting on them until they happen to check the screen themselves.
+  const tournamentInstances = useTournamentStore((store) => store.instances);
+  const tourneysNeedsAttention = Object.values(tournamentInstances).some((inst) => inst.playerTeamId && inst.pendingMatch);
+  const dotForScreen: Partial<Record<ScreenId, boolean>> = { org: orgNeedsAttention, tournaments: tourneysNeedsAttention };
 
   return (
     <div className={"app-shell" + (isQueuing ? " app-shell-queuing" : "")}>

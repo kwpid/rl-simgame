@@ -23,6 +23,10 @@ export interface StageConfig {
   entrants: number;
   advanceCount: number;
   days: number;
+  /** Overrides the format-derived default best-of (see useTournamentStore.ts's bestOfForFormat) for this
+   *  specific stage — every stage across every other tournament type leaves this unset and keeps using the
+   *  plain per-format default; only Worlds' three stages set this explicitly (5/5/7). */
+  bestOf?: number;
 }
 
 export interface TournamentTeam {
@@ -184,6 +188,18 @@ export function resolvePlayerNode(tree: BracketTree, node: MatchNode, winnerId: 
   node.games = games;
   advanceWinner(nodesById, node, winnerId);
   if (node.bracket === "winners") dropLoser(nodesById, node, loserId);
+}
+
+/** Auto-advances a node that's a genuine bye — exactly one slot was EVER filled (see
+ *  buildSingleElimBracket/buildDoubleElimBracket's own doc comments on byes), there is no feeder that will
+ *  ever fill the other one, so there's no match to wait for at all, just a free walkover. No games played,
+ *  no loser to drop anywhere. No-ops if the node isn't actually a bye (both slots filled, or already
+ *  resolved) — safe to call speculatively. */
+export function resolveByeNode(tree: BracketTree, node: MatchNode): void {
+  if (node.resolved) return;
+  const nodesById = new Map(allNodes(tree).map((n) => [n.id, n]));
+  if (node.slotA && !node.slotB) { advanceWinner(nodesById, node, node.slotA.teamId); return; }
+  if (node.slotB && !node.slotA) advanceWinner(nodesById, node, node.slotB.teamId);
 }
 
 /** Resolves `targetNode`, first recursively resolving whichever specific feeder match(es) are still

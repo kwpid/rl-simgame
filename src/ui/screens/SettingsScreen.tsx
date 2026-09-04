@@ -473,6 +473,8 @@ function DeveloperToolsSection() {
   const resetAllInstances = useTournamentStore((store) => store.resetAllInstances);
   const resetRlcsTeams = useSaveStore((store) => store.resetRlcsTeams);
   const fullResetRlcsAndTournaments = useSaveStore((store) => store.fullResetRlcsAndTournaments);
+  const devSkipToNextRlcsEvent = useSaveStore((store) => store.devSkipToNextRlcsEvent);
+  const devForcePendingMatchResult = useTournamentStore((store) => store.devForcePendingMatchResult);
   const forceOrgInvite = useSaveStore((store) => store.forceOrgInvite);
   const releaseOrgContract = useSaveStore((store) => store.releaseOrgContract);
   const recordOrgTryoutScrim = useSaveStore((store) => store.recordOrgTryoutScrim);
@@ -739,6 +741,19 @@ function DeveloperToolsSection() {
                 }}
               >
                 Full Reset RLCS &amp; Tournaments (hard-deletes all saved tournament data, use if RLCS is stuck/broken)
+              </button>
+            </div>
+            <div className="dev-tools-row">
+              <button className="dev-btn" onClick={() => devSkipToNextRlcsEvent()}>
+                Skip to Next RLCS Event (jumps the clock to whatever's next on the schedule)
+              </button>
+            </div>
+            <div className="dev-tools-row">
+              <button className="dev-btn" onClick={() => devForcePendingMatchResult(s.currentDate, true)}>
+                Force Win Pending RLCS Match
+              </button>
+              <button className="dev-btn" onClick={() => devForcePendingMatchResult(s.currentDate, false)}>
+                Force Loss Pending RLCS Match
               </button>
             </div>
           </div>

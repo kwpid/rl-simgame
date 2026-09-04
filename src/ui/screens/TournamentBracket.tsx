@@ -2,10 +2,27 @@
 // data/tournamentFormats.ts's buildDoubleElimBracket/buildSingleElimBracket). swiss/gsl_group stages never
 // reach this component — they keep TourneysScreen.tsx's existing StandingsCard table, matching how real
 // RLCS broadcasts show Swiss/GSL as standings tables too, not bracket diagrams.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { BracketTree, MatchNode, GameResult } from "@/data/bracketTypes";
 import type { TournamentTeam } from "@/data/tournamentFormats";
 import { ARENA_MAPS } from "@/data/maps";
+
+const NARROW_BREAKPOINT = "(max-width: 640px)";
+
+/** The two-sided, converges-on-a-center-Final bracket layout only reads correctly at real bracket width -
+ *  on a narrow/mobile viewport it's mostly horizontal scrolling past tiny, hard-to-read columns, which is
+ *  worse than just not having a bracket diagram at all. Below this breakpoint every bracket falls back to
+ *  a plain round-by-round vertical list instead (see SplitOrPlainBracket's canSplit override). */
+function useIsNarrowViewport(): boolean {
+  const [isNarrow, setIsNarrow] = useState(() => (typeof window !== "undefined" ? window.matchMedia(NARROW_BREAKPOINT).matches : false));
+  useEffect(() => {
+    const mql = window.matchMedia(NARROW_BREAKPOINT);
+    const onChange = () => setIsNarrow(mql.matches);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+  return isNarrow;
+}
 
 function mapNameFor(mapId: string): string {
   return ARENA_MAPS.find((m) => m.id === mapId)?.name ?? "Unknown Map";
@@ -96,9 +113,9 @@ function roundLabel(prefix: string, roundIndex: number, totalRounds: number): st
  *  right, right side mirrored so its own final-adjacent round sits next to the center. Falls back to a
  *  plain left-to-right column list when the last round has more than one match (double-elim cut short at
  *  a multi-team survivor field instead of a single champion — no single center to converge on). */
-function SplitOrPlainBracket({ rounds, teams, playerTeamId, roundPrefix, centerLabel }: { rounds: MatchNode[][]; teams: Record<string, TournamentTeam>; playerTeamId: string | null; roundPrefix: string; centerLabel: string }) {
+function SplitOrPlainBracket({ rounds, teams, playerTeamId, roundPrefix, centerLabel, isNarrow }: { rounds: MatchNode[][]; teams: Record<string, TournamentTeam>; playerTeamId: string | null; roundPrefix: string; centerLabel: string; isNarrow: boolean }) {
   const finalRound = rounds[rounds.length - 1];
-  const canSplit = rounds.length > 1 && finalRound.length === 1;
+  const canSplit = !isNarrow && rounds.length > 1 && finalRound.length === 1;
   if (!canSplit) {
     return (
       <div className="bracket-scroll-row">
@@ -130,10 +147,11 @@ function SplitOrPlainBracket({ rounds, teams, playerTeamId, roundPrefix, centerL
 }
 
 export function TournamentBracket({ bracket, playerTeamId }: { bracket: BracketTree; playerTeamId: string | null }) {
+  const isNarrow = useIsNarrowViewport();
   if (bracket.format === "single_elim") {
     return (
       <div className="bracket-view">
-        <SplitOrPlainBracket rounds={bracket.rounds} teams={bracket.teams} playerTeamId={playerTeamId} roundPrefix="" centerLabel="Final" />
+        <SplitOrPlainBracket rounds={bracket.rounds} teams={bracket.teams} playerTeamId={playerTeamId} roundPrefix="" centerLabel="Final" isNarrow={isNarrow} />
         <style>{BRACKET_STYLES}</style>
       </div>
     );
@@ -143,7 +161,7 @@ export function TournamentBracket({ bracket, playerTeamId }: { bracket: BracketT
   return (
     <div className="bracket-view">
       <div className="bracket-section-label">{hasLosers ? "Winners Bracket" : ""}</div>
-      <SplitOrPlainBracket rounds={bracket.winnersRounds} teams={bracket.teams} playerTeamId={playerTeamId} roundPrefix="Winners" centerLabel="Winners Final" />
+      <SplitOrPlainBracket rounds={bracket.winnersRounds} teams={bracket.teams} playerTeamId={playerTeamId} roundPrefix="Winners" centerLabel="Winners Final" isNarrow={isNarrow} />
       {bracket.grandFinal && (
         <div className="bracket-scroll-row" style={{ justifyContent: "center" }}>
           <RoundColumn title="Grand Final" matches={[bracket.grandFinal]} teams={bracket.teams} playerTeamId={playerTeamId} />
@@ -276,5 +294,21 @@ const BRACKET_STYLES = `
   .bracket-game-winner {
     font-weight: 600;
     color: var(--text-secondary);
+  }
+
+  @media (max-width: 640px) {
+    .bracket-scroll-row {
+      flex-direction: column;
+      overflow-x: visible;
+      gap: var(--space-4);
+    }
+    .bracket-round-column {
+      min-width: 0;
+      width: 100%;
+    }
+    .bracket-team-row {
+      font-size: 13px;
+      padding: 8px 12px;
+    }
   }
 `;

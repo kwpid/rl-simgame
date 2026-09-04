@@ -157,6 +157,7 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
   const map = ARENA_MAPS.find((m) => m.id === mapId) ?? null;
   const mapImage = mapImagePath(map);
   const matchVenue = useMatchStore((m) => m.matchVenue);
+  const seriesLabel = useMatchStore((m) => m.seriesLabel);
   const isSeriesMatch = seriesFormat > 1;
   const seriesDecided = isSeriesMatch && (seriesWinsSelf >= Math.ceil(seriesFormat / 2) || seriesWinsOpp >= Math.ceil(seriesFormat / 2));
   const recordMatchResult = useSaveStore((s) => s.recordMatchResult);
@@ -321,6 +322,11 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
   return (
     <div className="live-match fade-in">
       {mapImage && <div className="match-bg" style={{ backgroundImage: `url(${mapImage})` }} />}
+      {seriesLabel && (
+        <div className="match-event-banner">
+          <span className="match-event-badge">{seriesLabel}</span>
+        </div>
+      )}
       {map && (
         <div className="match-map-label">
           {map.name} · {matchVenue === "lan" ? "LAN Event" : "Online Match"}
@@ -537,6 +543,23 @@ function LiveMatch({ queue }: { queue: QueueMode | null }) {
           background-repeat: no-repeat;
           opacity: 0.22;
           pointer-events: none;
+        }
+        .match-event-banner {
+          display: flex;
+          justify-content: center;
+          margin-bottom: var(--space-2);
+        }
+        .match-event-badge {
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 1.1px;
+          text-transform: uppercase;
+          color: var(--danger);
+          background: color-mix(in srgb, var(--danger) 14%, var(--bg-surface));
+          border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+          border-radius: 999px;
+          padding: 4px 12px;
+          text-shadow: 0 0 8px color-mix(in srgb, var(--danger) 45%, transparent);
         }
         .match-map-label {
           position: relative;
